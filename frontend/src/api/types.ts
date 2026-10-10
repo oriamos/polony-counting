@@ -57,6 +57,8 @@ export interface Region {
   approved_at: string | null;
   approval_fingerprint: string | null;
   inspected: boolean;
+  /** lab "field" number (1-based) for counting regions; null/undefined = not a lab field (blank in the lab export) */
+  field_index?: number | null;
 }
 
 export interface BackgroundParams {
@@ -166,12 +168,28 @@ export interface Job {
   finished_at: string | null;
 }
 
+export type LabCountType = 'red_only' | 'green_only' | 'yellow' | 'red_positive' | 'green_positive';
+
+export interface LabSeries {
+  name: string;
+  count_type: LabCountType;
+  sheet_title?: string | null;
+}
+
 export interface SlideMeta {
   slide_id: string | null;
+  sampling_date?: string | null; // dd/mm/yyyy
+  polony_date?: string | null; // dd/mm/yyyy
+  qc?: number | null; // 0/1, meaning unconfirmed
+  field_area?: number | null;
+  grid_area?: number | null;
+  lab_series?: LabSeries[];
+  efficiency_input?: number | null;
   sample_volume_ul: number | null;
   concentration_factor: number | null;
   sampled_area_note: string | null;
   counting_area_px2: number | null;
+  /** deprecated: no longer used by the lab formula */
   sample_total_area_px2?: number | null;
   concentration_formula_confirmed?: boolean;
   pixel_size_um: number | null;

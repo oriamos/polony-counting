@@ -1,7 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { EmbeddedRoi, Region } from '../api/types';
 import { polygonArea, polygonBounds, rectPolygon } from '../lib/geometry';
 import { liveObjects, useApp } from '../state/store';
+import {
+  coverageState,
+  defaultGrid,
+  describeIssues,
+  exclusionCoverage,
+  fieldIssues,
+  generateGrid,
+  hasIssues,
+  MAX_FIELD,
+  type GridOrder,
+  type GridSpec,
+  type StartCorner,
+} from '../lib/labgrid';
+import { NumInput } from './DetectTab';
 import { regionStatus, STATUS_COLOR } from './Overlay';
 
 export function StatusBadge({ region }: { region: Region }) {
@@ -57,6 +71,8 @@ export function RegionsTab() {
         Counts are only reported for counting regions. Exclusion masks remove areas (edges, debris) from counting. Select a region to edit vertices: drag a
         vertex, double-click an edge to add one, Alt+click a vertex to remove it.
       </div>
+      <FieldSummary />
+      {!locked && <GridGenerator />}
       {a.regions.length === 0 && (
         <div className="empty">
           No regions yet. With no counting region the whole image is detected, but at least one counting region is required to finalize. Use the toolbar to draw one.
@@ -181,6 +197,7 @@ function RegionCard({ region: r, selected, locked }: { region: Region; selected:
         {isCounting && unreviewed > 0 ? ` · ${unreviewed} unreviewed` : ''}
         {c ? ` · R${c.red_only} G${c.green_only} Y${c.yellow} ?${c.uncertain}` : ''}
       </div>
+      {isCounting && <FieldNumber region={r} locked={locked} />}
       {isCounting && (
         <>
           <label className="chk inspected">
@@ -243,5 +260,221 @@ function RegionCard({ region: r, selected, locked }: { region: Region; selected:
         </button>
       </div>
     </article>
+  );
+}
+
+const NOTE = 'No region = BLANK cell, region with 0 objects = 0 in the lab export.';
+
+function exclusionPolys(regions: Region[]) {
+  return regions.filter((r) => r.kind === 'exclusion').map((r) => r.polygon);
+}
+
+/** Lab-field overview: the blank-vs-zero rule and any numbering problems across existing regions. */
+function FieldSummary() {
+  const a = useApp((s) => s.current)!;
+  const fields = a.regions.filter((r) => r.kind === 'counting' && r.field_index != null);
+  const issues = fieldIssues(fields.map((r) => r.field_index));
+  const msgs = describeIssues(issues);
+  const excl = exclusionPolys(a.regions);
+  const partial = fields.filter((r) => coverageState(exclusionCoverage(r.polygon, excl)) === 'partial');
+  const unnumbered = a.regions.filter((r) => r.kind === 'counting' && r.field_index == null).length;
+  return (
+    <div className="notice small" data-testid="field-note">
+      <strong>{NOTE}</strong> Only regions with a field number are lab fields (1–{MAX_FIELD}); delete a field region to leave that cell blank.
+      {fields.length > 0 && <div data-testid="field-count">{fields.length} lab field{fields.length > 1 ? 's' : ''} defined.</div>}
+      {unnumbered > 0 && <div>{unnumbered} counting region{unnumbered > 1 ? 's have' : ' has'} no field number (not exported in the lab layout).</div>}
+      {msgs.length > 0 && (
+        <div className="warn-text" role="alert" data-testid="field-issues">
+          {msgs.join('; ')}.
+        </div>
+      )}
+      {partial.length > 0 && (
+        <div className="warn-text" data-testid="field-partial">
+          Partially covered by an exclusion (count is over the remaining area): {partial.map((r) => r.name).join(', ')}.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FieldNumber({ region: r, locked }: { region: Region; locked: boolean }) {
+  const a = useApp((s) => s.current)!;
+  const saveRegions = useApp((s) => s.saveRegions);
+  const others = a.regions.filter((x) => x.id !== r.id && x.kind === 'counting').map((x) => x.field_index);
+  const fi = r.field_index ?? null;
+  const dup = fi != null && others.includes(fi);
+  const bad = fi != null && (!Number.isInteger(fi) || fi < 1 || fi > MAX_FIELD);
+  return (
+    <div className="row wrap small">
+      <label className="row">
+        Field number
+        <NumInput
+          value={fi}
+          nullable
+          min={1}
+          step={1}
+          disabled={locked}
+          testid={`field-index-${r.id}`}
+          onChange={(v) => {
+            const n = v == null ? null : Math.round(v);
+            if (n !== fi) void saveRegions(a.regions.map((x) => (x.id === r.id ? { ...x, field_index: n } : x)));
+          }}
+        />
+      </label>
+      {fi == null && <span className="muted">none (not a lab field)</span>}
+      {dup && <span className="warn-text" data-testid={`field-dup-${r.id}`}>duplicate field number</span>}
+      {bad && <span className="warn-text" data-testid={`field-bad-${r.id}`}>must be a whole number 1–{MAX_FIELD}</span>}
+    </div>
+  );
+}
+
+function GridGenerator() {
+  const a = useApp((s) => s.current)!;
+  const patch = useApp((s) => s.patch);
+  const saveRegions = useApp((s) => s.saveRegions);
+  const toast = useApp((s) => s.toast);
+  const [open, setOpen] = useState(false);
+  const [g, setG] = useState<GridSpec>(() => defaultGrid(a.image?.width ?? 2212, a.image?.height ?? 1264));
+  const [mode, setMode] = useState<'replace' | 'add'>('replace');
+  useEffect(() => {
+    setG(defaultGrid(a.image?.width ?? 2212, a.image?.height ?? 1264));
+    patch({ gridPreview: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [a.id]);
+  useEffect(() => () => patch({ gridPreview: null }), [patch]);
+
+  const existingFields = a.regions.filter((r) => r.kind === 'counting' && r.field_index != null);
+  const kept = mode === 'replace' ? a.regions.filter((r) => !(r.kind === 'counting' && r.field_index != null)) : a.regions;
+  const cells = useMemo(() => generateGrid(g), [g]);
+  const excl = exclusionPolys(a.regions);
+  const cover = cells.map((c) => coverageState(exclusionCoverage(c.polygon, excl)));
+  const W = a.image?.width ?? Infinity;
+  const H = a.image?.height ?? Infinity;
+  const outside = cells.filter((c) => c.polygon.some(([x, y]) => x < -0.5 || y < -0.5 || x > W - 0.5 || y > H - 0.5)).length;
+  const issues = fieldIssues([...cells.map((c) => c.index), ...kept.filter((r) => r.kind === 'counting').map((r) => r.field_index)]);
+  const blocked = hasIssues(issues) || cells.length === 0 || g.cellW <= 0 || g.cellH <= 0;
+  const partial = cover.filter((c) => c === 'partial').length;
+  const full = cover.filter((c) => c === 'full').length;
+
+  const set = (p: Partial<GridSpec>) => setG((x) => ({ ...x, ...p }));
+  const showPreview = () => {
+    patch({ gridPreview: cells.map((c, i) => ({ index: c.index, polygon: c.polygon, flag: cover[i] !== 'none' })), showRegions: true });
+  };
+  // keep the on-image preview live while the panel is open and a preview is showing
+  const previewOn = useApp((s) => s.gridPreview) != null;
+  useEffect(() => {
+    if (open && previewOn) showPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells, cover.join(',')]);
+
+  const apply = () => {
+    if (blocked) return;
+    const msg =
+      mode === 'replace'
+        ? `Replace ${existingFields.length} existing field region(s) with ${cells.length} new Field-N regions? Their approvals/inspections are lost.`
+        : `Add ${cells.length} Field-N regions to the ${a.regions.length} existing region(s)?`;
+    if (!confirm(msg)) return;
+    const stamp = Date.now().toString(36);
+    const made: Region[] = cells.map((c, i) => ({
+      id: `reg-f${stamp}-${i}`,
+      kind: 'counting',
+      name: `Field-${c.index}`,
+      polygon: c.polygon,
+      approved: false,
+      approved_at: null,
+      approval_fingerprint: null,
+      inspected: false,
+      field_index: c.index,
+    }));
+    void saveRegions([...kept, ...made]);
+    patch({ gridPreview: null });
+    toast('success', `${made.length} field regions created`);
+  };
+
+  const num = (label: string, key: keyof GridSpec, min = 0, step = 1) => (
+    <label>
+      {label}
+      <NumInput value={g[key] as number} min={min} step={step} testid={`grid-${key}`} onChange={(v) => set({ [key]: v ?? (g[key] as number) } as Partial<GridSpec>)} />
+    </label>
+  );
+
+  return (
+    <section className="gridgen" data-testid="grid-generator">
+      <div className="row between">
+        <h4>Grid fields</h4>
+        <button className="btn sm" onClick={() => setOpen(!open)} aria-expanded={open} data-testid="grid-toggle">
+          {open ? 'Close' : 'Generate grid…'}
+        </button>
+      </div>
+      {open && (
+        <>
+          <div className="muted small">
+            Creates counting regions named Field-N (field number N) on a rows × columns grid. Defaults assume a 4 × 7 grid of about 316 px cells centred on the image; check the preview against the picture.
+          </div>
+          <div className="form-grid">
+            {num('Rows', 'rows', 1)}
+            {num('Columns', 'cols', 1)}
+            {num('Cell width (px)', 'cellW', 1)}
+            {num('Cell height (px)', 'cellH', 1)}
+            {num('Origin x (px)', 'originX', -100000)}
+            {num('Origin y (px)', 'originY', -100000)}
+            <label>
+              Numbering order
+              <select className="input sm" value={g.order} onChange={(e) => set({ order: e.target.value as GridOrder })} data-testid="grid-order">
+                <option value="row-major">row-major (along rows)</option>
+                <option value="col-major">column-major (down columns)</option>
+              </select>
+            </label>
+            <label>
+              Start corner
+              <select className="input sm" value={g.corner} onChange={(e) => set({ corner: e.target.value as StartCorner })} data-testid="grid-corner">
+                <option value="tl">top-left</option>
+                <option value="tr">top-right</option>
+                <option value="bl">bottom-left</option>
+                <option value="br">bottom-right</option>
+              </select>
+            </label>
+            {num('First field index', 'firstIndex', 1)}
+            <label>
+              Existing field regions
+              <select className="input sm" value={mode} onChange={(e) => setMode(e.target.value as 'replace' | 'add')} data-testid="grid-mode">
+                <option value="replace">replace ({existingFields.length})</option>
+                <option value="add">add alongside</option>
+              </select>
+            </label>
+          </div>
+          <div className="notice warn small" data-testid="grid-order-note">
+            Numbering order is a choice; confirm with your lab convention. The app does not know how your fields are numbered.
+          </div>
+          <div className="small mono muted" data-testid="grid-summary">
+            {cells.length} cells · Field-{g.firstIndex} … Field-{g.firstIndex + cells.length - 1}
+          </div>
+          {describeIssues(issues).length > 0 && (
+            <div className="notice err small" role="alert" data-testid="grid-issues">
+              Cannot apply: {describeIssues(issues).join('; ')}.
+            </div>
+          )}
+          {outside > 0 && <div className="small warn-text">{outside} cell(s) extend beyond the image.</div>}
+          {(partial > 0 || full > 0) && (
+            <div className="small warn-text" data-testid="grid-exclusion-warn">
+              {partial > 0 ? `${partial} field(s) partially covered by an exclusion (count is over the remaining area)` : ''}
+              {partial > 0 && full > 0 ? '; ' : ''}
+              {full > 0 ? `${full} fully covered` : ''}. Flagged in amber in the preview.
+            </div>
+          )}
+          <div className="row wrap">
+            <button className="btn sm" onClick={showPreview} data-testid="grid-preview-btn">
+              Preview on image
+            </button>
+            <button className="btn sm ghost" onClick={() => patch({ gridPreview: null })}>
+              Hide preview
+            </button>
+            <button className="btn sm primary" disabled={blocked} onClick={apply} data-testid="grid-apply">
+              Apply ({cells.length} regions)
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }

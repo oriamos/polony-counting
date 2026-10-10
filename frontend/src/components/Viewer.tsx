@@ -15,7 +15,7 @@ import {
 } from '../lib/geometry';
 import { ringRadiusImage } from '../lib/glyph';
 import { liveObjects, useApp } from '../state/store';
-import { HaloText, ObjectsLayer, RegionLabelsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
+import { GridPreviewLayer, HaloText, ObjectsLayer, RegionLabelsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
 import { ScaleBar } from './ScaleBar';
 
 export const useCursor = create<{ pt: { x: number; y: number } | null; set: (p: { x: number; y: number } | null) => void }>((set) => ({
@@ -537,6 +537,7 @@ export function Viewer() {
         >
           {showSuggestions && a.image.embedded_rois.length > 0 && <SuggestionsLayer rois={a.image.embedded_rois} scale={scale} />}
           {showRegions && <RegionsLayer regions={regions} scale={scale} selectedId={selectedRegionId} draft={regionDraft} />}
+          <GridPreviewLayer scale={scale} />
           {!hide && (
             <g data-testid="objects-layer">
               <ObjectsLayer

@@ -122,4 +122,29 @@ export function imageUrl(id: string, view: string, d: DisplayParams, extra = '')
 export const thumbUrl = (id: string, objectId: string, size = 64, ver = '') =>
   `/api/analyses/${id}/thumb/${encodeURIComponent(objectId)}?size=${size}&view=composite${ver ? `&v=${ver}` : ''}`;
 
+export type LabStyle = 't7' | 'counts';
+export type LabFormat = 'xlsx' | 'csv';
+
+export const labExportUrl = (id: string, series: string, format: LabFormat) =>
+  `/api/analyses/${id}/lab-export?series=${encodeURIComponent(series)}&format=${format}`;
+
+/** Batch lab export. Resolves with the file; a 422 (or other error) rejects with ApiError carrying the server's messages. */
+export async function batchLabExport(body: {
+  analysis_ids: string[];
+  style: LabStyle;
+  series: string | null;
+  format: LabFormat;
+}): Promise<{ blob: Blob; filename: string }> {
+  let res: Response;
+  try {
+    res = await fetch('/api/lab-export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } catch {
+    throw new ApiError(0, { code: 'network', message: 'Cannot reach the backend (network error).' });
+  }
+  if (!res.ok) throw new ApiError(res.status, parseErrorBody(res.status, await res.text()));
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  return { blob: await res.blob(), filename: m ? decodeURIComponent(m[1]) : `lab-export.${body.style === 'counts' || body.format === 'xlsx' ? 'xlsx' : 'zip'}` };
+}
+
 export const exportUrl = (id: string, kind: string) => `/api/analyses/${id}/export?kind=${kind}`;

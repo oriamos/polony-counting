@@ -75,6 +75,8 @@ export interface AppState {
   job: Job | null;
   regionErrors: Record<string, string>;
   csvImports: CsvImport[];
+  /** grid-field generator preview polygons (not yet applied) */
+  gridPreview: { index: number; polygon: [number, number][]; flag?: boolean }[] | null;
 
   rightTab: RightTab;
   mappingOpen: boolean;
@@ -168,6 +170,7 @@ export const useApp = create<AppState>((set, get) => ({
   job: null,
   regionErrors: {},
   csvImports: [],
+  gridPreview: null,
 
   rightTab: 'review',
   mappingOpen: false,
@@ -235,6 +238,7 @@ export const useApp = create<AppState>((set, get) => ({
       splitPts: [],
       tool: 'select',
       regionErrors: {},
+      gridPreview: null,
     });
     try {
       const a = await api.getAnalysis(id);

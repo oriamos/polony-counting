@@ -809,7 +809,8 @@ def set_regions(state: AnalysisState, new_regions: list[Region]) -> ReviewAction
     for r in new_regions:
         o = old.get(r.id)
         # approval/inspection are server-controlled: client values are ignored
-        nr = Region(id=r.id, kind=r.kind, name=r.name, polygon=[tuple(p) for p in r.polygon])
+        nr = Region(id=r.id, kind=r.kind, name=r.name, polygon=[tuple(p) for p in r.polygon],
+                    field_index=r.field_index if r.kind == RegionKind.counting else None)
         if o is not None:
             nr.approved, nr.approved_at = o.approved, o.approved_at
             nr.approval_fingerprint, nr.inspected = o.approval_fingerprint, o.inspected

@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useApp } from '../state/store';
 import type { DetectedObject, EmbeddedRoi, Region } from '../api/types';
 import { glyphFor, glyphPath, ringRadiusImage } from '../lib/glyph';
 import { polygonBounds } from '../lib/geometry';
@@ -235,3 +236,27 @@ export const RegionLabelsLayer = memo(function RegionLabelsLayer({ regions, scal
     </g>
   );
 });
+
+/** Unapplied grid-field generator preview (dashed cyan; amber = flagged). */
+export function GridPreviewLayer({ scale }: { scale: number }) {
+  const cells = useApp((s) => s.gridPreview);
+  if (!cells) return null;
+  const k = 1 / scale;
+  return (
+    <g data-testid="grid-preview" pointerEvents="none">
+      {cells.map((c) => {
+        const pts = c.polygon.map((p) => p.join(',')).join(' ');
+        const xs = c.polygon.map((p) => p[0]);
+        const ys = c.polygon.map((p) => p[1]);
+        const color = c.flag ? '#ffb020' : '#00e5ff';
+        return (
+          <g key={c.index}>
+            <polygon points={pts} fill="rgba(0,229,255,0.06)" stroke={DARK} strokeWidth={4 * k} />
+            <polygon points={pts} fill="none" stroke={color} strokeWidth={1.8 * k} strokeDasharray={`${6 * k} ${4 * k}`} />
+            <HaloText x={(Math.min(...xs) + Math.max(...xs)) / 2} y={(Math.min(...ys) + Math.max(...ys)) / 2 + 5 * k} scale={scale} size={14} anchor="middle" fill={color} text={`Field-${c.index}`} />
+          </g>
+        );
+      })}
+    </g>
+  );
+}
