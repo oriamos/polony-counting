@@ -301,3 +301,76 @@ def test_describe_and_list_models(monkeypatch, tmp_path):
     d = fs.engine().describe()
     assert d["available"] and d["device"]["cpu"] and {m["name"]: m["cached"] for m in d["models"]} == {
         "general": True, "hybiss": False}
+
+
+# ------------------------------------------------------------------ downscale (large blobs)
+def test_downscale_1_passes_no_scale_kwargs(monkeypatch, tmp_path):
+    fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=lambda a: (np.array([[5.0, 7.0]]), np.array([0.9])))
+    res = call(fs.engine(), np.zeros((40, 41), np.uint16), params={"downscale": 1})
+    kw = fs.calls[0]["kw"]
+    assert "scale" not in kw and kw["subpix"] is None and fs.calls[0]["dtype"] == np.uint16
+    assert (res.detections[0].x, res.detections[0].y) == (7.0, 5.0)
+    assert res.run.preprocessing["downscale"] == 1 and res.run.preprocessing["trimmed_px"] == {"right": 0, "bottom": 0}
+
+
+def test_downscale_input_trim_and_coordinate_mapping(monkeypatch, tmp_path):
+    img = np.arange(103 * 202, dtype=np.uint16).reshape(103, 202)      # 202 % 4 = 2, 103 % 4 = 3
+    fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=lambda a: (np.array([[0.0, 0.0], [24.0, 49.0], [10.0, 20.0]]),
+                                                                  np.array([0.9, 0.8, 0.7])))
+    res = call(fs.engine(), img, params={"downscale": 4, "prob_thresh": 0.1})
+    c = fs.calls[0]
+    from scipy.ndimage import zoom
+    assert "scale" not in c["kw"] and c["kw"]["subpix"] is False and c["kw"]["prob_thresh"] == 0.1
+    # the adapter downscales (frame-unambiguous): model input = zoom(float32 trimmed crop, 1/4, order=1)
+    assert c["shape"] == (25, 50) and c["dtype"] == np.float32
+    assert np.array_equal(c["values"], zoom(img[:100, :200].astype(np.float32), 0.25, order=1))
+    pre = res.run.preprocessing
+    assert pre["downscaled_shape_hw"] == [25, 50]
+    assert pre["downscale"] == 4 and pre["trimmed_px"] == {"right": 2, "bottom": 3}
+    assert pre["crop_box_xyxy"] == [0, 0, 200, 100] and any("trimmed" in n for n in res.run.notes)
+    got = {(round(d.x, 6), round(d.y, 6)) for d in res.detections}
+    # align-corners: first/last downscaled pixel centres coincide with first/last full-res pixel centres
+    assert (0.0, 0.0) in got and (199.0, 99.0) in got
+    assert any(abs(x - 20 * 199 / 49) < 1e-5 and abs(y - 10 * 99 / 24) < 1e-5 for x, y in got)
+
+
+def test_downscale_with_crop_offset(monkeypatch, tmp_path):
+    img = np.zeros((300, 400), np.uint16)
+    valid = np.zeros((300, 400), bool)
+    valid[100:150, 200:260] = True
+    fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=lambda a: (np.array([[0.0, 0.0]]), np.array([0.9])))
+    res = call(fs.engine(), img, valid, params={"downscale": 2})
+    # crop 168..292 x 68..182 (124 x 114), both even -> nothing trimmed; point (0,0) = crop origin
+    assert res.run.preprocessing["crop_box_xyxy"] == [168, 68, 292, 182]
+    assert (res.detections[0].x, res.detections[0].y) == (168.0, 68.0)
+
+
+@pytest.mark.parametrize("bad", [0, 3, 16, -2])
+def test_downscale_unsupported_is_explicit(monkeypatch, tmp_path, bad):
+    fs = FakeSpotiflow(monkeypatch, tmp_path)
+    with pytest.raises(EngineError, match="unsupported Spotiflow downscale"):
+        call(fs.engine(), np.zeros((64, 64), np.uint16), params={"downscale": bad})
+    assert not fs.calls
+
+
+def test_downscale_rejects_subpix_and_tiny_images(monkeypatch, tmp_path):
+    fs = FakeSpotiflow(monkeypatch, tmp_path)
+    with pytest.raises(EngineError, match="sub-pixel"):
+        call(fs.engine(), np.zeros((64, 64), np.uint16), params={"downscale": 2, "subpix": True})
+    with pytest.raises(EngineError, match="too small"):
+        call(fs.engine(), np.zeros((10, 64), np.uint16), params={"downscale": 8})
+    assert not fs.calls
+
+
+def test_downscale_mapping_matches_scipy_zoom_convention():
+    """The mapping used by the adapter inverts scipy.ndimage.zoom(order=1) (what Spotiflow 0.6.5 uses)."""
+    from scipy.ndimage import zoom
+    n = 400
+    yy, xx = np.mgrid[:n, :n]
+    for d in (2, 4, 8):
+        m = n // d
+        for cx in (100.0, 100.5, 201.3):
+            img = np.exp(-((xx - cx) ** 2 + (yy - 200.0) ** 2) / (2 * 6.0 ** 2)).astype(np.float32)
+            z = zoom(img, (1 / d, 1 / d), order=1)
+            cs = (z.sum(0) * np.arange(m)).sum() / z.sum(0).sum()
+            assert abs(cs * (n - 1) / (m - 1) - cx) < 0.02

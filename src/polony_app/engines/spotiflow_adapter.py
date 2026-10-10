@@ -32,6 +32,7 @@ from .base import (EngineError, EngineResult, EngineUnavailable, PointValidity, 
 SCORE_KIND = "spotiflow_prob_raw"
 DEFAULT_MODEL = "general"
 CROP_PAD_PX = 32
+SUPPORTED_DOWNSCALE = (1, 2, 4, 8)
 _SIDECAR = ".polony_checksums.json"
 _WEIGHT_SUFFIXES = (".pt", ".pth", ".ckpt", ".safetensors")
 _PARAM_FIELDS = set(SpotiflowParams.model_fields)
@@ -331,6 +332,12 @@ class SpotiflowEngine:
             sp = SpotiflowParams(**{k: v for k, v in params.items() if k in _PARAM_FIELDS})
         except Exception as exc:
             raise EngineError(f"invalid Spotiflow parameters: {exc}") from exc
+        d = int(sp.downscale)
+        if d not in SUPPORTED_DOWNSCALE:
+            raise EngineError(f"unsupported Spotiflow downscale {sp.downscale!r}; use one of {list(SUPPORTED_DOWNSCALE)}")
+        if d > 1 and sp.subpix:
+            raise EngineError("Spotiflow cannot compute sub-pixel positions when downscale > 1; "
+                              "set subpix to false/auto or downscale to 1")
         image = np.asarray(image)
         if image.ndim != 2:
             raise EngineError(f"Spotiflow adapter needs a 2-D page, got shape {image.shape}")
@@ -372,14 +379,36 @@ class SpotiflowEngine:
             pad = extras["crop_pad_px"]
             x0, x1 = max(0, int(cols[0]) - pad), min(w, int(cols[-1]) + 1 + pad)
             y0, y1 = max(0, int(rows[0]) - pad), min(h, int(rows[-1]) + 1 + pad)
+        trimmed_px = {"right": 0, "bottom": 0}
+        if d > 1:
+            # Spotiflow needs both sides divisible by d: drop the remainder at the bottom/right (never pad)
+            trimmed_px = {"right": (x1 - x0) % d, "bottom": (y1 - y0) % d}
+            x1 -= trimmed_px["right"]
+            y1 -= trimmed_px["bottom"]
+            if (x1 - x0) // d < 2 or (y1 - y0) // d < 2:
+                raise EngineError(f"image region {x1 - x0}x{y1 - y0} px is too small for downscale {d}")
         sub = np.ascontiguousarray(image[y0:y1, x0:x1])
         if sub.size == 0:
             raise EngineError("empty crop")
+        if d > 1:
+            if trimmed_px["right"] or trimmed_px["bottom"]:
+                notes.append(f"downscale {d}: trimmed {trimmed_px['right']} column(s) at the right and "
+                             f"{trimmed_px['bottom']} row(s) at the bottom so the sides are divisible by {d}")
 
         normalizer = "auto" if sp.normalizer == "auto" else None
         kw = dict(prob_thresh=sp.prob_thresh, n_tiles=sp.n_tiles, max_tile_size=sp.max_tile_size,
                   min_distance=sp.min_distance, exclude_border=sp.exclude_border, subpix=sp.subpix,
                   normalizer=normalizer, verbose=True)
+        model_in = sub
+        if d > 1:
+            # We downscale OURSELVES (exactly what Spotiflow 0.6.5 does for scale=1/d: float32 + scipy zoom order 1)
+            # instead of passing scale=: Spotiflow's own `scale` returns points in the ORIGINAL frame on its
+            # single-tile path (peaks found on the up-sampled heatmap) but in the DOWNSCALED frame on its tiled
+            # path, so the coordinate frame would depend on image size. Predicting on our array always yields
+            # downscaled-frame points, mapped back below.
+            from scipy.ndimage import zoom
+            model_in = zoom(sub.astype(np.float32), 1.0 / d, order=1)
+            kw["subpix"] = False
 
         def wrapper(it, total=None, **_):
             k = 0
@@ -396,7 +425,7 @@ class SpotiflowEngine:
             try:
                 model = _load_model(mi, used_device)
                 progress(0.12, f"Spotiflow inference on {used_device}")
-                pts, details = model.predict(sub, device=used_device, progress_bar_wrapper=wrapper, **kw)
+                pts, details = model.predict(model_in, device=used_device, progress_bar_wrapper=wrapper, **kw)
                 prob = getattr(details, "prob", None)
                 break
             except DetectionCancelled:
@@ -424,6 +453,11 @@ class SpotiflowEngine:
             raise EngineError(f"Spotiflow returned {len(pts)} points but "
                               f"{'no' if prob is None else len(prob)} per-point scores; refusing to guess")
         prob = np.asarray(prob, dtype=float).reshape(-1)
+        if d > 1:
+            # scipy.ndimage.zoom (grid_mode=False) aligns the first/last pixel CENTRES: downscaled index i sits at
+            # i*(n-1)/(m-1) in the cropped full-resolution frame (n = crop side, m = n/d). NOT i*d+(d-1)/2.
+            sh, sw = sub.shape
+            pts = np.stack([pts[:, 0] * ((sh - 1) / (sh // d - 1)), pts[:, 1] * ((sw - 1) / (sw // d - 1))], 1)
         xs, ys = pts[:, 1] + x0, pts[:, 0] + y0          # crop -> full-resolution frame (exact integer offset)
         validity = point_validity or raster_point_validity(valid_mask, image.shape)
         dets = build_detections(EngineName.spotiflow, run_id, analysis_id, page, channel_role, xs, ys, prob,
@@ -447,6 +481,11 @@ class SpotiflowEngine:
                "normalizer": ("spotiflow.utils.normalize: percentile 1 / 99.8 of the model input, computed on the crop"
                               if normalizer == "auto" else "none (raw values to the model)"),
                "cast": "float32 inside Spotiflow (lossless for 8/16-bit integers)", "eight_bit_conversion": False,
+               "downscale": d, "trimmed_px": trimmed_px,
+               "downscaled_shape_hw": list(model_in.shape),
+               "downscale_note": ("none (native scale)" if d == 1 else
+                                  f"image divided by {d} in the adapter (float32, scipy zoom order 1, align-corners; no pixel invented, bottom/right remainder trimmed); points mapped back with "
+                                  f"x_full = x_s*(n-1)/(m-1) + crop offset; localisation accuracy ~ +/-{d / 2:g} px"),
                "page_to_channel": ("confirmed mapping" if channel_role else "unconfirmed (no colour assigned)")}
         run = EngineRunInfo(
             run_id=run_id, analysis_id=analysis_id, image_sha256=dict(image_sha256 or {}),

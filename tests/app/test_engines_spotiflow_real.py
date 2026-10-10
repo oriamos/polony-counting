@@ -67,3 +67,23 @@ def test_real_model_on_research_crop(engine):
           f"in {dt:.1f} s on {res.run.device}; prob_thresh {res.run.params['prob_thresh_used']}")
     assert res.run.status == "ok" and res.detections
     assert all(0 <= d.x < 1000 and -1 <= d.y < 1001 for d in res.detections)
+
+
+def test_real_model_downscale4_on_25px_blobs(engine):
+    """~25 px blobs (sigma 5.3): downscale 4 must find them; centre error reported (subpix is off => ~<= d/2 px)."""
+    spots = [(120.3, 100.7, 4000), (300.6, 180.2, 3600), (210.4, 330.9, 4200), (420.1, 400.5, 3800),
+             (90.8, 420.2, 4000), (400.0, 90.0, 3900)]
+    sc = syn.make_scene((512, 512), spots, [spots[0]], sigma=5.3, noise=15.0)
+    out = {}
+    for d in (1, 2, 4):
+        res = engine.detect_page(sc.red, analysis_id="e2e", page=0, channel_role="red", valid_mask=None,
+                                 params={"downscale": d, "prob_thresh": 0.1 if d > 1 else None}, image_sha256={},
+                                 progress=lambda f, m: None, cancelled=lambda: False)
+        err = [min((np.hypot(q.x - x, q.y - y) for q in res.detections), default=np.inf) for x, y, _ in spots]
+        out[d] = (len(res.detections), np.round(err, 2).tolist())
+        print(f"\ndownscale {d}: {len(res.detections)} detections; centre error per true spot: {out[d][1]}; "
+              f"preprocessing={res.run.preprocessing['downscale']} trimmed={res.run.preprocessing['trimmed_px']}")
+        if d == 4:
+            found = [e for e in out[d][1] if np.isfinite(e)]
+            assert len(found) >= 4 and max(found) <= 4.5
+            assert res.run.preprocessing["downscale"] == 4 and res.run.params["downscale"] == 4
