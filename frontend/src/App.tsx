@@ -9,6 +9,7 @@ import { MappingDialog } from './components/MappingDialog';
 import { HelpDialog } from './components/HelpDialog';
 import { Hotkeys } from './components/Hotkeys';
 import { DraftBadge } from './components/TotalsTab';
+import { OriginalsBanner, StorageBadge } from './components/StorageBadge';
 
 export function App() {
   const theme = useApp((s) => s.theme);
@@ -84,6 +85,7 @@ function Header() {
         </div>
       )}
       <div className="spacer" />
+      <StorageBadge />
       <span className={`health ${health ? 'ok' : 'bad'}`} title={health ? `API ${health.version} · Big-FISH ${health.bigfish_version}` : (healthError ?? 'checking…')} data-testid="health">
         <i /> {health ? `API ${health.version}` : healthError ? 'backend unreachable' : 'connecting…'}
       </span>
@@ -154,6 +156,7 @@ function Banners() {
   for (const w of img?.warnings ?? []) notes.push({ tone: 'info', text: w });
   return (
     <div className="banners">
+      <OriginalsBanner id={a.id} />
       {a.status === 'needs_channel_mapping' && (
         <div className="banner warn" role="alert" data-testid="banner-mapping">
           <strong>Channel mapping required.</strong> Assign red / green before processed views, detection or counts are available.

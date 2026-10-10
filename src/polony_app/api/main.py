@@ -378,6 +378,13 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                 "This analysis was created on another computer. Attach the original TIFF(s) to view the image.",
                 409, {"files": miss})
 
+    @api.get("/analyses/{aid}/originals")
+    def get_originals(aid: str):
+        """Which original files this computer lacks (name + sha256 recorded when first imported)."""
+        with store.view(aid_ok(aid)) as st:
+            return {"missing": _missing_originals(st),
+                    "expected": [{"file": n, "sha256": h} for n, h in (st.analysis.image.sha256 if st.analysis.image else {}).items()]}
+
     @api.post("/analyses/{aid}/originals")
     def attach_originals(aid: str, files: list[UploadFile] = File(...)):
         """Attach original TIFF(s) on this computer. Each file must match a recorded sha256."""
