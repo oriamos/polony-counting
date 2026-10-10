@@ -45,6 +45,10 @@ def home_dir() -> Path:
     env = os.environ.get("POLONY_HOME")
     if env:
         return Path(env).expanduser()
+    # started from <home>/venv (shortcuts, wrappers): <home> is the folder above the venv
+    prefix = Path(sys.prefix).resolve()
+    if prefix.name == "venv" and (prefix.parent / "app" / "src" / "polony_app").is_dir():
+        return prefix.parent
     if IS_WIN:
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / "PolonyReview"
@@ -133,6 +137,8 @@ def health(port: int, timeout: float = 1.5) -> Optional[dict]:
 
 def port_is_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if not IS_WIN:  # like uvicorn: a port in TIME_WAIT (server just stopped) counts as free
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((HOST, port))
             return True

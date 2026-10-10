@@ -54,6 +54,10 @@ class NotFound(ReviewError):
 
 
 class Store:
+    backend = "sqlite"
+    supports_heartbeat = False   # jobs of other machines do not exist locally
+    machine_id = ""
+
     def __init__(self, data_dir: str | Path):
         self.data_dir = Path(data_dir).resolve()
         for sub in ("originals", "csv_imports", "tmp"):
@@ -85,6 +89,20 @@ class Store:
     def close(self) -> None:
         with self._dblock:
             self._db.close()
+
+    def info(self) -> dict:
+        return {"backend": "sqlite", "host": None, "database": "app.sqlite", "schema": None,
+                "machine_id": None, "connected": True, "latency_ms": 0.0, "last_error": None}
+
+    # cross-machine job hooks (no-ops for the single-process SQLite backend)
+    def touch_job(self, jid: str) -> bool:
+        return False
+
+    def request_cancel(self, jid: str) -> None:
+        return None
+
+    def find_active_job(self, aid: str) -> str | None:
+        return None
 
     # ----------------------------------------------------------- startup recovery
     def recover_orphans(self) -> list[str]:
