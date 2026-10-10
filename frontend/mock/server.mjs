@@ -280,7 +280,7 @@ function emptyAnalysis(id, name, image, status) {
       reporting_mode: 'exclusive',
       stale_detection: false,
     },
-    slide: { slide_id: null, sample_volume_ul: null, concentration_factor: null, sampled_area_note: null, counting_area_px2: null, pixel_size_um: null, csv_color_mapping: null },
+    slide: { slide_id: null, sampling_date: null, polony_date: null, qc: null, field_area: null, grid_area: null, lab_series: [], efficiency_input: null, sample_volume_ul: null, concentration_factor: null, sampled_area_note: null, counting_area_px2: null, pixel_size_um: null, csv_color_mapping: null },
     finalized_at: null,
     undo_depth: 0,
     redo_depth: 0,
@@ -607,6 +607,27 @@ function runJob(a, req) {
   return job;
 }
 
+// Mirrors docs/app/LAB_EXPORT.md: missing items => 422 listing each; fields > 24 refused; drafts refused in batch.
+function labProblems(a, series) {
+  const m = a.slide;
+  const p = [];
+  const need = (ok, t) => ok || p.push(`${a.name}: missing ${t}`);
+  need(m.slide_id, 'slide_id');
+  need(m.sampling_date, 'sampling_date');
+  need(m.polony_date, 'polony_date');
+  need(m.qc === 0 || m.qc === 1, 'qc');
+  need(m.sample_volume_ul > 0, 'sample_volume_ul');
+  need(m.concentration_factor > 0, 'concentration_factor');
+  need(m.field_area > 0, 'field_area');
+  need(m.grid_area > 0, 'grid_area');
+  need(m.concentration_formula_confirmed, 'confirmation of field geometry and series mapping');
+  if (series && !(m.lab_series || []).some((q) => q.name === series)) p.push(`${a.name}: series "${series}" is not defined`);
+  const f = a.regions.filter((r) => r.kind === 'counting' && r.field_index != null);
+  if (!f.length) p.push(`${a.name}: no counting regions with a field_index`);
+  if (f.some((r) => r.field_index > 24)) p.push(`${a.name}: field_index above 24 is not supported (template ends at field 24)`);
+  return p;
+}
+
 function exportBody(a, kind) {
   const fin = a.status === 'finalized';
   const status = fin ? 'FINAL' : 'DRAFT';
@@ -653,6 +674,27 @@ async function handle(req, res) {
   if (route === '/__mock/fail-next-action' && m === 'POST') {
     store.failNext = JSON.parse((await readBody(req)).toString() || '{}').message || 'injected failure';
     return send(res, 200, { ok: true });
+  }
+  if ((mt = route.match(/^\/__mock\/(force-final|confirm-lab)\/(.+)$/)) && m === 'POST') {
+    const a = getA(mt[2]);
+    if (mt[1] === 'force-final') a.status = 'finalized';
+    else a.slide.concentration_formula_confirmed = true;
+    return send(res, 200, { ok: true });
+  }
+  if (route === '/lab-export' && m === 'POST') {
+    const b = JSON.parse((await readBody(req)).toString() || '{}');
+    const problems = [];
+    for (const id of b.analysis_ids || []) {
+      const a = store.analyses.get(id);
+      if (!a) problems.push(`${id}: not found`);
+      else if (a.status !== 'finalized') problems.push(`${a.name}: not finalized (draft analyses cannot be lab-exported)`);
+      else problems.push(...labProblems(a, b.style === 't7' ? b.series : null));
+    }
+    if (!(b.analysis_ids || []).length) problems.push('no analyses selected');
+    if (problems.length) throw new HttpError(422, 'lab_export_blocked', 'Lab export blocked:\n' + problems.join('\n'), { blockers: problems });
+    const ext = b.style === 'counts' ? 'xlsx' : b.analysis_ids.length > 1 ? 'zip' : b.format;
+    const nm = b.style === 'counts' ? 'Counts_mock' : `${b.series}_mock`;
+    return send(res, 200, 'mock-lab-export', { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${nm}.${ext}"` });
   }
   if (route === '/analyses' && m === 'GET')
     return send(res, 200, [...store.analyses.values()].map((a) => ({ id: a.id, name: a.name, status: a.status, updated_at: a.updated_at, finalized_at: a.finalized_at, counts: a.objects.length ? counts(a).slide : null })));
@@ -774,6 +816,14 @@ async function handle(req, res) {
       a.finalized_at = null;
       a.regions.forEach((r) => unapproveRegion(a, r.id));
       return send(res, 200, refresh(a));
+    }
+    if (sub === 'lab-export' && m === 'GET') {
+      if (a.status !== 'finalized') throw new HttpError(409, 'not_final', 'Lab export needs a finalized analysis.');
+      const sr = url.searchParams.get('series');
+      const pr = labProblems(a, sr);
+      if (pr.length) throw new HttpError(422, 'lab_export_blocked', 'Lab export blocked:\n' + pr.join('\n'), { blockers: pr });
+      const fmt = url.searchParams.get('format') || 'xlsx';
+      return send(res, 200, 'mock-lab-export', { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${sr}_mock.${fmt}"` });
     }
     if (sub === 'export' && m === 'GET') {
       const e = exportBody(a, url.searchParams.get('kind') || 'objects');

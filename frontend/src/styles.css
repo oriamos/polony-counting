@@ -1467,3 +1467,6 @@ input.num {
   padding-left: 16px;
   white-space: pre-wrap;
 }
+.input.invalid {
+  border-color: #ffb020;
+}

@@ -574,12 +574,120 @@ async function detectSuite() {
   check('reopen returns to review (DRAFT)', (await tid('draft-badge').first().innerText()) === 'DRAFT');
   // slide meta
   check('slide meta empty by default', (await tid('slide-volume').inputValue()) === '' && (await tid('slide-factor').inputValue()) === '');
-  check('concentration gating note shown', /Concentration will not be computed/.test(await tid('slide-form').innerText()));
+  check('concentration gating note shown', /Lab export not yet possible/.test(await tid('slide-form').innerText()));
   await tid('slide-volume').fill('50');
   await tid('slide-save').click();
   await page.waitForTimeout(300);
   const s = (await (await fetch(`${BASE}/api/analyses/demo`)).json()).slide;
   check('slide meta saved with null for unset fields', s.sample_volume_ul === 50 && s.concentration_factor === null);
+  check('old total-area field removed', (await tid('slide-total-area').count()) === 0);
+}
+
+// ============================================================= lab export
+async function labSuite() {
+  await reset();
+  await openAnalysis('demo');
+  await tid('tab-regions').click();
+  check('blank-vs-zero note shown', /No region = BLANK cell, region with 0 objects = 0/.test(await tid('field-note').innerText()));
+  await tid('grid-toggle').click();
+  check('numbering-order caveat shown', /confirm with your lab convention/.test(await tid('grid-order-note').innerText()));
+  check('defaults prefilled 4x7', (await tid('grid-rows').inputValue()) === '4' && (await tid('grid-cols').inputValue()) === '7');
+  // image is small: use an explicit 2x3 grid inside the demo region
+  const setNum = async (k, v) => tid(`grid-${k}`).fill(String(v));
+  await setNum('rows', 2); await setNum('cols', 3); await setNum('cellW', 100); await setNum('cellH', 100); await setNum('originX', 20); await setNum('originY', 20);
+  await tid('grid-preview-btn').click();
+  await page.waitForSelector('[data-testid=grid-preview]');
+  check('grid preview drawn on image (6 cells)', (await page.locator('[data-testid=grid-preview] polygon').count()) === 12);
+  check('exclusion warn not shown for clear grid', (await tid('grid-exclusion-warn').count()) === 0);
+  await setNum('originX', 0); await setNum('originY', 0);
+  check('partial exclusion warned', (await tid('grid-exclusion-warn').count()) === 1 && /partially covered/.test(await tid('grid-exclusion-warn').innerText()));
+  await setNum('originX', 20); await setNum('originY', 20);
+  await setNum('firstIndex', 23);
+  check('field numbers > 24 refuse apply', (await tid('grid-apply').isDisabled()) && /exceed 24/.test(await tid('grid-issues').innerText()));
+  await setNum('firstIndex', 1);
+  await tid('grid-mode').selectOption('add');
+  page.once('dialog', (d) => d.accept());
+  await tid('grid-apply').click();
+  await page.waitForTimeout(500);
+  let regs = (await (await fetch(`${BASE}/api/analyses/demo`)).json()).regions;
+  const fl = regs.filter((r) => r.field_index != null);
+  check('6 Field-N regions created with field_index', fl.length === 6 && fl[0].name === 'Field-1' && fl[5].field_index === 6, JSON.stringify(fl.map((r) => r.name)));
+  check('preview cleared after apply', (await tid('grid-preview').count()) === 0);
+  // edit one field number to a duplicate -> flagged
+  const first = fl[0].id;
+  await tid(`field-index-${first}`).fill('2');
+  await page.waitForTimeout(400);
+  check('duplicate field number flagged', (await tid(`field-dup-${first}`).count()) === 1 && /duplicate/.test(await tid('field-issues').innerText()));
+  await tid(`field-index-${first}`).fill('1');
+  await page.waitForTimeout(400);
+  // delete a field -> blank
+  page.once('dialog', (d) => d.accept());
+  await tid(`delete-region-${fl[5].id}`).click();
+  await page.waitForTimeout(400);
+  check('deleted field gone (blank in export)', (await tid('field-count').innerText()).startsWith('5 lab fields'));
+  // re-run grid in replace mode
+  await tid('grid-mode').selectOption('replace');
+  page.once('dialog', (d) => { if (!/Replace 5/.test(d.message())) throw new Error('bad confirm: ' + d.message()); d.accept(); });
+  await tid('grid-apply').click();
+  await page.waitForTimeout(500);
+  regs = (await (await fetch(`${BASE}/api/analyses/demo`)).json()).regions;
+  check('replace mode kept 6 fields', regs.filter((r) => r.field_index != null).length === 6);
+
+  // metadata form
+  await tid('tab-finish').click();
+  await tid('slide-id').fill('AI_A');
+  await tid('slide-sampling-date').fill('15/09/2026');
+  await tid('slide-polony-date').fill('30/09/2026');
+  await tid('slide-qc').selectOption('0');
+  await tid('chip-vol-2.5').click();
+  await page.waitForTimeout(150);
+  check('volume chip fills field only', (await tid('slide-volume').inputValue()) === '2.5');
+  await tid('chip-vol-2.5056').click();
+  await page.waitForTimeout(150);
+  check('2.5056 chip fills', (await tid('slide-volume').inputValue()) === '2.5056');
+  await tid('chip-areas').click();
+  check('area chip fills 2.9 / 0.1', (await tid('slide-field-area').inputValue()) === '2.9' && (await tid('slide-grid-area').inputValue()) === '0.1');
+  await tid('slide-factor').fill('1');
+  await tid('series-add').click();
+  await tid('series-name-0').fill('T7A');
+  check('series without count type blocks save', (await tid('slide-save').isDisabled()) && /count type/.test(await tid('series-errors').innerText()));
+  check('never-inferred text', /never inferred from names or colours/.test(await tid('series-note').innerText()));
+  await tid('series-type-0').selectOption('red_only');
+  check('formula text shown', /mean\(field counts\) × \(field area \/ grid area\) ÷ sample volume × 1000/.test(await tid('formula-note').innerText()));
+  check('confirmation renamed', /field geometry and series mapping match the lab convention/.test(await tid('formula-note').innerText()));
+  await tid('slide-save').click();
+  await page.waitForTimeout(400);
+  let sl = (await (await fetch(`${BASE}/api/analyses/demo`)).json()).slide;
+  check('series saved with explicit count type', sl.lab_series.length === 1 && sl.lab_series[0].count_type === 'red_only' && sl.field_area === 2.9 && sl.qc === 0 && sl.sampling_date === '15/09/2026');
+
+  // batch panel: draft disabled
+  await tid('lab-batch-toggle').click();
+  check('draft not selectable in batch', await tid('lab-sel-demo').isDisabled());
+  // make the demo analysis finalizable through the API
+  await fetch(`${BASE}/api/__mock/force-final/demo`, { method: 'POST' });
+  await page.reload();
+  await page.waitForSelector('[data-testid=lab-batch-toggle]');
+  await tid('lab-batch-toggle').click();
+  check('finalized analysis selectable', await tid('lab-sel-demo').isEnabled());
+  await tid('lab-sel-demo').check();
+  await tid('lab-series').fill('T7A');
+  // blockers: confirmation missing
+  await tid('lab-download').click();
+  await page.waitForSelector('[data-testid=lab-blockers]');
+  check('server blockers listed verbatim', /missing confirmation of field geometry and series mapping/.test(await tid('lab-blockers').innerText()));
+  await shot('lab-blockers');
+  // confirm, then single export buttons + batch download
+  await fetch(`${BASE}/api/__mock/confirm-lab/demo`, { method: 'POST' });
+  await openAnalysis('demo');
+  await tid('tab-finish').click();
+  check('per-series lab export button on finalized', (await tid('lab-export-T7A-xlsx').count()) === 1 && /T7-style XLSX/.test(await tid('lab-export-T7A-xlsx').innerText()));
+  const [d1] = await Promise.all([page.waitForEvent('download'), tid('lab-export-T7A-csv').click()]);
+  check('single lab CSV downloads', /T7A.*\.csv$/.test(d1.suggestedFilename()), d1.suggestedFilename());
+  await tid('lab-batch-toggle').click();
+  await tid('lab-sel-demo').check();
+  await tid('lab-series').fill('T7A');
+  const [d2] = await Promise.all([page.waitForEvent('download'), tid('lab-download').click()]);
+  check('batch lab export downloads', /T7A_mock\.xlsx$/.test(d2.suggestedFilename()), d2.suggestedFilename());
 }
 
 // ============================================================= 8. themes
@@ -594,7 +702,7 @@ async function themeSuite() {
   await page.emulateMedia({ colorScheme: 'light' });
 }
 
-const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, themeSuite];
+const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite];
 for (const s of suites) {
   try {
     await s();

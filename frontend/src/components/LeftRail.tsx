@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError } from '../api/client';
+import { api, ApiError, batchLabExport, type LabFormat, type LabStyle } from '../api/client';
 import type { AnalysisStatus, CsvImport } from '../api/types';
 import { useApp } from '../state/store';
 
@@ -20,6 +20,7 @@ export function LeftRail() {
   return (
     <aside className="left" aria-label="Analyses">
       <AnalysesList />
+      <LabBatchPanel />
       <CsvPanel />
     </aside>
   );
@@ -314,5 +315,115 @@ function CsvDetail({ csv, onChange }: { csv: CsvImport; onChange: () => void }) 
         <span className="cell-blank inline">blank</span> = not measured (excluded from totals) · <span className="cell-val inline">0</span> = measured zero
       </div>
     </div>
+  );
+}
+
+function LabBatchPanel() {
+  const analyses = useApp((s) => s.analyses);
+  const current = useApp((s) => s.current);
+  const toast = useApp((s) => s.toast);
+  const [open, setOpen] = useState(false);
+  const [sel, setSel] = useState<string[]>([]);
+  const [style, setStyle] = useState<LabStyle>('t7');
+  const [series, setSeries] = useState('');
+  const [format, setFormat] = useState<LabFormat>('xlsx');
+  const [busy, setBusy] = useState(false);
+  const [blockers, setBlockers] = useState<string[]>([]);
+  const finalIds = new Set(analyses.filter((a) => a.status === 'finalized').map((a) => a.id));
+  const chosen = sel.filter((id) => finalIds.has(id));
+  const suggestions = (current?.slide.lab_series ?? []).map((q) => q.name);
+  const needSeries = style === 't7';
+  const canGo = chosen.length > 0 && !busy && (!needSeries || series.trim() !== '');
+  const toggle = (id: string) => setSel((x) => (x.includes(id) ? x.filter((y) => y !== id) : [...x, id]));
+  const go = async () => {
+    setBusy(true);
+    setBlockers([]);
+    try {
+      const { blob, filename } = await batchLabExport({ analysis_ids: chosen, style, series: series.trim() || null, format: style === 'counts' ? 'xlsx' : format });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('success', `Lab export downloaded: ${filename}`);
+    } catch (e) {
+      const err = e as ApiError;
+      const lines = err.message.split('\n').filter(Boolean);
+      const d = err.detail as Record<string, unknown> | null;
+      for (const k of ['blockers', 'missing', 'errors']) {
+        const v = d?.[k];
+        if (Array.isArray(v)) for (const x of v) { const t = typeof x === 'string' ? x : JSON.stringify(x); if (!lines.includes(t)) lines.push(t); }
+      }
+      setBlockers(lines);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="rail-section labbatch" data-testid="lab-batch">
+      <header className="rail-head">
+        <h2>Lab export (batch)</h2>
+        <button className="btn sm" onClick={() => setOpen(!open)} aria-expanded={open} data-testid="lab-batch-toggle">
+          {open ? 'Hide' : 'Open'}
+        </button>
+      </header>
+      {open && (
+        <>
+          <div className="muted small">Only finalized analyses can be exported. Drafts are disabled.</div>
+          <ul className="batch-list">
+            {analyses.map((a) => {
+              const fin = a.status === 'finalized';
+              return (
+                <li key={a.id}>
+                  <label className="chk small" title={fin ? '' : 'Draft: finalize this analysis first'}>
+                    <input type="checkbox" disabled={!fin} checked={fin && sel.includes(a.id)} onChange={() => toggle(a.id)} data-testid={`lab-sel-${a.id}`} />
+                    <span>{a.name}</span> <StatusChip status={a.status} />
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <label className="field-label">
+            Style
+            <select className="input sm" value={style} onChange={(e) => setStyle(e.target.value as LabStyle)} data-testid="lab-style">
+              <option value="t7">T7-style per series</option>
+              <option value="counts">Counts-style workbook</option>
+            </select>
+          </label>
+          <label className="field-label">
+            Series {needSeries ? '(required)' : '(blank = all series)'}
+            <input className="input sm" list="lab-series-list" value={series} onChange={(e) => setSeries(e.target.value)} placeholder="e.g. T7A" data-testid="lab-series" />
+            <datalist id="lab-series-list">
+              {suggestions.map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
+          </label>
+          <label className="field-label">
+            Format
+            <select className="input sm" value={style === 'counts' ? 'xlsx' : format} disabled={style === 'counts'} onChange={(e) => setFormat(e.target.value as LabFormat)} data-testid="lab-format">
+              <option value="xlsx">XLSX</option>
+              <option value="csv">CSV</option>
+            </select>
+          </label>
+          <button className="btn primary" disabled={!canGo} onClick={() => void go()} data-testid="lab-download">
+            {busy ? 'Exporting…' : `Download (${chosen.length})`}
+          </button>
+          {blockers.length > 0 && (
+            <div className="notice err small" role="alert" data-testid="lab-blockers">
+              Lab export refused:
+              <ul className="blockers">
+                {blockers.map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
