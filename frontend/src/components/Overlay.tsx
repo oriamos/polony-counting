@@ -260,3 +260,77 @@ export function GridPreviewLayer({ scale }: { scale: number }) {
     </g>
   );
 }
+
+/**
+ * Researcher reference marks: a white cross with a dark halo (readable on red and green signal), deliberately unlike the
+ * object rings. Hover (when zoomed in) shows the per-field counter. Plane is chosen in the Regions tab.
+ */
+export function ReferencePointsLayer({ scale }: { scale: number }) {
+  const ref = useApp((s) => s.reference);
+  const show = useApp((s) => s.showReference);
+  const plane = useApp((s) => s.refPlane);
+  if (!show || !ref?.available) return null;
+  const k = 1 / scale;
+  const r = 4.5 * k;
+  const pts = plane == null ? ref.points : ref.points.filter((p) => p.plane === plane);
+  const hover = scale >= 2;
+  return (
+    <g data-testid="reference-points" data-count={pts.length}>
+      {pts.map((p, i) => {
+        const d = `M${p.x - r} ${p.y}H${p.x + r}M${p.x} ${p.y - r}V${p.y + r}`;
+        return (
+          <g key={i} pointerEvents={hover ? 'all' : 'none'}>
+            <title>{`reference: ${p.field != null ? `field ${p.field}, ` : ''}counter ${p.counter}, plane ${p.plane}`}</title>
+            <path d={d} stroke="rgba(0,0,0,0.9)" strokeWidth={4 * k} strokeLinecap="round" fill="none" />
+            <path d={d} stroke="#ffffff" strokeWidth={1.7 * k} strokeLinecap="round" fill="none" />
+            {hover && <circle cx={p.x} cy={p.y} r={r * 1.4} fill="transparent" />}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+/** Live preview of the shifted reference grid for the import dialog (dashed white/violet; greyed = not imported). */
+export function ReferenceGridPreviewLayer({ scale }: { scale: number }) {
+  const cells = useApp((s) => s.refGridPreview);
+  if (!cells) return null;
+  const k = 1 / scale;
+  return (
+    <g data-testid="ref-grid-preview" pointerEvents="none">
+      {cells.map((c) => {
+        const pts = c.polygon.map((p) => p.join(',')).join(' ');
+        const xs = c.polygon.map((p) => p[0]);
+        const ys = c.polygon.map((p) => p[1]);
+        const color = c.included ? '#d9b3ff' : '#8b93a1';
+        return (
+          <g key={c.field} data-included={c.included ? '1' : '0'} opacity={c.included ? 1 : 0.7}>
+            <polygon points={pts} fill={c.included ? 'rgba(217,179,255,0.07)' : 'none'} stroke={DARK} strokeWidth={4 * k} />
+            <polygon points={pts} fill="none" stroke={color} strokeWidth={1.8 * k} strokeDasharray={`${6 * k} ${4 * k}`} />
+            <HaloText x={(Math.min(...xs) + Math.max(...xs)) / 2} y={(Math.min(...ys) + Math.max(...ys)) / 2 + 5 * k} scale={scale} size={13} anchor="middle" fill={color} text={`${c.field}${c.counted ? '' : ' (no marks)'}`} />
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+/** Auto chamber region preview (solid teal) and suggested exclusions (dashed pink). Nothing is applied until confirmed. */
+export function ChamberPreviewLayer({ scale }: { scale: number }) {
+  const c = useApp((s) => s.chamberPreview);
+  if (!c) return null;
+  const k = 1 / scale;
+  const pts = (p: [number, number][]) => p.map((q) => q.join(',')).join(' ');
+  return (
+    <g data-testid="chamber-preview" pointerEvents="none">
+      <polygon points={pts(c.polygon)} fill="rgba(45,212,191,0.08)" stroke={DARK} strokeWidth={5 * k} />
+      <polygon points={pts(c.polygon)} fill="none" stroke="#2dd4bf" strokeWidth={2.4 * k} />
+      {c.suggested_exclusions.map((e, i) => (
+        <g key={i}>
+          <polygon points={pts(e)} fill="rgba(255,79,176,0.14)" stroke={DARK} strokeWidth={4 * k} />
+          <polygon points={pts(e)} fill="none" stroke="#ff4fb0" strokeWidth={1.8 * k} strokeDasharray={`${5 * k} ${3 * k}`} />
+        </g>
+      ))}
+    </g>
+  );
+}

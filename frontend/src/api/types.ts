@@ -235,6 +235,9 @@ export interface Counts {
   uncertain: number;
   red_positive: number;
   green_positive: number;
+  /** convenience counts: debris_like-flagged objects are NOT removed from the main counts */
+  red_positive_excl_debris?: number;
+  green_positive_excl_debris?: number;
   total_objects_exclusive: number;
   reporting_mode: ReportingMode;
   is_final: boolean;
@@ -296,4 +299,76 @@ export interface HealthResponse {
   ok: boolean;
   version: string;
   bigfish_version: string;
+}
+
+// ---- researcher reference (marks embedded in the TIFF) ----
+export interface ReferencePoint {
+  x: number;
+  y: number;
+  counter: number;
+  plane: number;
+  field: number | null;
+}
+
+export interface ReferenceGridCell {
+  field: number;
+  polygon: [number, number][];
+}
+
+export interface ReferenceGrid {
+  source: string;
+  origin: [number, number];
+  cell: [number, number];
+  cols: number;
+  rows: number;
+  cells: ReferenceGridCell[];
+}
+
+export interface ReferenceInfo {
+  available: boolean;
+  source_file?: string | null;
+  points: ReferencePoint[];
+  grid: ReferenceGrid | null;
+  reference_counts: Record<string, { plane0?: number; plane1?: number }>;
+  planes: { page: number; point_count: number }[];
+  warnings: string[];
+}
+
+export type ImportMode = 'counted' | 'all';
+
+export interface FieldImportRequest {
+  mode: ImportMode;
+  shift: [number, number];
+  plane: number | null;
+  replace: boolean;
+}
+
+export type CompareCountType = 'red_positive' | 'green_positive' | 'red_only' | 'green_only' | 'yellow';
+
+export interface CompareRow {
+  field: number;
+  reference_count: number | null;
+  app_count: number | null;
+  delta: number | null;
+}
+
+export interface CompareResponse {
+  rows: CompareRow[];
+  summary: {
+    n_fields: number;
+    pearson_r: number | null;
+    slope: number | null;
+    mae: number | null;
+    total_reference: number;
+    total_app: number;
+  };
+}
+
+export interface AutoChamberResponse {
+  polygon: [number, number][];
+  area_px2: number;
+  rim_px: number;
+  method: string;
+  warnings: string[];
+  suggested_exclusions: [number, number][][];
 }

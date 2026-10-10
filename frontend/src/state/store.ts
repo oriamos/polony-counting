@@ -12,8 +12,11 @@ import type {
   Job,
   ObjectClass,
   Region,
+  ReferenceInfo,
+  AutoChamberResponse,
   ReviewQueueItem,
 } from '../api/types';
+import type { PreviewCell } from '../lib/reference';
 import { centerOn, fitBox, fitView, type View } from '../lib/geometry';
 
 export type Tool =
@@ -78,6 +81,16 @@ export interface AppState {
   /** grid-field generator preview polygons (not yet applied) */
   gridPreview: { index: number; polygon: [number, number][]; flag?: boolean }[] | null;
 
+  /** researcher reference marks (null until loaded / not available) */
+  reference: ReferenceInfo | null;
+  showReference: boolean;
+  /** reference plane to display/compare (null = all planes) */
+  refPlane: number | null;
+  /** live preview of the shifted reference grid for the import dialog (null = hidden) */
+  refGridPreview: PreviewCell[] | null;
+  /** auto chamber region preview (not yet applied) */
+  chamberPreview: AutoChamberResponse | null;
+
   rightTab: RightTab;
   mappingOpen: boolean;
   helpOpen: boolean;
@@ -120,6 +133,7 @@ export interface AppState {
   reopen: () => Promise<void>;
   finalize: () => Promise<void>;
   refreshCsv: () => Promise<void>;
+  loadReference: (id: string) => Promise<void>;
 }
 
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
@@ -172,6 +186,12 @@ export const useApp = create<AppState>((set, get) => ({
   csvImports: [],
   gridPreview: null,
 
+  reference: null,
+  showReference: false,
+  refPlane: null,
+  refGridPreview: null,
+  chamberPreview: null,
+
   rightTab: 'review',
   mappingOpen: false,
   helpOpen: false,
@@ -212,6 +232,15 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  loadReference: async (id) => {
+    try {
+      const r = await api.reference(id);
+      if (get().current?.id === id) set({ reference: r });
+    } catch {
+      if (get().current?.id === id) set({ reference: null }); // optional feature: older backends have no endpoint
+    }
+  },
+
   refreshCsv: async () => {
     try {
       set({ csvImports: await api.listCsv() });
@@ -239,6 +268,11 @@ export const useApp = create<AppState>((set, get) => ({
       tool: 'select',
       regionErrors: {},
       gridPreview: null,
+      reference: null,
+      showReference: false,
+      refPlane: null,
+      refGridPreview: null,
+      chamberPreview: null,
     });
     try {
       const a = await api.getAnalysis(id);
@@ -261,6 +295,7 @@ export const useApp = create<AppState>((set, get) => ({
       detReq: first || !s.detReq ? a.detection_request : s.detReq,
       analyses: s.analyses.map((x) => (x.id === a.id ? { ...x, name: a.name, status: a.status, updated_at: a.updated_at, finalized_at: a.finalized_at } : x)),
     });
+    if (first) void get().loadReference(a.id);
     if (first && a.image) {
       const { w, h } = get().viewport;
       set({ view: fitView(a.image.width, a.image.height, w, h), fitted: true });

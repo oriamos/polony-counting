@@ -3,6 +3,11 @@ import type {
   Analysis,
   AnalysisSummary,
   ApiErrorBody,
+  AutoChamberResponse,
+  CompareCountType,
+  CompareResponse,
+  FieldImportRequest,
+  ReferenceInfo,
   CountsResponse,
   CsvImport,
   DetectionRequest,
@@ -94,6 +99,11 @@ export const api = {
   redo: (id: string) => request<Analysis>('POST', `/analyses/${id}/redo`),
   finalize: (id: string) => request<Analysis>('POST', `/analyses/${id}/finalize`),
   reopen: (id: string) => request<Analysis>('POST', `/analyses/${id}/reopen`),
+  reference: (id: string) => request<ReferenceInfo>('GET', `/analyses/${id}/reference`),
+  importFields: (id: string, body: FieldImportRequest) => request<Analysis>('POST', `/analyses/${id}/fields/import`, body),
+  compareFields: (id: string, plane: number | null, countType: CompareCountType) =>
+    request<CompareResponse>('GET', `/analyses/${id}/fields/compare?${plane != null ? `plane=${plane}&` : ''}count_type=${countType}`),
+  autoChamber: (id: string, rim_px: number) => request<AutoChamberResponse>('POST', `/analyses/${id}/regions/auto-chamber`, { rim_px }),
   listCsv: () => request<CsvImport[]>('GET', '/csv-imports'),
   uploadCsv: (file: File) => {
     const fd = new FormData();
