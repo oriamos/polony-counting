@@ -20,16 +20,16 @@ Details, uninstall, troubleshooting and test status: [docs/app/INSTALL.md](docs/
 
 ## Polony Review App (new)
 
-A local human-in-the-loop web app (FastAPI + React, Big-FISH spot detection, **no torch needed**) for reviewing and approving red / green / yellow polony counts with full provenance.
+A local human-in-the-loop web app (FastAPI + React) for reviewing and approving red / green / yellow polony counts with full provenance. Two independent detectors: Big-FISH (classical, no torch) and optional Spotiflow (AI, needs the `--with-ai` extra); a deterministic consensus between them; a lab-format Excel/CSV export; optional shared Postgres database.
 
 ```bash
 make app        # venv + dependencies + frontend build (if npm) + server on http://127.0.0.1:8000
-make app-test   # 192 tests
+make app-test   # backend tests (552 passed / 85 skipped in the last full run; skips need Postgres or the real model)
 ```
 
 Docs: [docs/app/README.md](docs/app/README.md) (start here), [user guide](docs/app/USER_GUIDE.md), [parameters](docs/app/PARAMETERS.md),
 [open scientific questions](docs/app/SCIENTIFIC_OPEN_QUESTIONS.md), [legacy audit](docs/app/LEGACY_AUDIT.md).
-**Status:** validated only on one red-only test image; the research TIFFs of the task were not available; defaults and cut-offs are unvalidated; concentration output stays empty until the formula is confirmed.
+**Status:** end-to-end validated on 8 real two-channel slides against the researcher's own marks (Big-FISH and Spotiflow); accuracy is partial (see [ALL_SLIDES_EVAL.md](docs/app/ALL_SLIDES_EVAL.md)) and defaults are not final. **Open items and the hackathon task list: [docs/app/OPEN_ITEMS_AND_HACKATHON.md](docs/app/OPEN_ITEMS_AND_HACKATHON.md).**
 The sections below describe the **legacy** neural-network pipeline (`src/polony`), which has known defects listed in the audit and is left untouched.
 
 # Polony counting project

@@ -2,10 +2,9 @@
 
 A local, human-in-the-loop web app for reviewing and counting red / green / yellow polonies on two-channel TIFF scans. A classical spot detector (Big-FISH, Laplacian of Gaussian)
 proposes positions, you inspect, correct and approve them per region, and the app exports counts together with full provenance. Code: `src/polony_app` (FastAPI + SQLite) and `frontend/` (React + TypeScript).
-It does **not** need torch, and it does not use the legacy neural-network code in `src/polony` (see [LEGACY_AUDIT.md](LEGACY_AUDIT.md)).
+The base install does **not** need torch; the optional Spotiflow engine does (`--with-ai`). The app does not use the legacy neural-network code in `src/polony` (see [LEGACY_AUDIT.md](LEGACY_AUDIT.md)).
 
-> **Status / honesty note.** Validated on one real red-only image (`resources/dataset_files/test/test_img.tif`, 2450 x 1438, 2 pages uint16) and synthetic data. The research TIFFs named in the task
-> (`29-09-2026_T7_AB_*.tif`, described as 1460 x 2438) were not available, so no accuracy on them is claimed. Defaults and review cut-offs are unvalidated starting points. Concentration output is off until the researcher confirms the formula.
+> **Status / honesty note.** Validated end-to-end on 8 real two-channel slides against the researcher's marks ([ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md), [REAL_DATA_VALIDATION.md](REAL_DATA_VALIDATION.md)). Accuracy is partial and varies by slide; defaults and review cut-offs are working values, not final. Everything still open: [OPEN_ITEMS_AND_HACKATHON.md](OPEN_ITEMS_AND_HACKATHON.md).
 
 ## Quick start (one command)
 
@@ -21,14 +20,14 @@ Options: `PORT=8001 make app`, `APP_DATA_DIR=/path make app`, or `make app APP_P
 |---|---|
 | `make app-install` | create `.venv` (if needed) and `pip install -r requirements-app.txt` (no torch) |
 | `make app-run` | build the frontend (if npm) and start the server on port 8000 |
-| `make app-test` | run `tests/app` (192 tests) |
+| `make app-test` | run `tests/app` (backend suite) |
 | `make app` | install + run |
 
 Equivalent without make: `pip install -r requirements-app.txt`, then `PYTHONPATH=src python -m polony_app --data-dir ./data --port 8000`. Poetry users: `poetry install --with app` (group `app`).
 Data (originals, SQLite database) live in `./data` (git-ignored; override with `POLONY_DATA_DIR`). Uploads are limited to 512 MB per file (`POLONY_MAX_UPLOAD_MB`).
 Frontend development: see `frontend/README.md` (`npm run dev`, mock API, vitest, e2e).
 
-Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` (no torch), `PYTHONPATH=src pytest tests/app` = 192 passed, `make app` serves `/api/health` and `/`.
+Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` (no torch), `PYTHONPATH=src pytest tests/app` = all passed at that time (latest full run: 552 passed / 85 skipped), `make app` serves `/api/health` and `/`.
 
 ## Documents
 
@@ -39,6 +38,11 @@ Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` 
 | [SCIENTIFIC_OPEN_QUESTIONS.md](SCIENTIFIC_OPEN_QUESTIONS.md) | what the researcher must still decide or confirm |
 | [LEGACY_AUDIT.md](LEGACY_AUDIT.md) | verified problems of the legacy pipeline and what the app does instead |
 | [SCIENCE_NOTES.md](SCIENCE_NOTES.md) | experiments, Big-FISH facts, failure modes |
+| [OPEN_ITEMS_AND_HACKATHON.md](OPEN_ITEMS_AND_HACKATHON.md) | everything still open + hackathon checklist |
+| [INSTALL.md](INSTALL.md), [SHARED_DATABASE.md](SHARED_DATABASE.md), [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md) | one-command install, optional shared Postgres, Vercel feasibility (paused) |
+| [LAB_EXPORT.md](LAB_EXPORT.md), [FIELDS.md](FIELDS.md) | lab-format export and field/reference handling |
+| [TWO_ENGINE.md](TWO_ENGINE.md), [TWO_ENGINE_CONTRACT.md](TWO_ENGINE_CONTRACT.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md) | Big-FISH + Spotiflow, consensus, contracts |
+| [FINE_TUNING.md](FINE_TUNING.md), [EVALUATION.md](EVALUATION.md), [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md) | dataset snapshots, controlled fine-tuning, evaluation |
 | [REVIEW_POLICY.md](REVIEW_POLICY.md), [RERUN_POLICY.md](RERUN_POLICY.md), [CONTRACTS.md](CONTRACTS.md) | approval/finalize rules, re-detection merge rules, API contracts |
 
 ## Principles

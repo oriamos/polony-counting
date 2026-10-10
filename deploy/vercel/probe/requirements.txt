@@ -1,0 +1,17 @@
+# Trimmed runtime deps for the Vercel probe (and the future port). Measured unpacked
+# size in a clean Python 3.12 venv: ~393 MB with psycopg[binary] (limit: 500 MB).
+# imagecodecs (~86 MB) deliberately omitted: decode LZW RGB composites with Pillow.
+fastapi==0.143.0
+pydantic==2.14.0
+numpy==2.5.3
+scipy==1.18.1
+scikit-image==0.26.0
+scikit-learn==1.9.1
+pandas==3.0.6
+matplotlib==3.11.2
+big-fish==0.6.2
+tifffile==2026.9.20
+roifile==2026.9.22
+pillow==12.3.0
+openpyxl==3.1.5
+psycopg[binary]==3.3.6

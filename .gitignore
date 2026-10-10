@@ -297,3 +297,9 @@ checkpoints/polony_64_1.8386.pth
 frontend/node_modules/
 frontend/dist/
 frontend/e2e-artifacts/
+
+# --- polony review app: re-include source dirs caught by the generic patterns above ---
+!frontend/src/lib/
+!frontend/src/lib/**
+!deploy/vercel/probe/requirements.txt
+!deploy/vercel/probe/.python-version

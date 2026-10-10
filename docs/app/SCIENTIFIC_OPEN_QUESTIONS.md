@@ -5,10 +5,10 @@ concentration cells empty until the inputs are confirmed). Software problems and
 
 ## Data limitation (read first)
 
-* The research TIFFs named in the task (`29-09-2026_T7_AB_*.tif`, e.g. `..._AM-A.tif`, described as 1460 x 2438) were **NOT available** in the workspace. Nothing below could be checked against the pixels of those slides.
-* The only image is `resources/dataset_files/test/test_img.tif`: 2450 x 1438 (the brief says 1460 x 2438; the dimensions differ), 2 pages, uint16, **red-only content** (page 1 has no signal at the marked polonies). One annotator's 77 embedded point marks serve as reference.
-* The CSVs (`T7A_15-09-2026.csv`, `T7B_15-09-2026.csv`), their xlsx versions and `Counts_30-09-2026.xlsx` were supplied as uploads; they are not part of the repository.
-* Consequently there is **no accuracy validation** of the detector (see item 11) and no validation of yellow or green calls.
+* Update: the research TIFFs were later supplied and 8 slides were run end-to-end against the researcher's embedded marks ([ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md)). They are **not stored in git** (local copies only, git-excluded). Accuracy is partial; the interpretations below were still not confirmed by the researcher.
+* Originally (kept for context): the only image in the repo is `resources/dataset_files/test/test_img.tif` (2450 x 1438, 2 pages, uint16, red-only content), with 77 embedded point marks of one annotator.
+* The CSVs (`T7A_15-09-2026.csv`, `T7B_15-09-2026.csv`), their xlsx versions and `Counts_30-09-2026.xlsx` are used as lab-format templates in `tests/test_data/lab_templates/` (see [LAB_EXPORT.md](LAB_EXPORT.md)).
+* Yellow and green calls are still not independently validated; the marks of the researcher are not ground truth (see [OPEN_ITEMS_AND_HACKATHON.md](OPEN_ITEMS_AND_HACKATHON.md)).
 
 ## Evidence from Counts_30-09-2026.xlsx (unconfirmed interpretation)
 
