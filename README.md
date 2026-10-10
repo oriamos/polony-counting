@@ -14,8 +14,8 @@ irm https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl
 ```bash
 curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.sh | bash
 ```
-This installs the app into your user folder (about 450-600 MB, downloads Python 3.12 via `uv` only if no Python 3.10-3.13 is present)
-and puts a **Polony Review** icon on your Desktop. Re-run the command to update. The app has no login and listens on `127.0.0.1` only.
+This installs the app into your user folder (about 650 MB, downloads Python 3.12 via `uv` only if no Python 3.10-3.13 is present)
+and puts a **Polony Review** icon on your Desktop. Re-run the command to update. Optional AI detector (Spotiflow + PyTorch, +0.8-2.5 GB): add `--with-ai` (`-WithAi` on Windows). The app has no login and listens on `127.0.0.1` only.
 Details, uninstall, troubleshooting and test status: [docs/app/INSTALL.md](docs/app/INSTALL.md).
 
 ## Polony Review App (new)

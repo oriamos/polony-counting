@@ -45,7 +45,7 @@ Internet access to `github.com`, `pypi.org` (and `astral.sh` / `github.com` rele
 | **Your data** (analyses, results, exports) | `Documents\PolonyReviewData` | `~/PolonyReviewData` |
 | Icon | Desktop + Start Menu `Polony Review.lnk` (+ `Stop Polony Review`) | macOS: `~/Applications/Polony Review.app` and a copy on the Desktop; Linux: `Polony Review.desktop` on the Desktop and in the app menu |
 
-Disk space: roughly 450 to 600 MB for the program (mostly scientific Python libraries), plus your data.
+Disk space: about 650 MB for the program (measured on Linux) (mostly scientific Python libraries), plus your data.
 Nothing is written outside these folders. The installation takes a few minutes (mostly downloading libraries).
 
 ### First start
@@ -99,6 +99,42 @@ line; it is saved only in `config.json` in the install folder (file permissions:
   `... status` shows `Shared database: connected (postgresql://user:***@host/db)` or `Local only`.
 * Never copy `config.json` to another computer (it holds the password and this computer's id); run the installer there instead.
 
+## Optional: AI detector (Spotiflow + PyTorch)
+
+The default install detects spots with **Big-FISH** and needs no PyTorch. The **AI detector** ([Spotiflow](https://github.com/weigertlab/spotiflow))
+adds the `spotiflow` and `hybrid` detection engines (see [TWO_ENGINE.md](TWO_ENGINE.md)). It is **opt-in** and never installed unless you ask:
+
+```bash
+curl -fsSL <install.sh URL> | bash -s -- --with-ai          # macOS / Linux  (--without-ai: never ask)
+```
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -WithAi      # Windows (saved script)
+$env:POLONY_WITH_AI = '1'; irm <install.ps1 URL> | iex                                # Windows one-liner
+```
+Interactively (a terminal is present, not CI) the installer asks *"Install the AI detector ... [y/N]"* (default **No**). Non-interactive: `POLONY_WITH_AI=1`.
+You can also add it later by re-running the installer with the flag.
+
+| Platform | What is installed | Extra download / disk |
+|---|---|---|
+| Windows, Linux (x86-64), no NVIDIA GPU | PyTorch **CPU** wheels from `download.pytorch.org/whl/cpu` | measured on Linux: venv 646 MB -> 1.8 GB |
+| Windows, Linux with an NVIDIA GPU (`nvidia-smi` found) | asks whether to use the **CUDA 12.6** build (`POLONY_AI_CUDA=1` for unattended) | about 2.5 GB or more |
+| macOS Apple Silicon | default PyPI wheels, uses the Apple GPU (MPS) when available | about 0.8 GB |
+| Intel Macs, Windows on ARM | not available (no current PyTorch wheels); Big-FISH keeps working | none |
+
+`torch` and `torchvision` are installed **together as a matching, pinned pair** (torch 2.14.1 / torchvision 0.29.1; a mismatched torchvision breaks
+Spotiflow with `torchvision::nms does not exist`), then `spotiflow==0.6.5` (`install/extra-ai-requirements.txt`), then an import check that also
+calls a torchvision operator. If anything fails the installer says so and **Big-FISH still works**. The result is recorded as `"ai_enabled"` in `config.json`.
+
+**Model:** the first AI detection needs the pretrained model (about 88 MB, downloaded once into `~/PolonyReview/models/spotiflow`). To fetch it now,
+or on a computer that will later be offline: `~/PolonyReview/bin/polony-review prepare-model [--model general]` (Windows:
+`...\venv\Scripts\python.exe -m polony_app.launcher prepare-model`); it prints the model's sha256. For a computer without internet copy the model
+folder (`general/` with `config.yaml` and the weights) into that directory, or set `POLONY_MODEL_DIR`.
+`polony-review status` shows `AI detector: installed (spotiflow x, torch y, device cpu|cuda|mps)` or `not installed`.
+
+**Why opt-in and not bundled:** PyTorch makes the installation about 3x larger here (and several GB with CUDA) and the install much slower, while most
+reviews only need Big-FISH. Uninstalling removes the AI packages together with the program, but **keeps the downloaded models** (`~/PolonyReview/models`)
+unless you pass `--purge-data` / `-PurgeData`.
+
 ## Security note
 
 The app has **no login**. It listens on `127.0.0.1` (this computer only) and cannot be reached from the network, but anyone
@@ -133,8 +169,8 @@ who can use your computer account can open it and see your data. Do not expose t
 
 ## What has been tested
 
-* **Linux (this repository's development machine):** full install into a temporary HOME from a local checkout (system Python 3.12, and the
+* **Linux (this repository's development machine):** the AI extra was installed end to end (CPU wheels), `status` and `prepare-model` (real 88 MB download) ran, and a hybrid detection ran through the installed app; full install into a temporary HOME from a local checkout (system Python 3.12, and the
   `uv` path), launcher start, `/api/health`, UI at `/`, stop, re-run (idempotent), uninstall keeping data; shellcheck clean; PowerShell scripts parse-checked with PowerShell 7.4 on Linux.
 * **macOS:** the `.app` bundle structure is generated and checked on Linux (Info.plist, executable bit, icns); running it on macOS is verified only by the CI workflow.
 * **Windows:** the PowerShell scripts are parse-checked only; actual installation, `.lnk` creation and launching are verified only by the CI workflow
-  (`install-test`, Windows PowerShell 5.1 and PowerShell 7). Until that workflow is green on the branch, treat Windows and macOS as untested on real machines.
+  (`install-test`, Windows PowerShell 5.1 and PowerShell 7). The AI extra on Windows/macOS can be CI-verified later by running the workflow manually with `with_ai` ticked. Until that workflow is green on the branch, treat Windows and macOS as untested on real machines.

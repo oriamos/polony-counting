@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI assertions for the macOS/Linux installer. Usage: check_unix.sh {shortcuts|run|uninstall}
+# CI assertions for the macOS/Linux installer. Usage: check_unix.sh {shortcuts|run|ai|open-bundle|uninstall}
 set -euo pipefail
 MODE="${1:?mode}"
 PH="${POLONY_HOME:-$HOME/PolonyReview}"
@@ -58,6 +58,14 @@ run)
   launcher stop
   if launcher status >/dev/null; then bad "still running after stop"; fi
   ok "stopped"
+  ;;
+ai)  # only meaningful when the installer ran with POLONY_WITH_AI=1
+  out="$(launcher status || true)"; echo "$out"
+  printf '%s\n' "$out" | grep -q '^AI detector: installed (spotiflow' || bad "AI detector not reported as installed"
+  launcher prepare-model | tail -3
+  [ "$(launcher prepare-model | grep -c '^sha256: [0-9a-f]\{64\}$')" = 1 ] || bad "prepare-model gave no sha256"
+  grep -q '"ai_enabled": true' "$PH/config.json" || bad "ai_enabled not recorded"
+  ok "AI detector installed and model prepared"
   ;;
 open-bundle)  # macOS only: LaunchServices must accept and run the bundle
   [ "$OS" = mac ] || exit 0

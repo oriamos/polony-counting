@@ -1,4 +1,4 @@
-# CI assertions for the Windows installer. Usage: check_windows.ps1 -Mode shortcuts|run|uninstall
+# CI assertions for the Windows installer. Usage: check_windows.ps1 -Mode shortcuts|run|ai|uninstall
 param([Parameter(Mandatory = $true)][string]$Mode)
 $ErrorActionPreference = 'Stop'
 $ph = if ($env:POLONY_HOME) { $env:POLONY_HOME } else { Join-Path $env:LOCALAPPDATA 'PolonyReview' }
@@ -61,6 +61,14 @@ switch ($Mode) {
         Start-Sleep -Seconds 2
         $r = Launcher @('status'); if ($r.Code -eq 0) { Bad 'still running after stop' }
         Ok 'stopped'
+    }
+    'ai' {
+        $r = Launcher @('status'); Write-Host $r.Out
+        if ($r.Out -notmatch 'AI detector: installed \(spotiflow') { Bad 'AI detector not reported as installed' }
+        $r = Launcher @('prepare-model'); Write-Host ($r.Out -split "`n" | Select-Object -Last 3)
+        if ($r.Code -ne 0 -or $r.Out -notmatch 'sha256: [0-9a-f]{64}') { Bad 'prepare-model failed' }
+        if ((Get-Content (Join-Path $ph 'config.json') -Raw) -notmatch '"ai_enabled":\s*true') { Bad 'ai_enabled not recorded' }
+        Ok 'AI detector installed and model prepared'
     }
     'uninstall' {
         $un = Join-Path $ph 'app\install\uninstall.ps1'

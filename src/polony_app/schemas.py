@@ -147,7 +147,8 @@ class SpotiflowParams(BaseModel):
     downscale: int = 1                          # integer image downscale divisor (1,2,4,8) for LARGE blobs: the pretrained models were trained on
                                                 # near-diffraction-limited spots; polonies are ~25 px blobs. Default 1 = native scale (unchanged behaviour).
                                                 # Spotiflow requires subpix=False when downscale>1 and image sides divisible by it (crop/pad is recorded).
-    normalizer: Literal["auto", "none"] = "auto"  # 'auto' = Spotiflow's percentile normalisation of the page (recorded, never 8-bit conversion)
+    normalizer: Literal["auto", "none", "valid_unsaturated"] = "auto"   # "auto" = Spotiflow's own percentile normalisation (saturation-sensitive, legacy default);
+                                                                  # "valid_unsaturated" = lo/hi from valid, unsaturated pixels of the page (recorded)  # 'auto' = Spotiflow's percentile normalisation of the page (recorded, never 8-bit conversion)
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
 
 
@@ -182,6 +183,10 @@ class EngineRunInfo(BaseModel):
     model_checksum: Optional[str] = None        # sha256 of the weights artifact when available
     page: int
     channel_role: Optional[str] = None          # "red"/"green" ONLY from the user-confirmed mapping, else None
+    source_file: Optional[str] = None           # stored file the page belongs to (channel index != TIFF page for two single-page files)
+    source_page: Optional[int] = None           # real TIFF page inside source_file (``page`` above is the channel index)
+    alignment_dy_dx: Optional[tuple[int, int]] = None  # shift applied to the green channel before detection (frame of the raw detections)
+    mapping_fingerprint: Optional[str] = None   # hash of the confirmed channel roles in force when the run was made
     params: dict = {}
     preprocessing: dict = {}                    # every normalisation / transformation applied (documented, reversible)
     started_at: str = ""
@@ -204,6 +209,9 @@ class RawDetection(BaseModel):
     engine: EngineName
     page: int
     channel_role: Optional[str] = None
+    source_file: Optional[str] = None
+    source_page: Optional[int] = None
+    frame: Literal["aligned_reference", "stored_page"] = "aligned_reference"   # coordinates are in the registered reference frame (green shifted by the run's alignment)
     x: float
     y: float
     z: Optional[float] = None

@@ -17,6 +17,11 @@ on:
       - "requirements-app.txt"
       - ".github/workflows/install-test.yml"
   workflow_dispatch:
+    inputs:
+      with_ai:
+        description: "Also install + verify the optional AI detector (Spotiflow + PyTorch, large download)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,6 +30,7 @@ env:
   POLONY_CI: "1"                              # installer/launcher: never open a browser or show dialogs
   POLONY_SOURCE: ${{ github.workspace }}      # use this checkout instead of GitHub
   PYTHONUTF8: "1"
+  POLONY_WITH_AI: ${{ inputs.with_ai && '1' || '' }}   # optional AI detector (manual runs only)
 
 jobs:
   unix:
@@ -50,6 +56,9 @@ jobs:
         run: bash install/ci/check_unix.sh shortcuts
       - name: Launch, health, UI, stop
         run: bash install/ci/check_unix.sh run
+      - name: AI detector (only when with_ai is ticked)
+        if: ${{ inputs.with_ai }}
+        run: bash install/ci/check_unix.sh ai
       - name: Install again (idempotent update)
         run: bash install/install.sh
       - name: Launch, health, UI, stop (after update)
@@ -96,6 +105,10 @@ jobs:
       - name: Launch via the Desktop shortcut target, health, UI, stop
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File install\ci\check_windows.ps1 -Mode run
+      - name: AI detector (only when with_ai is ticked)
+        if: ${{ inputs.with_ai }}
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install\ci\check_windows.ps1 -Mode ai
       - name: Install again with PowerShell 7 (idempotent update)
         shell: pwsh
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File install\install.ps1
