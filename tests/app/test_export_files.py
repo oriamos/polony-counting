@@ -108,7 +108,7 @@ def test_provenance_content():
     st = state()
     st.analysis.reporting_mode = ReportingMode.channel_inclusive
     p = json.loads(exporter.provenance_json(st))
-    for k in ["schema_version", "app_version", "package_versions", "reporting_mode", "provenance", "image", "regions",
+    for k in ["schema_version", "app_version", "package_versions_at_detection", "package_versions_at_export", "reporting_mode", "provenance", "image", "regions",
               "detection_parameters", "action_log_summary", "alignment_applied_to_green_px", "status"]:
         assert k in p
     assert p["reporting_mode"] == "channel_inclusive" and p["status"] == "DRAFT"
@@ -116,7 +116,7 @@ def test_provenance_content():
     assert [c["role"] for c in p["image"]["channel_mapping"]] == ["red", "green"]
     assert p["image"]["channel_mapping"][0]["role_confirmed"] is True
     assert p["action_log_summary"]["by_type"] == {"delete": 1}
-    assert "numpy" in p["package_versions"]
+    assert "numpy" in p["package_versions_at_export"] and "package_versions" not in p
 
 
 def _conc_state(objs_n=4, poly=None, total=1e6, **slide):

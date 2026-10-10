@@ -301,11 +301,6 @@ def actions_jsonl(state: AnalysisState) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def events_jsonl(state: AnalysisState) -> str:
-    lines = [json.dumps(e, sort_keys=False, default=str) for e in state.events]
-    return "\n".join(lines) + ("\n" if lines else "")
-
-
 def objects_history_csv(a: Analysis) -> str:
     """Every history entry of every object (deleted ones included, flagged)."""
     rows = []
@@ -341,7 +336,6 @@ FILES
                   action-log summary and the complete event list
   actions.jsonl   complete review-action log (seq, ts, type, payload). The undo/redo restore
                   snapshots ("inverse") are omitted (marked inverse_omitted)
-  events.jsonl    non-undoable events (channel mapping, alignment, settings, undo, redo, reopen)
   objects_history.csv  history trail of every object, deleted ones included
 
 CONVENTIONS
@@ -395,6 +389,5 @@ def bundle_zip(state: AnalysisState, originals_dir: str | Path | None = None) ->
         z.writestr(f"slide{suffix}.csv", slide_csv(a))
         z.writestr("provenance.json", provenance_json(state, originals_dir))
         z.writestr("actions.jsonl", actions_jsonl(state))
-        z.writestr("events.jsonl", events_jsonl(state))
         z.writestr("objects_history.csv", objects_history_csv(a))
     return buf.getvalue()
