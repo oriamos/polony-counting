@@ -12,7 +12,9 @@ debris_like       scale ratio (0.3r/0.4r vs 1r/1.4r normalised LoG, 5x5 max) >= 
                   debris-like evidence in BOTH channels is NOT auto-classed yellow: it becomes
                   ``uncertain`` (a compact bright speck in both channels is more likely autofluorescent
                   debris/dust than a dual-labelled polony). One debris channel: stays yellow, queued.
-suspicious_shape  also set for a merged saturated plateau much larger than a spot
+suspicious_shape  also set for a merged saturated plateau much larger than a spot, elongated (> 1.3)
+                  or carrying more than one LoG maximum (touching saturated polonies; merge kept)
+(plateau-merged spots: weak_signal / near_threshold are skipped, SNR is undefined there)
 ambiguous_match   set by matching.associate
 Defaults are starting points exposed for configuration, not validated cut-offs.
 """
@@ -76,9 +78,12 @@ def apply_review_reasons(objects: list[DetectedObject], red: Sequence[RawSpot], 
             idx = spot_index(ev.spot_id)
             s = lists[key][idx]
             p = params[key]
-            if s.snr is not None and s.snr < cfg.weak_snr:
+            plateau = s.plateau_area_px is not None  # merged saturated plateau: SNR / LoG response at the
+            # integer position are undefined or meaningless (clipped peak, annulus inside the plateau)
+            if not plateau and s.snr is not None and s.snr < cfg.weak_snr:
                 reasons.add(ReviewReason.weak_signal)
-            if s.threshold and s.log_response is not None and s.log_response < cfg.near_threshold_factor * s.threshold:
+            if (not plateau and s.threshold and s.log_response is not None
+                    and s.log_response < cfg.near_threshold_factor * s.threshold):
                 reasons.add(ReviewReason.near_threshold)
             if s.saturated:
                 reasons.add(ReviewReason.saturated)

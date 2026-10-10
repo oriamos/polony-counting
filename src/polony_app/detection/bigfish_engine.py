@@ -43,8 +43,11 @@ Saturated plateaus: a clipped spot is a flat plateau whose LoG response is a rin
 local maxima). Connected saturated components (raw >= dtype max, inside the mask) are
 labelled and all spots within the component dilated by the spot radius are merged into ONE
 spot at the plateau centroid, flagged saturated; a plateau much larger than the spot
-(equivalent diameter > PLATEAU_SHAPE_FACTOR x spot radius) is also flagged suspicious_shape
-(it may be debris or several touching polonies that cannot be resolved from clipped data).
+(equivalent diameter > PLATEAU_SHAPE_FACTOR x spot radius), an elongated one (plateau
+elongation > PLATEAU_ELONGATION_MAX) or one that carried more than one LoG maximum is also flagged
+suspicious_shape (debris, or touching saturated polonies that cannot be resolved from clipped data;
+the merge is kept, not split). Merged spots have snr = None (clipped peak, annulus possibly inside
+the plateau), so weak_signal / near_threshold are not evaluated for them.
 
 Automatic threshold is computed once on the whole (masked) image per channel
 (``estimate_threshold``) and can be supplied back through ``threshold_info`` so that
@@ -74,6 +77,7 @@ from .errors import DetectionCancelled
 
 _MAD_TO_SIGMA = 1.4826
 NOISE_K = 5.0
+PLATEAU_ELONGATION_MAX = 1.3  # merged saturated plateau elongated beyond this => suspicious_shape
 PLATEAU_SHAPE_FACTOR = 6.0   # saturated plateau diameter > this x spot radius => suspicious_shape
 
 
@@ -439,8 +443,13 @@ class BigFishEngine:
             drop[ks] = True
             n_merged += len(ks)
             new_rows.append([iy, ix])
-            overrides[(iy, ix)] = dict(x=cx, y=cy, area=area, elongation=elong,
-                                       oversize=bool(diam > PLATEAU_SHAPE_FACTOR * max(r, 1.0)))
+            # suspicious merge (kept as ONE spot, flagged for review): plateau much larger than a spot,
+            # elongated plateau (touching polonies give a dumbbell/peanut), or >1 LoG maximum on it.
+            # Splitting by distance-transform maxima is NOT attempted: clipped data carry no information
+            # on how the true intensity divides, so the reviewer decides.
+            suspicious = bool(diam > PLATEAU_SHAPE_FACTOR * max(r, 1.0) or elong > PLATEAU_ELONGATION_MAX
+                              or len(ks) > 1)
+            overrides[(iy, ix)] = dict(x=cx, y=cy, area=area, elongation=elong, oversize=suspicious)
         coords = np.concatenate([coords[~drop], np.array(new_rows, dtype=np.int64).reshape(-1, 2)])
         coords = coords[np.lexsort((coords[:, 1], coords[:, 0]))]
         note = (f"{n_merged} spot(s) on {len(member)} saturated plateau(s) merged into {len(member)} "
@@ -561,7 +570,7 @@ class BigFishEngine:
                 sx_, sy_, sat = ov["x"], ov["y"], True
                 elong, plateau_area, oversize = ov["elongation"], ov["area"], ov["oversize"]
                 peak = c3_max  # clipped plateau: the interpolated value adds nothing
-                snr = None if (math.isnan(bg) or std <= 1e-9 * max(1.0, abs(peak))) else float((peak - bg) / std)
+                snr = None  # clipped peak (a lower bound) and the annulus may lie inside the plateau: SNR undefined
             out.append(RawSpot(x=sx_, y=sy_, peak=peak, background=bg, snr=snr,
                                saturated=sat, log_response=resp, threshold=float(thr),
                                elongation=elong, scale_ratio=ratio, simulated=bool(sim),

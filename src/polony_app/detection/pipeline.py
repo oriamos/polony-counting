@@ -23,6 +23,9 @@ from .masks import build_valid_mask, points_regions
 from .matching import associate, sort_spots
 from .review_reasons import ReviewConfig, apply_review_reasons
 
+DEBRIS_CHANNEL_FRACTION = 0.5   # > this fraction of a channel's spots debris-like => pipeline WARNING
+DEBRIS_CHANNEL_MIN = 3          # ... if the channel has at least this many spots
+
 __all__ = ["run_detection", "DetectionResult", "DetectionCancelled", "package_versions"]
 
 
@@ -250,6 +253,16 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     check()
     progress(0.93, "review reasons")
     apply_review_reasons(objects, red_s, green_s, request.red, request.green, valid_full, (h, w), review)
+    if win is None:  # (a preview window sees only part of the channel)
+        dr = (review or ReviewConfig()).debris_ratio
+        for name, sp in (("red", red_s), ("green", green_s)):
+            n_deb = sum(1 for s_ in sp if s_.scale_ratio is not None and s_.scale_ratio >= dr)
+            if len(sp) >= DEBRIS_CHANNEL_MIN and n_deb > DEBRIS_CHANNEL_FRACTION * len(sp):
+                notes.append(
+                    f"WARNING {name}: {n_deb} of {len(sp)} detected spots ({100 * n_deb / len(sp):.0f}%) are debris-like "
+                    "(compact relative to the spot radius): this channel may be empty (the automatic threshold then "
+                    "selects noise or specks), or the spot radius is too large for the real spots. Confirm the channel "
+                    "visually and set the threshold / spot radius manually if needed. Classes are not changed.")
 
     # single region rule: keep iff point_region is not None (virtual whole-image counting
     # region when the user drew none, so the half-open rule still applies at the border)

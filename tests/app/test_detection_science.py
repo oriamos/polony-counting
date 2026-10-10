@@ -252,3 +252,110 @@ def test_alternative_partner_just_beyond_tolerance_is_ambiguous():
     # a far alternative (> tol + margin) does not make it ambiguous
     out = associate([_S(0, 0)], [_S(2.0, 0), _S(-9.5, 0)], 6.0)
     assert sorted(o.cls.value for o in out) == ["green", "yellow"]
+
+
+# ------------------------------------------------------------------ SCIENCE-FIX-2
+def _pos(res):
+    return sorted((round(o.x, 3), round(o.y, 3), o.cls.value) for o in res.objects)
+
+
+def test_auto_threshold_is_independent_of_brightness_scale_and_offset():
+    """B1: thresholds are in noise units, so exposure (x0.5, x0.25) or a constant offset does not
+    change which spots are detected."""
+    sc = syn.default_scene(seed=3)
+    r = [rect("c", 0, 0, sc.shape[1], sc.shape[0])]
+    base = run_detection(sc.red, sc.green, r, req(3.0, 5.0), NOP, NEVER)
+    assert len(base.objects) >= 9
+    for f, off in ((0.5, 0), (0.25, 0), (0.5, 700), (0.25, 300)):
+        pipeline.clear_threshold_cache()
+        red = np.clip(np.rint(sc.red.astype(float) * f + off), 0, 65535).astype(np.uint16)
+        green = np.clip(np.rint(sc.green.astype(float) * f + off), 0, 65535).astype(np.uint16)
+        res = run_detection(red, green, r, req(3.0, 5.0), NOP, NEVER)
+        assert [(o.cls.value, round(o.x), round(o.y)) for o in res.objects] == \
+               [(o.cls.value, round(o.x), round(o.y)) for o in base.objects], (f, off)
+
+
+def test_noise_unit_threshold_values():
+    sc = syn.default_scene(seed=3)
+    p = DetectionParams(spot_radius_px=3, minimum_distance_px=5, background=BG)
+    e = BigFishEngine()
+    meas = preprocess.correct_background(sc.red, p.background.model_copy(update={"clip_negative": False}), None)
+    a = e.estimate_threshold(np.maximum(meas, 0), p, None, sc.red, meas)
+    b = e.estimate_threshold(np.maximum(meas * 0.25, 0), p, None, None, meas * 0.25)
+    assert a["noise_sigma"] == pytest.approx(4 * b["noise_sigma"], rel=1e-3)
+    assert a["base"] == b["base"] and a["base"] >= 5.0
+    # manual threshold is in the same unit: absolute LoG threshold = value x sigma
+    spots = e.detect(np.maximum(meas, 0), p.model_copy(update={"threshold": 12.0}), None, raw=sc.red, measure=meas)
+    assert e.last_info["threshold"] == 12.0
+    assert e.last_info["threshold_abs"] == pytest.approx(12.0 * a["noise_sigma"], rel=1e-3)
+    assert all(s.threshold == pytest.approx(e.last_info["threshold_abs"]) for s in spots)
+    # flat image: sigma 0 is guarded
+    z = e.estimate_threshold(np.zeros((60, 60), np.float32), p, None)
+    assert z["base"] is None and z["noise_sigma"] is None
+
+
+def test_manual_threshold_preview_window_uses_full_image_sigma():
+    sc = syn.default_scene(seed=3)
+    r = [rect("c", 0, 0, sc.shape[1], sc.shape[0])]
+    q = req(3.0, 5.0, threshold=15.0)
+    pipeline.clear_threshold_cache()
+    full = run_detection(sc.red, sc.green, r, q, NOP, NEVER)
+    pipeline.clear_threshold_cache()
+    win = (0, 0, 200, 150)
+    prev = run_detection(sc.red, sc.green, r, q, NOP, NEVER, window=win)
+    inside = [o for o in full.objects if win[0] <= o.x < win[2] and win[1] <= o.y < win[3]]
+    assert _pos(prev) == _pos(type("R", (), {"objects": inside}))
+
+
+def _touching(ds, amp=2e5, s=5.0):
+    H, W = 200, 200 * len(ds)
+    yy, xx = np.mgrid[:H, :W].astype(float)
+    im = np.full((H, W), 1000.0)
+    x0s = []
+    for k, d in enumerate(ds):
+        x0 = 100 + 200 * k - d / 2
+        x0s.append(x0)
+        for x in (x0, x0 + d):
+            im += amp * np.exp(-((xx - x) ** 2 + (yy - 100.3) ** 2) / (2 * s * s))
+    im += np.random.default_rng(0).normal(0, 30, im.shape)
+    return np.clip(np.rint(im), 0, 65535).astype(np.uint16), x0s
+
+
+def test_touching_saturated_polonies_are_flagged_or_resolved():
+    """B3: merged touching plateaus (10-18 px apart) stay ONE object but get suspicious_shape;
+    >= 20 px apart they are two objects."""
+    ds = [10, 14, 18, 20, 24]
+    raw, x0s = _touching(ds)
+    p = DetectionParams(spot_radius_px=5.0, minimum_distance_px=5.0, threshold=30.0)
+    res = run_detection(raw, np.full_like(raw, 900), [], DetectionRequest(red=p, green=p), NOP, NEVER)
+    for d, x0 in zip(ds, x0s):
+        m = [o for o in res.objects if x0 - 30 < o.x < x0 + d + 30]
+        if d <= 18:
+            assert len(m) == 1 and ReviewReason.suspicious_shape in m[0].review_reasons, d
+        else:
+            assert len(m) == 2, d
+            assert all(ReviewReason.suspicious_shape not in o.review_reasons for o in m), d
+
+
+def test_plateau_merged_spot_has_no_weak_signal_or_near_threshold():
+    """B4: SNR is undefined for a clipped plateau -> weak_signal / near_threshold are skipped."""
+    raw, _ = _touching([0], amp=2e5)
+    p = DetectionParams(spot_radius_px=5.0, minimum_distance_px=5.0, threshold=30.0)
+    res = run_detection(raw, np.full_like(raw, 900), [], DetectionRequest(red=p, green=p), NOP, NEVER)
+    m = [o for o in res.objects if o.red.detected]
+    assert len(m) == 1
+    rs = m[0].review_reasons
+    assert ReviewReason.saturated in rs
+    assert ReviewReason.weak_signal not in rs and ReviewReason.near_threshold not in rs
+
+
+def test_empty_channel_gets_pipeline_warning():
+    """B5: a channel without spots must not silently report its noise maxima as a normal result."""
+    sc = syn.make_scene((300, 400), [(100, 100, 3000), (250, 200, 3000), (320, 80, 3000)], [], sigma=3.0, seed=7)
+    r = [rect("c", 0, 0, 400, 300)]
+    res = run_detection(sc.red, sc.green, r, req(3.0, 5.0), NOP, NEVER)
+    warn = [n for n in res.notes if n.startswith("green:") and "WARNING" in n]
+    assert warn and any(("noise regime" in n) or ("debris-like" in n) for n in warn)
+    # the sparse real channel still finds its spots (noise-regime elbow -> 5 noise-unit floor)
+    assert sum(1 for o in res.objects if o.red.detected) >= 3
+    assert not [n for n in res.notes if n.startswith("WARNING red:")]

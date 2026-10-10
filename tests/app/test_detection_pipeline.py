@@ -139,7 +139,11 @@ def test_review_reasons_from_measurements():
     # weak_signal is a measured SNR bound: with an absurdly high bound everything is weak, with 0 nothing is
     from polony_app.detection.review_reasons import ReviewConfig
     hi = run(sc, review=ReviewConfig(weak_snr=1e9))
-    assert all(ReviewReason.weak_signal in o.review_reasons for o in hi.objects)
+    # (saturated plateau-merged spots are exempt: SNR is undefined for a clipped peak)
+    assert all(ReviewReason.weak_signal in o.review_reasons for o in hi.objects
+               if ReviewReason.saturated not in o.review_reasons)
+    assert any(ReviewReason.saturated in o.review_reasons and ReviewReason.weak_signal not in o.review_reasons
+               for o in hi.objects)
     lo = run(sc, review=ReviewConfig(weak_snr=0.0))
     assert not any(ReviewReason.weak_signal in o.review_reasons for o in lo.objects)
 

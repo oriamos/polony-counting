@@ -34,7 +34,7 @@ class RawSpot:
     scale_ratio: Optional[float] = None      # small-/large-scale normalised LoG ratio; >=1 => compact (debris-like)
     simulated: bool = False                  # added by dense decomposition, not a direct detection
     plateau_area_px: Optional[int] = None    # merged saturated plateau: its area in px (centre = plateau centroid)
-    plateau_oversize: bool = False           # plateau much larger than a spot => suspicious_shape
+    plateau_oversize: bool = False           # merged plateau much larger than a spot, elongated (>1.3) or with >1 LoG maximum => suspicious_shape
 
 
 @runtime_checkable
