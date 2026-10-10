@@ -131,6 +131,20 @@ model is loaded. Large pages are tiled automatically by Spotiflow (`max_tile_siz
   confirmed mapping.
 * Spotiflow has its own prior on spot size/shape and ignores the app's `spot_radius_px`; Big-FISH needs it.
   Dense clusters and saturated plateaus are handled very differently by the two.
+* **Large blobs: `downscale` (÷1 default, 2, 4, 8).** The pretrained models expect small spots; polonies are ~25 px
+  blobs. With `downscale = d > 1` the adapter (after the valid-area crop + pad) trims the bottom/right remainder so both
+  sides are divisible by `d` (never pads; `preprocessing.trimmed_px`, `crop_box_xyxy`, `downscaled_shape_hw`
+  record it), downscales in float32 with `scipy.ndimage.zoom(order=1)` (exactly what Spotiflow 0.6.5 does for
+  `scale=1/d`), runs the model with `subpix=False`, and maps points back. We downscale ourselves rather than pass
+  `scale=` because Spotiflow's own `scale` returns points in the original frame on its single-tile path but in the
+  downscaled frame on its tiled path. **Mapping (verified):** `zoom` aligns first/last pixel centres, so
+  `x_full = x_s * (n-1)/(m-1)` (+ crop offset), `n` = trimmed crop side, `m = n/d`; NOT `x_s*d + (d-1)/2` (that is
+  off by up to ~0.75/1.7 px at d=4/8 near the middle and several px at the borders). Measured centre error on
+  synthetic 25 px Gaussian blobs with the real `general` model (subpix off): d=1 <= 0.2 px, d=2 <= 0.9 px,
+  d=4 <= 2.5 px. So with ÷4 localisation is about +/-2 px: fine for 25 px blobs and 4-10 px matching tolerances, not
+  for sub-pixel claims. `min_distance`/`exclude_border` act in the downscaled grid. Exploratory evidence (one slide,
+  tuned on that slide) in [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md): ÷4 raised recall 0.14 -> 0.57 at
+  precision 0.92. Not validated; default stays ÷1. Unsupported values and `subpix=true` with `downscale>1` are errors.
 * Big-FISH default threshold is unchanged and not tuned to Spotiflow; the consensus tolerance is a starting
   point, not a validated cut-off.
 

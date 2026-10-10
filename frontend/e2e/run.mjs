@@ -819,6 +819,11 @@ async function engineSuite() {
   await tid('spotiflow-model').waitFor();
   check('hybrid shows model select + consensus tolerance', (await tid('consensus-tol').inputValue()) === '4' && (await tid('spotiflow-model').inputValue()) === 'general');
   check('consensus tolerance help text', /paired one-to-one/.test(await tid('engine-section').innerText()));
+  check('downscale defaults to ÷1 with the exploratory note', (await tid('spotiflow-downscale').inputValue()) === '1' && /0\.14 to 0\.57/.test(await tid('spotiflow-downscale-note').innerText()));
+  await tid('spotiflow-preset-large').click();
+  check('Large blobs preset sets ÷4', (await tid('spotiflow-downscale').inputValue()) === '4');
+  await tid('spotiflow-downscale').selectOption('1');
+  check('prob_thresh empty by default', (await tid('spotiflow-prob-thresh').inputValue()) === '');
   await tid('spotiflow-model').selectOption('hybiss');
   await tid('prepare-model').click();
   await page.waitForSelector('[data-testid=prepare-job][data-status=running], [data-testid=prepare-job][data-status=done]');

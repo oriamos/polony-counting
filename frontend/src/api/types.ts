@@ -94,6 +94,8 @@ export interface SpotiflowParams {
   subpix: boolean | null;
   n_tiles: [number, number] | null;
   max_tile_size: number | null;
+  /** integer image downscale divisor (1, 2, 4, 8) for ~25 px blobs; 1 = native scale (default) */
+  downscale: 1 | 2 | 4 | 8;
   normalizer: 'auto' | 'none';
   device: 'auto' | 'cpu' | 'cuda' | 'mps';
 }
@@ -106,6 +108,7 @@ export const DEFAULT_SPOTIFLOW: SpotiflowParams = {
   subpix: null,
   n_tiles: null,
   max_tile_size: null,
+  downscale: 1,
   normalizer: 'auto',
   device: 'auto',
 };

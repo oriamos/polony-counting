@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { DetectionRequest, EngineChoice, EngineInfo } from '../api/types';
+import type { DetectionRequest, EngineChoice, EngineInfo, SpotiflowParams } from '../api/types';
 import { DEFAULT_SPOTIFLOW } from '../api/types';
 import { runLabel, shortChecksum } from '../lib/consensus';
 import { useApp } from '../state/store';
@@ -90,6 +90,42 @@ export function EngineSection({ req, set, disabled }: { req: DetectionRequest; s
             >
               {preparing ? 'Preparing…' : cur?.cached ? 'Re-check model' : 'Prepare model'}
             </button>
+          </label>
+          <div className="match" data-testid="spotiflow-downscale-box">
+            <span>Image downscale</span>
+            <select
+              className="input sm"
+              value={spot.downscale ?? 1}
+              onChange={(e) => set({ ...req, spotiflow: { ...spot, downscale: Number(e.target.value) as SpotiflowParams['downscale'] } })}
+              data-testid="spotiflow-downscale"
+              aria-label="Spotiflow image downscale"
+            >
+              {[1, 2, 4, 8].map((d) => (
+                <option key={d} value={d}>
+                  {`÷${d}${d === 1 ? ' (native, default)' : ''}`}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="btn sm" onClick={() => set({ ...req, spotiflow: { ...spot, downscale: 4 } })} data-testid="spotiflow-preset-large" title="Set the downscale to ÷4 (exploratory preset for ~25 px blobs)">
+              Large blobs (÷4)
+            </button>
+            <span className="hint" data-testid="spotiflow-downscale-note">
+              Polonies are ~25 px blobs; the pretrained models expect small spots. On one slide, ÷4 raised recall from 0.14 to 0.57 at precision 0.92 (exploratory, not validated — see docs). Default stays ÷1. Localisation is coarser (~±2 px).
+            </span>
+          </div>
+          <label className="match">
+            Probability threshold
+            <NumInput
+              value={spot.prob_thresh}
+              min={0}
+              step={0.05}
+              nullable
+              placeholder="model default"
+              onChange={(v) => set({ ...req, spotiflow: { ...spot, prob_thresh: v } })}
+              testid="spotiflow-prob-thresh"
+              disabled={disabled}
+            />
+            <span className="hint">Empty = the model’s own optimised threshold (recorded with the run). Lower values keep more, weaker points.</span>
           </label>
           {cur?.checksum && <div className="hint">weights sha256 {shortChecksum(cur.checksum)}…</div>}
           {prepareJob && (

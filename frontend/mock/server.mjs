@@ -320,7 +320,7 @@ function seed() {
   const hy = clone(demo);
   hy.id = 'hybrid';
   hy.name = 'Hybrid slide (two engines)';
-  hy.detection_request = { ...hy.detection_request, engine: 'hybrid', spotiflow: { model_name: 'general', prob_thresh: null, min_distance: 1, exclude_border: false, subpix: null, n_tiles: null, max_tile_size: null, normalizer: 'auto', device: 'auto' }, consensus_tolerance_px: 4 };
+  hy.detection_request = { ...hy.detection_request, engine: 'hybrid', spotiflow: { model_name: 'general', prob_thresh: null, min_distance: 1, exclude_border: false, subpix: null, n_tiles: null, max_tile_size: null, downscale: 1, normalizer: 'auto', device: 'auto' }, consensus_tolerance_px: 4 };
   store.analyses.set('hybrid', hy);
   applyEngines(hy, hy.detection_request);
   // 1b: researcher reference (GenePix-like 635 stack: suggested roles, embedded points + grid)

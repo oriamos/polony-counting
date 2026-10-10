@@ -128,6 +128,10 @@ yellow and is queued. Single-channel objects keep their class (flag only). Compa
 Review-queue order (lower first): `uncertain` and `ambiguous_match` 0; `saturated` 1; `weak_signal`, `near_threshold` 2; `debris_like` 3; `dense_cluster` 4; `suspicious_shape` 5; `near_edge` 6.
 Within the same priority: by y, then x.
 
+## Spotiflow `downscale` and `prob_thresh`
+
+`downscale` (1, 2, 4, 8; default **1** = native scale, unchanged behaviour) divides the image before the Spotiflow model sees it, for ~25 px blobs; the Detect tab has a "Large blobs (÷4)" preset. Localisation is coarser (about +/- downscale/2 px; ~+/-2 px at ÷4). `prob_thresh` empty = the model's own optimised threshold (recorded as `prob_thresh_used`). Details, coordinate mapping and the exploratory evidence: [TWO_ENGINE.md](TWO_ENGINE.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md).
+
 ## Re-run merge radius
 
 When detection is re-run, a new automatic object within **3 px** (`RERUN_MERGE_RADIUS_PX`) of a preserved (manual / edited / reviewed) object or of an object you deleted is dropped; see [RERUN_POLICY.md](RERUN_POLICY.md).
