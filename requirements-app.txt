@@ -17,3 +17,4 @@ psycopg_pool>=3.2
 # tests
 httpx>=0.27
 pytest>=7.4
+openpyxl>=3.1

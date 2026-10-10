@@ -145,6 +145,7 @@ function Install-PolonyReview {
         # ---- 2. python + venv -------------------------------------------------------------------
         Step 2 "Preparing Python (3.10-3.13) and a private virtual environment in $venv"
         function Find-Python {
+            if ($env:POLONY_FORCE_UV) { return $null }   # test hook: exercise the "download Python with uv" path
             $cands = @()
             if ($pyArg) { $cands += , @($pyArg) }
             if (Has 'py') { foreach ($v in '3.12', '3.11', '3.13', '3.10') { $cands += , @('py', "-$v") } }

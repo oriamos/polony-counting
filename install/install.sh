@@ -117,6 +117,7 @@ main() {
     }
     find_python() {
       local c p
+      [ -z "${POLONY_FORCE_UV:-}" ] || return 1   # test hook: exercise the "download Python with uv" path
       for c in ${PY_ARG:+"$PY_ARG"} python3.12 python3.11 python3.13 python3.10 python3 python; do
         p="$(command -v "$c" 2>/dev/null || true)"; [ -n "$p" ] || continue
         # the macOS /usr/bin stubs open a "install developer tools" dialog when the tools are missing

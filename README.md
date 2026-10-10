@@ -4,6 +4,20 @@
 [![Testing](https://github.com/kirill-push/polony-counting/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/kirill-push/polony-counting/actions/workflows/test.yml)
 [![Documentation](https://github.com/kirill-push/polony-counting/actions/workflows/pages.yml/badge.svg)](https://github.com/kirill-push/polony-counting/actions/workflows/pages.yml)
 
+## Install Polony Review (one command, no admin rights)
+
+**Windows** (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.ps1 | iex
+```
+**macOS / Linux** (Terminal):
+```bash
+curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.sh | bash
+```
+This installs the app into your user folder (about 450-600 MB, downloads Python 3.12 via `uv` only if no Python 3.10-3.13 is present)
+and puts a **Polony Review** icon on your Desktop. Re-run the command to update. The app has no login and listens on `127.0.0.1` only.
+Details, uninstall, troubleshooting and test status: [docs/app/INSTALL.md](docs/app/INSTALL.md).
+
 ## Polony Review App (new)
 
 A local human-in-the-loop web app (FastAPI + React, Big-FISH spot detection, **no torch needed**) for reviewing and approving red / green / yellow polony counts with full provenance.

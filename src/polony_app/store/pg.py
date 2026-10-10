@@ -166,7 +166,7 @@ class PgStore:
             try:
                 self._migrate()
                 self.connected, self.last_error, self._ready_ok = True, None, True
-            except (psycopg.OperationalError, PoolTimeout) as e:
+            except (psycopg.Error, PoolTimeout) as e:
                 raise self._fail(e) from None
 
     @contextmanager
@@ -201,7 +201,8 @@ class PgStore:
 
     def _migrate(self) -> None:
         s = self.schema
-        with self._pool.connection() as conn:
+        with psycopg.connect(self._url, autocommit=True, prepare_threshold=None, row_factory=dict_row,
+                             connect_timeout=8, application_name="polony-review") as conn:
             exists = conn.execute(
                 "SELECT 1 FROM information_schema.schemata WHERE schema_name=%s", (s,)).fetchone()
             if not exists:
@@ -245,7 +246,7 @@ class PgStore:
         """Test helper: only for throw-away ``test_*`` schemas."""
         if not self.schema.startswith("test_"):
             raise RuntimeError("refusing to drop a non-test schema")
-        with self._pool.connection() as conn:
+        with psycopg.connect(self._url, autocommit=True) as conn:
             conn.execute(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
 
     # ----------------------------------------------------------- locks
