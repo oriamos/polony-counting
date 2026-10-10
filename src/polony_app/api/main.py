@@ -424,6 +424,8 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             if runner.active_job(aid):
                 raise ReviewError("job_in_progress", "a detection job is already running", 409)
             start_sig = _sig(st.analysis, st)
+            start_req = (st.analysis.detection_request.model_dump(mode="json")
+                         if st.analysis.detection_request is not None else None)
             regions = [r.model_copy(deep=True) for r in st.analysis.regions]
             align = (int(st.analysis.alignment_dy), int(st.analysis.alignment_dx))
             engine.refresh_status(st, job_running=True)
@@ -451,9 +453,15 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                         "regions, channel mapping or alignment changed while detection ran; "
                         "results discarded - run detection again"
                     )
-                st.analysis.detection_request = body  # committed only now that the result is applied
+                cur_req = (st.analysis.detection_request.model_dump(mode="json")
+                           if st.analysis.detection_request is not None else None)
+                # committed only now, and only if settings did not change during the job
+                # (otherwise the result is applied but comes out stale)
+                if cur_req == start_req:
+                    st.analysis.detection_request = body
                 engine.apply_detection_result(
-                    st, list(res.objects), body, dict(res.package_versions), list(res.notes)
+                    st, list(res.objects), body, dict(res.package_versions), list(res.notes),
+                    cancelled=cancelled,
                 )
             return f"{len(res.objects)} objects detected"
 
@@ -549,23 +557,35 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             return _respond(st)
 
     # ------------------------------------------------------------- export
+    EXPORT_KINDS = (*exporter.KINDS, "actions", "history")
+
+    def _export_name(a, kind: str) -> str:
+        ext = {"objects": "csv", "regions": "csv", "slide": "csv", "history": "csv",
+               "provenance": "json", "actions": "jsonl", "bundle": "zip"}[kind]
+        return f"{exporter.safe_stem(a.name)}_{kind}_{exporter.status_label(a)}.{ext}"
+
     @api.get("/analyses/{aid}/export")
     def get_export(aid: str, kind: str = "bundle"):
-        if kind not in exporter.KINDS:
-            return err(422, "invalid_kind", f"kind must be one of {', '.join(exporter.KINDS)}")
+        if kind not in EXPORT_KINDS:
+            return err(422, "invalid_kind", f"kind must be one of {', '.join(EXPORT_KINDS)}")
         with store.view(aid_ok(aid)) as st:
             a = st.analysis
-            fn = exporter.export_filename(a, kind)
+            fn = _export_name(a, kind)
+            od = store.originals_dir(aid)
             if kind == "objects":
                 body, mt = exporter.objects_csv(a).encode("utf-8"), "text/csv"
             elif kind == "regions":
                 body, mt = exporter.regions_csv(a).encode("utf-8"), "text/csv"
             elif kind == "slide":
                 body, mt = exporter.slide_csv(a).encode("utf-8"), "text/csv"
+            elif kind == "actions":
+                body, mt = exporter.actions_jsonl(st).encode("utf-8"), "application/x-ndjson"
+            elif kind == "history":
+                body, mt = exporter.objects_history_csv(a).encode("utf-8"), "text/csv"
             elif kind == "provenance":
-                body, mt = exporter.provenance_json(st).encode("utf-8"), "application/json"
+                body, mt = exporter.provenance_json(st, od).encode("utf-8"), "application/json"
             else:
-                body, mt = exporter.bundle_zip(st), "application/zip"
+                body, mt = exporter.bundle_zip(st, od), "application/zip"
             status = exporter.status_label(a)
         return Response(body, media_type=mt, headers={
             "Content-Disposition": f'attachment; filename="{fn}"', "X-Export-Status": status})

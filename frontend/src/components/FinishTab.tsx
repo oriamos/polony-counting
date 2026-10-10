@@ -41,6 +41,8 @@ export function FinishTab() {
     { kind: 'regions', label: 'Regions (CSV)', hint: 'per-region counts and status' },
     { kind: 'slide', label: 'Slide (CSV)', hint: 'slide totals' },
     { kind: 'provenance', label: 'Provenance (JSON)', hint: 'parameters, versions, hashes' },
+    { kind: 'actions', label: 'Action log (JSONL)', hint: 'every review action' },
+    { kind: 'history', label: 'Object history (CSV)', hint: 'per-object history trail' },
     { kind: 'bundle', label: 'Bundle (ZIP)', hint: 'everything + README' },
   ];
   return (

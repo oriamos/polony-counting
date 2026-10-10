@@ -139,7 +139,8 @@ def test_full_round_trip_with_restart_and_export(data_dir, tiff, detector):
         assert "DRAFT" not in r.headers["content-disposition"] and r.text.splitlines()[1].endswith(",FINAL")
         z = zipfile.ZipFile(io.BytesIO(client2.get(f"/api/analyses/{aid}/export?kind=bundle").content))
         names = z.namelist()
-        assert {"README.txt", "objects.csv", "regions.csv", "slide.csv", "provenance.json"} == set(names)
+        assert {"README.txt", "objects.csv", "regions.csv", "slide.csv", "provenance.json",
+                "actions.jsonl", "objects_history.csv"} == set(names)
         assert z.read("README.txt").decode().startswith("FINAL")
         prov = json.loads(z.read("provenance.json"))
         assert prov["status"] == "FINAL" and prov["image"]["sha256"] and prov["image"]["bit_depth"] == 16
@@ -351,3 +352,81 @@ def test_csv_import_api(client):
     assert client.get(f"/api/csv-imports/{cid}").json()["color_mapping"] == "red"
     assert [x["id"] for x in client.get("/api/csv-imports").json()] == [cid]
     assert client.post("/api/csv-imports", files={"file": ("e.csv", b"  ", "text/csv")}).json()["code"] == "empty_file"
+
+
+def test_cancel_arriving_just_before_commit_commits_nothing(client, tiff, detector, monkeypatch):
+    from polony_app.review import engine
+
+    aid = to_ready(client, tiff)
+    detector.objects = [obj("a", 30, 30)]
+    orig = engine.apply_detection_result
+
+    def cancel_then_apply(*a, **k):
+        for ev in list(client.app.state.runner._cancel.values()):
+            ev.set()  # cancel lands after the pre-commit check, before the merge
+        return orig(*a, **k)
+
+    monkeypatch.setattr(engine, "apply_detection_result", cancel_then_apply)
+    r = client.post(f"/api/analyses/{aid}/detect", json={}).json()
+    j = wait_job(client, r["id"])
+    assert j["status"] == "cancelled", j
+    an = client.get(f"/api/analyses/{aid}").json()
+    assert an["objects"] == [] and an["status"] == "ready" and an["provenance"]["detection_ran_at"] is None
+
+
+def test_settings_changed_during_job_leaves_result_stale(client, tiff, detector, monkeypatch):
+    aid = to_ready(client, tiff)
+    detector.objects = [obj("a", 30, 30)]
+    # change the stored request between submit and commit
+    from polony_app.detection import pipeline
+    real = pipeline.run_detection
+
+    def det_and_change(*a, **k):
+        res = real(*a, **k)
+        r = client.put(f"/api/analyses/{aid}/settings", json={"detection_request": {"match_tolerance_px": 9.0}})
+        assert r.status_code == 200, r.text
+        return res
+
+    monkeypatch.setattr(pipeline, "run_detection", det_and_change)
+    r = client.post(f"/api/analyses/{aid}/detect", json={}).json()
+    j = wait_job(client, r["id"])
+    assert j["status"] == "done", j
+    an = client.get(f"/api/analyses/{aid}").json()
+    assert an["provenance"]["stale_detection"] is True
+
+
+def test_provenance_carries_original_upload_filename(client, tmp_path):
+    p = tmp_path / "My Slide 2026 (T7A).tif"
+    write_two_channel_tiff(p)
+    a = upload(client, p)
+    prov = client.get(f"/api/analyses/{a['id']}/export", params={"kind": "provenance"}).json()
+    names = prov["image"]["original_upload_filenames"]
+    assert "My Slide 2026 (T7A).tif" in names.values()
+    z = zipfile.ZipFile(io.BytesIO(client.get(f"/api/analyses/{a['id']}/export?kind=bundle").content))
+    assert "My Slide 2026 (T7A).tif" in json.loads(z.read("provenance.json"))["image"]["original_upload_filenames"].values()
+
+
+def test_new_export_kinds_and_status_in_filename(client, tiff, detector):
+    aid = to_ready(client, tiff)
+    for kind, ext in (("actions", "jsonl"), ("history", "csv"), ("objects", "csv")):
+        r = client.get(f"/api/analyses/{aid}/export", params={"kind": kind})
+        assert r.status_code == 200
+        assert f"_{kind}_DRAFT.{ext}" in r.headers["content-disposition"]
+
+
+def test_manifest_written_for_two_file_and_composite_uploads(client, tmp_path):
+    import numpy as np
+    import tifffile
+
+    r16 = (np.random.default_rng(1).random((40, 50)) * 4000).astype("uint16")
+    pa, pb = tmp_path / "Red 635 (A).tif", tmp_path / "Green 532 (A).tif"
+    tifffile.imwrite(pa, r16)
+    tifffile.imwrite(pb, r16)
+    pc = tmp_path / "Comp (RGB) 1.tif"
+    tifffile.imwrite(pc, np.stack([r16 // 16, r16 // 16, r16 // 16], -1).astype("uint8"))
+    for paths, expect in (([pa, pb], {"Red 635 (A).tif", "Green 532 (A).tif"}), ([pc], {"Comp (RGB) 1.tif"})):
+        files = [("files", (p.name, open(p, "rb"), "image/tiff")) for p in paths]
+        r = client.post("/api/analyses", files=files, data={"name": "m"})
+        assert r.status_code == 200, r.text
+        prov = client.get(f"/api/analyses/{r.json()['id']}/export", params={"kind": "provenance"}).json()
+        assert set(prov["image"]["original_upload_filenames"].values()) == expect

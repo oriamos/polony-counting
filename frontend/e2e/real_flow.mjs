@@ -682,12 +682,12 @@ await openAnalysis(rid);
 const dlDir = path.join(OUT, 'downloads');
 fs.mkdirSync(dlDir, { recursive: true });
 const files = {};
-for (const k of ['objects', 'regions', 'slide', 'provenance', 'bundle']) {
+for (const k of ['objects', 'regions', 'slide', 'provenance', 'actions', 'history', 'bundle']) {
   const [dl] = await Promise.all([page.waitForEvent('download'), tid(`export-${k}`).click()]);
   const p = path.join(dlDir, dl.suggestedFilename());
   await dl.saveAs(p);
   files[k] = p;
-  check(`export ${k}: downloaded via UI link, filename has no DRAFT marker`, !/DRAFT/.test(dl.suggestedFilename()), dl.suggestedFilename());
+  check(`export ${k}: downloaded via UI link, filename carries FINAL, no DRAFT`, /_FINAL\./.test(dl.suggestedFilename()) && !/DRAFT/.test(dl.suggestedFilename()), dl.suggestedFilename());
 }
 const parseCsv = (txt) => {
   const rows = []; let row = [], cur = '', q = false;
@@ -726,7 +726,7 @@ const parseCsv = (txt) => {
   const stored = fs.readdirSync(path.join(DATA, 'originals', rid)).map((f) => sha256(path.join(DATA, 'originals', rid, f)));
   check('stored original copy in data dir has identical hash', stored.includes(realHashBefore), `${stored.length} stored file(s)`);
   check('provenance: status FINAL, channel mapping with roles confirmed, label_hint kept as hint', prov.status === 'FINAL' && prov.image.channel_mapping.map((c) => c.role).join() === 'red,green' && prov.image.channel_mapping.every((c) => c.role_confirmed) && prov.image.channel_mapping[0].label_hint === '635 [W1]');
-  check('provenance: package versions incl. big-fish, detection params, schema/app version, regions', Object.keys(prov.package_versions).some((k) => /fish/i.test(k)) && prov.detection_parameters_used && prov.schema_version && prov.app_version && prov.regions.length === 2, JSON.stringify(prov.package_versions));
+  check('provenance: package versions incl. big-fish, detection params, schema/app version, regions', Object.keys(prov.package_versions_at_detection).some((k) => /fish/i.test(k)) && prov.detection_parameters_used && prov.schema_version && prov.app_version && prov.regions.length === 2, JSON.stringify(prov.package_versions_at_detection));
   check('provenance: no concentration inputs invented (slide fields null)', prov.slide.sample_volume_ul == null && prov.slide.concentration_factor == null);
   const zip = execFileSync(PY, ['-I', '-c', 'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);print("\\n".join(z.namelist()));print("----");print(z.read([n for n in z.namelist() if "README" in n][0]).decode()[:200])', files.bundle]).toString();
   check('bundle zip lists csv/json files + README marked FINAL', /objects/.test(zip) && /provenance/.test(zip) && /README/i.test(zip) && /FINAL/.test(zip.split('----')[1] || ''), zip.split('\n').slice(0, 8).join(' | '));
