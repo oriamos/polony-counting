@@ -205,7 +205,9 @@ class BigFishEngine:
                 from bigfish.detection import decompose_dense
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    new, regions, _ref = decompose_dense(filled, coords, voxel_size=(1, 1), spot_radius=(r, r))
+                    # decompose_dense crashes on float images (np.iinfo on float dtype): requantise to uint16
+                    q = np.clip(np.rint(filled), 0, 65535).astype(np.uint16)
+                    new, regions, _ref = decompose_dense(q, coords, voxel_size=1, spot_radius=r)
                 new = np.asarray(new, dtype=np.int64).reshape(-1, 2)
                 old = {(int(a), int(b)) for a, b in coords}
                 add = np.array([p for p in new if (int(p[0]), int(p[1])) not in old],
@@ -217,6 +219,7 @@ class BigFishEngine:
                     simulated = np.concatenate([simulated, np.ones(len(add), bool)])
                     o = np.lexsort((coords[:, 1], coords[:, 0]))
                     coords, simulated = coords[o], simulated[o]
+                info["notes"].append("WARNING dense decomposition assumes identical gaussian spots; on the real test image it split bright single polonies into many spots")
                 info["notes"].append(f"dense decomposition added {int(simulated.sum())} simulated spot(s) "
                                      f"in {len(regions)} dense region(s)")
             except Exception as exc:  # decomposition is best-effort
@@ -248,7 +251,8 @@ class BigFishEngine:
         if valid is not None:
             pval = np.pad(valid, R, mode="constant", constant_values=False)
         # LoG support for per-spot response/sub-pixel position
-        K = int(4.0 * r + 0.5) + 2
+        sig_small, sig_large = (0.3 * r, 0.4 * r), (1.0 * r, 1.4 * r)
+        K = int(4.0 * sig_large[1] + 0.5) + 2
         hc = max(1, int(round(r / 2)))
         he = int(math.ceil(2.5 * r)) + 1
         he = min(he, R)
@@ -291,6 +295,14 @@ class BigFishEngine:
             if L[1, 1] >= L.max() and L[1, 1] > 0:
                 dy = _parab(L[0, 1], L[1, 1], L[2, 1])
                 dx = _parab(L[1, 0], L[1, 1], L[1, 2])
+            # scale-selection ratio (debris filter, flag only): max over small sigmas of
+            # s^2 * -LoG divided by the same over large sigmas, max in a 5x5 window.
+            def _norm_max(sg):
+                return float((-(sg * sg) * ndi.gaussian_laplace(crop, sigma=sg, mode="reflect"))
+                             [K - 2:K + 3, K - 2:K + 3].max())
+            small = max(_norm_max(sg) for sg in sig_small)
+            large = max(_norm_max(sg) for sg in sig_large)
+            ratio = float(small / max(large, 1e-6))
             # elongation of the half-max blob
             elong = None
             sub = win[R - he:R + he + 1, R - he:R + he + 1]
@@ -325,7 +337,7 @@ class BigFishEngine:
                 sat = bool((raw[a0:a1, b0:b1][dm] >= dmax).any())
             out.append(RawSpot(x=float(x + dx), y=float(y + dy), peak=peak, background=bg, snr=snr,
                                saturated=sat, log_response=resp, threshold=float(thr),
-                               elongation=elong, simulated=bool(sim)))
+                               elongation=elong, scale_ratio=ratio, simulated=bool(sim)))
         return out
 
     @staticmethod

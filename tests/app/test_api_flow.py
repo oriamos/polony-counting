@@ -200,7 +200,7 @@ def test_settings_slide_validation_and_stale(client, tiff, detector):
     r = client.put(f"/api/analyses/{aid}/settings", json={"reporting_mode": "channel_inclusive", "slide": {"slide_id": "S9", "sample_volume_ul": 7.5}})
     assert r.json()["reporting_mode"] == "channel_inclusive" and r.json()["slide"]["sample_volume_ul"] == 7.5
     detect(client, aid, detector, [obj("a", 30, 30)])
-    req = {"red": {"spot_radius_px": 5.0}}
+    req = {"red": {"spot_radius_px": 7.5}}
     r = client.put(f"/api/analyses/{aid}/settings", json={"detection_request": req}).json()
     assert r["provenance"]["stale_detection"] is True
     # counts carry the selected mode

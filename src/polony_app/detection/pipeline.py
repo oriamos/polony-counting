@@ -36,6 +36,25 @@ def package_versions() -> dict[str, str]:
             "python": platform.python_version()}
 
 
+def _saturated_outside(raw: np.ndarray, radius: float, min_area: int = 5000) -> np.ndarray:
+    """Best-effort exclusion when the user defined no counting region: large
+    saturated connected areas (e.g. the slide outside the chamber) dilated by
+    ~3 spot radii. Small saturated specks are left alone (they get flagged)."""
+    from scipy import ndimage as ndi
+    if raw.dtype.kind not in "ui":
+        return np.zeros(raw.shape, bool)
+    lab, n = ndi.label(raw >= np.iinfo(raw.dtype).max)
+    if n == 0:
+        return np.zeros(raw.shape, bool)
+    area = np.bincount(lab.ravel())
+    big = area >= min_area
+    big[0] = False
+    m = big[lab]
+    if not m.any():
+        return m
+    return ndi.distance_transform_edt(~m) <= max(3.0 * radius, 5.0)
+
+
 def _margin(p: DetectionParams) -> int:
     bg = p.background
     m = 0
@@ -72,6 +91,14 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     notes += check_compatible(red, green)  # IngestError on shape mismatch
     h, w = red.shape
     valid_full = build_valid_mask((h, w), regions)
+    if not any(r.kind.value == "counting" for r in regions):
+        auto = _saturated_outside(red, request.red.spot_radius_px) | _saturated_outside(green, request.green.spot_radius_px)
+        if auto.any():
+            valid_full &= ~auto
+            notes.append(f"WARNING no counting region defined: {int(auto.sum())} px of large saturated area "
+                         "(outside the chamber?) were excluded automatically; draw a counting region for a reliable count")
+        else:
+            notes.append("WARNING no counting region defined: the whole image is counted")
     if not valid_full.any():
         notes.append("no valid pixels in the counting regions: nothing to detect")
 

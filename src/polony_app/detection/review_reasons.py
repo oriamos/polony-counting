@@ -7,6 +7,7 @@ dense_cluster     another same-channel spot within 2 * minimum_distance_px
                   (or the spot came from dense decomposition)
 near_edge         distance to the valid-mask boundary (image border counts) < 2 * spot radius
 suspicious_shape  half-max blob elongation (sqrt of second-moment eigenvalue ratio) > elongation_max (1.8)
+debris_like       scale ratio (0.3r/0.4r vs 1r/1.4r normalised LoG, 5x5 max) >= 1.0 in any channel: FLAG ONLY
 ambiguous_match   set by matching.associate
 Defaults are starting points exposed for configuration, not validated cut-offs.
 """
@@ -25,7 +26,7 @@ from .matching import spot_index
 
 _ORDER = [ReviewReason.weak_signal, ReviewReason.ambiguous_match, ReviewReason.dense_cluster,
           ReviewReason.saturated, ReviewReason.suspicious_shape, ReviewReason.near_edge,
-          ReviewReason.near_threshold]
+          ReviewReason.near_threshold, ReviewReason.debris_like]
 
 
 @dataclass
@@ -35,6 +36,7 @@ class ReviewConfig:
     elongation_max: float = 1.8
     edge_radius_factor: float = 2.0
     dense_distance_factor: float = 2.0
+    debris_ratio: float = 1.0
 
 
 def edge_distance_map(valid: Optional[np.ndarray], shape: tuple[int, int]) -> np.ndarray:
@@ -76,6 +78,8 @@ def apply_review_reasons(objects: list[DetectedObject], red: Sequence[RawSpot], 
                 reasons.add(ReviewReason.saturated)
             if s.elongation is not None and s.elongation > cfg.elongation_max:
                 reasons.add(ReviewReason.suspicious_shape)
+            if s.scale_ratio is not None and s.scale_ratio >= cfg.debris_ratio:
+                reasons.add(ReviewReason.debris_like)
             if s.simulated:
                 reasons.add(ReviewReason.dense_cluster)
             tree = trees[key]

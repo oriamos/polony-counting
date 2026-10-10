@@ -28,6 +28,7 @@ class RawSpot:
     log_response: Optional[float] = None     # LoG response at the peak (Big-FISH units)
     threshold: Optional[float] = None        # threshold applied to log_response
     elongation: Optional[float] = None       # sqrt(l1/l2) of half-max blob second moments
+    scale_ratio: Optional[float] = None      # small-/large-scale normalised LoG ratio; >=1 => compact (debris-like)
     simulated: bool = False                  # added by dense decomposition, not a direct detection
 
 

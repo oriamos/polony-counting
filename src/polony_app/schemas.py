@@ -27,6 +27,7 @@ class ChannelInfo(BaseModel):
     page: int = 0                   # TIFF page inside source_file
     label_hint: Optional[str] = None  # raw metadata text e.g. "635 [W1]"; a HINT only
     role: Optional[ChannelRole] = None  # None until user confirms mapping
+    suggested_role: Optional[ChannelRole] = None  # pairing hint only (e.g. upload slot); never confirmed
     role_confirmed: bool = False
     min: int = 0
     max: int = 0
@@ -197,6 +198,7 @@ class ActionType(str, Enum):
     unapprove_region = "unapprove_region"
     rerun_detection = "rerun_detection"
     finalize = "finalize"
+    reopen = "reopen"
 
 
 class ReviewAction(BaseModel):
@@ -244,6 +246,7 @@ class SlideMeta(BaseModel):
     sampled_area_note: Optional[str] = None
     counting_area_px2: Optional[float] = None      # computed from regions
     pixel_size_um: Optional[float] = None
+    concentration_formula_confirmed: bool = False  # researcher must confirm formula+geometry; gates ALL concentration output
     csv_color_mapping: Optional[dict[str, str]] = None  # e.g. {"T7A": "red"} ONLY if user set
 
 
@@ -274,6 +277,8 @@ class Analysis(BaseModel):
     finalized_at: Optional[str] = None
     undo_depth: int = 0
     redo_depth: int = 0
+    alignment_dy: int = 0   # integer shift applied to green to match red (explicit user step)
+    alignment_dx: int = 0
 
 
 class Counts(BaseModel):

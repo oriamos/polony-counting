@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { api } from './api/client';
 import { liveObjects, useApp } from './state/store';
 import { LeftRail, StatusChip } from './components/LeftRail';
 import { Viewer } from './components/Viewer';
@@ -37,12 +38,10 @@ export function App() {
     // detection started elsewhere (e.g. before a page reload): poll until it settles
     if (status !== 'detecting' || job || !cid) return;
     const t = setInterval(() => {
-      void import('./api/client').then(({ api }) =>
-        api
-          .getAnalysis(cid)
-          .then((a) => useApp.getState().setAnalysis(a))
-          .catch(() => undefined),
-      );
+      api
+        .getAnalysis(cid)
+        .then((a) => useApp.getState().setAnalysis(a))
+        .catch(() => undefined);
     }, 1500);
     return () => clearInterval(t);
   }, [status, cid, job]);

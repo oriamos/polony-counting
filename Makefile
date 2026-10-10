@@ -89,3 +89,20 @@ next-changelog: ## returns the next changelog
 
 publish-noop: ## publish command (no-operation mode)
 	@semantic-release publish --noop
+
+##@ Polony counting app (src/polony_app)
+
+APP_PY ?= python
+APP_DATA_DIR ?= ./data
+
+.PHONY: app-install
+app-install: ## install the app's Python dependencies (requirements-app.txt)
+	@$(APP_PY) -m pip install -r requirements-app.txt
+
+.PHONY: app-run
+app-run: ## build frontend (if node is present) and run the app on http://127.0.0.1:8000
+	@APP_PY=$(APP_PY) POLONY_DATA_DIR=$(APP_DATA_DIR) ./scripts/run_app.sh
+
+.PHONY: app-test
+app-test: ## run the app test-suite
+	@PYTHONPATH=src $(APP_PY) -m pytest tests/app -q

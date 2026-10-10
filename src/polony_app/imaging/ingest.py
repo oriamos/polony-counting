@@ -92,7 +92,7 @@ def _roi_from_bytes(blob: bytes, source: str, warnings: list[str]) -> list[Embed
         out.append(
             EmbeddedRoi(
                 source=source,  # type: ignore[arg-type]
-                roi_type=getattr(roi.roitype, "name", str(roi.roitype)),
+                roi_type="COMPOSITE" if getattr(roi, "composite", False) else getattr(roi.roitype, "name", str(roi.roitype)),
                 name=name,
                 left=int(roi.left), top=int(roi.top),
                 right=int(roi.right), bottom=int(roi.bottom),
