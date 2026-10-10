@@ -30,3 +30,21 @@ def test_real_image_masked_run(tmp_path):
            [(o.id, o.cls, round(o.x, 2), round(o.y, 2)) for o in b.objects]
     # the file's original pixels were not touched
     assert red.dtype.name == "uint16" and int(red.max()) == 65535
+
+
+@pytest.mark.skipif(not REAL.exists(), reason="real example image missing")
+def test_real_image_detection_independent_of_brightness(tmp_path):
+    """Automatic threshold is in noise units: halving / quartering the exposure does not change detections."""
+    import numpy as np
+    meta = ingest_files([("test_img.tif", REAL)], tmp_path)
+    red, green = load_channel(meta, tmp_path, 0), load_channel(meta, tmp_path, 1)
+    reg = Region(id="c1", kind=RegionKind.counting, name="part",
+                 polygon=[(400, 500), (900, 500), (900, 1000), (400, 1000)])
+    p = DetectionParams(spot_radius_px=5, minimum_distance_px=5)
+    ref = run_detection(red, green, [reg], DetectionRequest(red=p, green=p))
+    pts = lambda r: sorted((round(o.red.x), round(o.red.y)) for o in r.objects if o.red.detected)
+    assert len(pts(ref)) > 5
+    for f in (0.5, 0.25):
+        r2 = np.clip(np.rint(red.astype(float) * f), 0, 65535).astype(red.dtype)
+        res = run_detection(r2, green, [reg], DetectionRequest(red=p, green=p))
+        assert pts(res) == pts(ref), f
