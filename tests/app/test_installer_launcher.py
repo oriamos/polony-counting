@@ -169,3 +169,63 @@ def test_server_command_binds_localhost_only(tmp_path):
     cmd = launcher.server_command(8765, tmp_path)
     assert cmd[1:3] == ["-m", "polony_app"] and "--host" not in cmd  # __main__ default host is 127.0.0.1
     assert launcher.HOST == "127.0.0.1"
+
+
+# ---------------------------------------------------------------- shared database settings (fake URL only)
+FAKE_URL = "postgresql://fake_user:Sup3rS3cretPw@db.example.invalid/neondb?sslmode=require"
+
+
+def _no_secret_in(root, secret="Sup3rS3cretPw"):
+    for f in root.rglob("*"):
+        if f.is_file() and f.name != "config.json":
+            assert secret.encode() not in f.read_bytes(), f
+
+
+def test_set_database_hidden_stdin_mode_0600_keeps_other_keys_and_masks(_home, monkeypatch, capsys):
+    import io
+    import stat
+
+    launcher.save_config({"data_dir": "/x", "port": 9000})
+    monkeypatch.setattr("sys.stdin", io.StringIO(FAKE_URL + "\n"))
+    assert launcher.cmd_set_database() == 0
+    cfg = launcher.load_config()
+    assert cfg["database_url"] == FAKE_URL and cfg["port"] == 9000 and cfg["data_dir"] == "/x"
+    assert "machine_id" not in cfg  # never invented/copied by the launcher
+    if os.name != "nt":
+        assert stat.S_IMODE(launcher.config_path().stat().st_mode) == 0o600
+    launcher.log(f"connecting with {FAKE_URL}")  # even a careless log call is redacted
+    _no_secret_in(_home)
+    out = capsys.readouterr().out
+    assert "Sup3rS3cretPw" not in out
+    line = launcher._database_line(launcher.load_config(), None)
+    assert "Sup3rS3cretPw" not in line and "fake_user:***@db.example.invalid" in line
+    assert launcher.cmd_clear_database() == 0
+    assert "database_url" not in launcher.load_config()
+    assert launcher._database_line(launcher.load_config(), None) == "Shared database: Local only"
+
+
+def test_set_database_rejects_garbage(_home, monkeypatch):
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("not a url\n"))
+    assert launcher.cmd_set_database() == 1
+    assert "database_url" not in launcher.load_config()
+
+
+def test_server_env_has_no_url_and_selftest_is_local_only(_home, monkeypatch, tmp_path):
+    seen = {}
+
+    class P:
+        pid = 1
+
+    def fake_popen(cmd, **kw):
+        seen["cmd"], seen["env"] = cmd, kw["env"]
+        return P()
+
+    monkeypatch.setenv("POLONY_DATABASE_URL", FAKE_URL)
+    monkeypatch.setattr(launcher.subprocess, "Popen", fake_popen)
+    launcher.spawn_server(1234, tmp_path / "d", tmp_path / "s.log", local_only=True, config=tmp_path / "c.json")
+    assert "POLONY_DATABASE_URL" not in seen["env"] and seen["env"]["POLONY_CONFIG"] == str(tmp_path / "c.json")
+    assert not any("Sup3rS3cretPw" in a for a in seen["cmd"])
+    launcher.spawn_server(1234, tmp_path / "d", tmp_path / "s.log")  # normal start: file/env only, never argv
+    assert not any("Sup3rS3cretPw" in a for a in seen["cmd"])

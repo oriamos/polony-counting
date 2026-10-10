@@ -186,3 +186,59 @@ def test_full_install_roundtrip(tmp_path):
     sh([INSTALL / "install.sh"], home, env)  # idempotent re-run
     sh([home / "PolonyReview" / "app" / "install" / "uninstall.sh"], home, env)
     assert (home / "PolonyReviewData").is_dir() and not (home / "PolonyReview").exists()
+
+
+# ---------------------------------------------------------------- shared database step (fake URL only)
+FAKE_URL = "postgresql://fake_user:Sup3rS3cretPw@db.example.invalid/neondb?sslmode=require"
+SECRET = "Sup3rS3cretPw"
+
+
+def _helper(args, stdin, home):
+    env = {**os.environ, "POLONY_HOME": str(home), "PYTHONPATH": str(ROOT / "src")}
+    env.pop("POLONY_DATABASE_URL", None)
+    return subprocess.run([sys.executable, str(INSTALL / "set_database.py"), *args], input=stdin, env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_set_database_helper_semantics(tmp_path):
+    import json
+    import stat
+
+    home = tmp_path / "ph"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"data_dir": "/d", "port": 8765}))
+    assert _helper(["status"], "", home).returncode == 1
+    r = _helper(["set"], FAKE_URL + "\n", home)
+    assert r.returncode == 0 and SECRET not in r.stdout + r.stderr
+    cfg = json.loads((home / "config.json").read_text())
+    assert cfg["database_url"] == FAKE_URL and cfg["port"] == 8765 and "machine_id" not in cfg
+    if os.name != "nt":
+        assert stat.S_IMODE((home / "config.json").stat().st_mode) == 0o600
+    st = _helper(["status"], "", home)
+    assert st.returncode == 0 and SECRET not in st.stdout
+    other = FAKE_URL.replace("fake_user", "other_user")
+    assert _helper(["set"], other + "\n", home).returncode == 3  # existing URL kept without --replace
+    assert json.loads((home / "config.json").read_text())["database_url"] == FAKE_URL
+    assert _helper(["set", "--replace"], other + "\n", home).returncode == 0
+    assert _helper(["set"], "garbage\n", home).returncode == 2
+    assert _helper(["clear"], "", home).returncode == 0
+    assert "database_url" not in json.loads((home / "config.json").read_text())
+
+
+@needs_bash
+def test_installer_step_noninteractive_env_url_saved_not_leaked(tmp_path):
+    """Run only the database step of install.sh (--shortcuts-only skips it, so call the helper path the script uses)."""
+    text = (INSTALL / "install.sh").read_text()
+    # the script must pass the URL through stdin only: no argv/env use of the secret variable
+    assert "printf '%s\\n' \"$url\" | POLONY_HOME" in text
+    assert "unset POLONY_DATABASE_URL" in text
+    assert "read -rs url </dev/tty" in text
+    ps = (INSTALL / "install.ps1").read_text()
+    assert "-AsSecureString" in ps and "$url | & $vpy $script" in ps and "Remove-Item Env:\\POLONY_DATABASE_URL" in ps
+
+
+def test_requirements_cover_psycopg_and_checks():
+    extra = (INSTALL / "extra-requirements.txt").read_text()
+    assert "psycopg[binary]" in extra and "psycopg_pool" in extra
+    assert "psycopg" in (INSTALL / "check_imports.py").read_text()
+    assert "psycopg" in (ROOT / "src" / "polony_app" / "launcher.py").read_text()
