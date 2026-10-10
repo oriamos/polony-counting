@@ -1,4 +1,5 @@
-"""Small pure-python polygon helpers (no shapely dependency)."""
+"""Polygon helpers. Membership and rasterisation delegate to detection/masks.py (the one
+rule used everywhere); the remaining helpers are validation/overlap utilities."""
 from __future__ import annotations
 
 import math
@@ -6,33 +7,18 @@ from typing import Sequence
 
 import numpy as np
 
+from ..detection.masks import points_in_polygon, rasterize_polygon as _rasterize
+
 Poly = Sequence[Sequence[float]]
 
 
 def point_in_polygon(x: float, y: float, poly: Poly) -> bool:
-    """Even-odd rule; boundary points count as inside."""
-    n = len(poly)
-    if n < 3:
+    """Single app-wide rule (detection/masks.py): even-odd with half-open edges, pixel
+    centres at integer coordinates. NOT boundary-inclusive any more."""
+    if len(poly) < 3:
         return False
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = poly[i][0], poly[i][1]
-        xj, yj = poly[j][0], poly[j][1]
-        # on-segment test (boundary inclusive)
-        cross = (x - xi) * (yj - yi) - (y - yi) * (xj - xi)
-        if (
-            abs(cross) < 1e-9
-            and min(xi, xj) - 1e-9 <= x <= max(xi, xj) + 1e-9
-            and min(yi, yj) - 1e-9 <= y <= max(yi, yj) + 1e-9
-        ):
-            return True
-        if (yi > y) != (yj > y):
-            xint = (xj - xi) * (y - yi) / (yj - yi) + xi
-            if x < xint:
-                inside = not inside
-        j = i
-    return inside
+    p = np.asarray(poly, dtype=np.float64)
+    return bool(points_in_polygon(np.array([x], float), np.array([y], float), p)[0])
 
 
 def polygon_area(poly: Poly) -> float:
@@ -101,12 +87,5 @@ def validate_polygon(poly: Poly) -> str | None:
 
 
 def rasterize_polygon(poly: Poly, shape: tuple[int, int]) -> np.ndarray:
-    """Boolean mask (h, w) of pixels whose centre lies in the polygon."""
-    from PIL import Image, ImageDraw
-
-    h, w = shape
-    img = Image.new("1", (w, h), 0)
-    # PIL pixel (i,j) covers [i-0.5, i+0.5) in our centre-based coordinates:
-    # drawing with the polygon directly is correct to within half a pixel.
-    ImageDraw.Draw(img).polygon([(float(p[0]), float(p[1])) for p in poly], fill=1)
-    return np.array(img, dtype=bool)
+    """Boolean mask (h, w) of pixel centres inside the polygon (detection/masks.py rule)."""
+    return _rasterize(np.asarray(poly, dtype=np.float64), shape)

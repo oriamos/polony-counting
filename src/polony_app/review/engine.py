@@ -32,7 +32,8 @@ from polony_app.schemas import (
     ReviewAction,
 )
 
-from .geometry import bbox, point_in_polygon, polygon_area, polygons_overlap, validate_polygon
+from ..detection import masks as _masks
+from .geometry import bbox, polygon_area, polygons_overlap, validate_polygon
 from .state import AnalysisState, ReviewError
 
 RERUN_MERGE_RADIUS_PX = 3.0
@@ -78,17 +79,11 @@ def _exclusions(a: Analysis) -> list[Region]:
 
 
 def point_region_id(a: Analysis, x: float, y: float) -> str | None:
-    counting = _counting(a)
-    if not counting:
+    """Region id of a point under the single geometry rule (detection/masks.point_region):
+    half-open pixel-centre rule, first listed counting region wins, exclusions veto."""
+    if not _counting(a):
         return None
-    for e in _exclusions(a):
-        if point_in_polygon(x, y, e.polygon):
-            return None
-    for r in counting:
-        bx0, by0, bx1, by1 = bbox(r.polygon)
-        if bx0 <= x <= bx1 and by0 <= y <= by1 and point_in_polygon(x, y, r.polygon):
-            return r.id
-    return None
+    return _masks.point_region(x, y, a.regions)
 
 
 def assign_region_ids(a: Analysis, objs: Iterable[DetectedObject] | None = None) -> None:
@@ -707,37 +702,20 @@ def set_regions(state: AnalysisState, new_regions: list[Region]) -> ReviewAction
 
 
 def counting_area_px2(a: Analysis) -> float | None:
-    """Area (px^2) of union(counting) minus union(exclusion); None w/o regions/image."""
+    """Area (px^2) of union(counting) minus union(exclusion) under the single geometry
+    rule; None w/o regions/image."""
     if a.image is None or not _counting(a):
         return None
-    import numpy as np
-
-    from .geometry import rasterize_polygon
-
-    shape = (a.image.height, a.image.width)
-    m = np.zeros(shape, dtype=bool)
-    for r in _counting(a):
-        m |= rasterize_polygon(r.polygon, shape)
-    for e in _exclusions(a):
-        m &= ~rasterize_polygon(e.polygon, shape)
-    return float(m.sum())
+    return _masks.region_area_px(list(a.regions), (a.image.height, a.image.width))
 
 
 def region_area_px2(a: Analysis, region: Region) -> float | None:
-    """Pixel area of one region minus overlapping exclusions (counting only)."""
+    """Pixel area of one region under the single rule: counting regions are net of all
+    exclusions AND of earlier-listed counting regions (first listed wins, consistent with
+    membership), so per-region areas add up to counting_area_px2."""
     if a.image is None:
         return None
-    import numpy as np
-
-    from .geometry import rasterize_polygon
-
-    shape = (a.image.height, a.image.width)
-    m = rasterize_polygon(region.polygon, shape)
-    if region.kind == RegionKind.counting:
-        for e in _exclusions(a):
-            if polygons_overlap(region.polygon, e.polygon):
-                m &= ~rasterize_polygon(e.polygon, shape)
-    return float(m.sum())
+    return _masks.region_areas(list(a.regions), (a.image.height, a.image.width)).get(region.id)
 
 
 def update_counting_area(a: Analysis) -> None:

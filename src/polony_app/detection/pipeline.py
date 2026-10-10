@@ -1,17 +1,21 @@
 """End-to-end detection: background correction -> Big-FISH -> association -> review reasons."""
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata as md
+import inspect
 import math
 import platform
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
 
 from ..imaging.preprocess import correct_background
-from ..imaging.registration import check_compatible
-from ..schemas import DetectedObject, DetectionParams, DetectionRequest, Region
+from ..imaging.registration import check_compatible, shifted_valid_region
+from ..schemas import DetectedObject, DetectionParams, DetectionRequest, Region, RegionKind
 from .bigfish_engine import BigFishEngine
 from .engine import SpotEngine
 from .errors import DetectionCancelled
@@ -55,6 +59,46 @@ def _saturated_outside(raw: np.ndarray, radius: float, min_area: int = 5000) -> 
     return ndi.distance_transform_edt(~m) <= max(3.0 * radius, 5.0)
 
 
+# ---------------------------------------------------------------- threshold cache
+_THR_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
+_THR_LOCK = threading.Lock()
+_THR_CACHE_SIZE = 16
+
+
+def _digest(a: np.ndarray) -> str:
+    return hashlib.blake2b(np.ascontiguousarray(a).view(np.uint8).ravel(), digest_size=16).hexdigest()
+
+
+def threshold_cache_key(raw: np.ndarray, valid: np.ndarray, params: DetectionParams) -> tuple:
+    """Key of the cached automatic threshold: image content, effective valid mask (= regions,
+    exclusions, alignment strip, automatic saturated exclusion) and every parameter that
+    changes the LoG response (radius, minimum distance, background). threshold_scale, a
+    manual threshold, tiling and dense decomposition do not change the automatic value."""
+    pj = params.model_dump_json(include={"spot_radius_px", "minimum_distance_px", "background"})
+    return (raw.shape, str(raw.dtype), _digest(raw), _digest(np.packbits(valid)), pj)
+
+
+def _cache_get(key):
+    with _THR_LOCK:
+        v = _THR_CACHE.get(key)
+        if v is not None:
+            _THR_CACHE.move_to_end(key)
+        return v
+
+
+def _cache_put(key, value: dict) -> None:
+    with _THR_LOCK:
+        _THR_CACHE[key] = value
+        _THR_CACHE.move_to_end(key)
+        while len(_THR_CACHE) > _THR_CACHE_SIZE:
+            _THR_CACHE.popitem(last=False)
+
+
+def clear_threshold_cache() -> None:
+    with _THR_LOCK:
+        _THR_CACHE.clear()
+
+
 def _margin(p: DetectionParams) -> int:
     bg = p.background
     m = 0
@@ -70,16 +114,22 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
                   cancelled: Callable[[], bool] = lambda: False,
                   window: Optional[tuple[int, int, int, int]] = None,
                   engine: Optional[SpotEngine] = None,
-                  review: Optional[ReviewConfig] = None) -> DetectionResult:
+                  review: Optional[ReviewConfig] = None,
+                  alignment: tuple[int, int] = (0, 0)) -> DetectionResult:
     """Detect spots in both channels and associate them.
 
     ``red``/``green`` are raw original-dtype 2-D arrays in the same (registered)
-    space as ``regions``. ``window`` = (x0, y0, x1, y1) restricts the result to
-    objects whose centre is inside it (preview). For speed the window is processed
-    on a padded crop (padding = background filter + LoG support), so background
-    estimation matches the full run up to far-field content; the AUTOMATIC
-    threshold, however, is computed from the crop only and may differ from a
-    full-image run (stated in the notes). Raises DetectionCancelled.
+    space as ``regions``. ``alignment`` = (dy, dx) is the integer shift that was applied to
+    ``green`` (``registration.apply_shift``): the uncovered strip of the green channel holds
+    zeros, not data, so it is removed from the green valid mask (no green spot can be
+    detected there). ``window`` = (x0, y0, x1, y1) restricts the result to objects whose
+    centre is inside it (preview). The background correction is computed on the full image
+    and the automatic threshold of each channel is computed ONCE on the full masked image
+    and cached (small LRU keyed by image hash + parameters + valid mask), so a preview
+    window reports exactly the objects the full run reports in that window; only the LoG,
+    local-maximum search and measurement run on a padded crop. Raises DetectionCancelled.
+    Region rule (single, detection/masks.py): an object is kept iff ``point_region`` is not
+    None (or, with no counting region, iff it is outside every exclusion).
     """
     def check() -> None:
         if cancelled():
@@ -91,16 +141,26 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     notes += check_compatible(red, green)  # IngestError on shape mismatch
     h, w = red.shape
     valid_full = build_valid_mask((h, w), regions)
-    if not any(r.kind.value == "counting" for r in regions):
+    has_counting = any(r.kind == RegionKind.counting for r in regions)
+    auto = None
+    if not has_counting:
         auto = _saturated_outside(red, request.red.spot_radius_px) | _saturated_outside(green, request.green.spot_radius_px)
         if auto.any():
             valid_full &= ~auto
             notes.append(f"WARNING no counting region defined: {int(auto.sum())} px of large saturated area "
                          "(outside the chamber?) were excluded automatically; draw a counting region for a reliable count")
         else:
+            auto = None
             notes.append("WARNING no counting region defined: the whole image is counted")
     if not valid_full.any():
         notes.append("no valid pixels in the counting regions: nothing to detect")
+    dy, dx = int(alignment[0]), int(alignment[1])
+    valid_by = {"red": valid_full, "green": valid_full}
+    if (dy, dx) != (0, 0):
+        valid_by["green"] = valid_full & shifted_valid_region((h, w), dy, dx)
+        notes.append(f"green alignment shift (dy={dy}, dx={dx}): the uncovered green strip "
+                     f"({int((valid_full & ~valid_by['green']).sum())} px of the counting area) is excluded from "
+                     "green detection (no green data there); red-only objects in it cannot be matched")
 
     ox = oy = 0
     sl = (slice(0, h), slice(0, w))
@@ -116,11 +176,11 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
         cy0, cy1, cx0, cx1 = max(0, y0 - m), min(h, y1 + m), max(0, x0 - m), min(w, x1 + m)
         sl = (slice(cy0, cy1), slice(cx0, cx1))
         oy, ox = cy0, cx0
-        notes.append(f"preview window {win}: processed on a padded crop; automatic thresholds are computed "
-                     "from the crop and can differ from a full-image run")
-    valid = valid_full[sl]
+        notes.append(f"preview window {win}: LoG and measurement run on a padded crop; background correction "
+                     "and the automatic threshold come from the full image (identical to the full run)")
     check()
 
+    can_inject = "threshold_info" in inspect.signature(engine.detect).parameters and hasattr(engine, "estimate_threshold")
     spots = {}
     infos = {}
     for k, (name, arr, params) in enumerate((("red", red, request.red), ("green", green, request.green))):
@@ -130,21 +190,36 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
             progress(base + 0.4 * f, f"{name}: {msg}")
 
         check()
-        raw = arr[sl]
+        valid_c = valid_by[name]
         sub(0.0, "background correction")
         # Unclipped corrected image: used for noise/SNR statistics (clipping at 0 would
         # zero the robust std). The detection image is clipped if the user asked for it.
+        # Always computed on the FULL image (also for previews) so that it equals the full run.
         bg_free = params.background.model_copy(update={"clip_negative": False})
-        measured = correct_background(raw, bg_free, valid)
-        corrected = np.maximum(measured, 0.0) if params.background.clip_negative else measured
+        measured_full = correct_background(arr, bg_free, valid_c)
+        corrected_full = np.maximum(measured_full, 0.0) if params.background.clip_negative else measured_full
         check()
+        raw = arr[sl]
+        measured, corrected, valid = measured_full[sl], corrected_full[sl], valid_c[sl]
+        tinfo = None
+        key = None
+        if can_inject and params.threshold is None:
+            key = threshold_cache_key(arr, valid_c, params)
+            tinfo = _cache_get(key)
+            if tinfo is None and win is not None:
+                sub(0.05, "automatic threshold (full image)")
+                tinfo = engine.estimate_threshold(corrected_full, params, valid_c, arr, measured_full)
+                _cache_put(key, tinfo)
+        kw = {"threshold_info": tinfo} if (tinfo is not None and can_inject) else {}
         sp = engine.detect(corrected, params, valid, raw=raw, progress=lambda f, m, s=sub: s(0.1 + 0.9 * f, m),
-                           cancelled=cancelled, measure=measured)
+                           cancelled=cancelled, measure=measured, **kw)
         info = getattr(engine, "last_info", {}) or {}
         infos[name] = info
-        for s in sp:
-            s.x += ox
-            s.y += oy
+        if key is not None and tinfo is None and info.get("threshold_info") is not None:
+            _cache_put(key, info["threshold_info"])  # full run: remember for later previews
+        for s_ in sp:
+            s_.x += ox
+            s_.y += oy
         spots[name] = sp
         thr = info.get("threshold")
         notes.append(f"{name}: {len(sp)} spot(s); LoG threshold "
@@ -163,22 +238,30 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     progress(0.93, "review reasons")
     apply_review_reasons(objects, red_s, green_s, request.red, request.green, valid_full, (h, w), review)
 
-    # drop out-of-mask / out-of-window objects, assign regions
+    # single region rule: keep iff point_region is not None (virtual whole-image counting
+    # region when the user drew none, so the half-open rule still applies at the border)
+    if has_counting:
+        rule_regions = list(regions)
+    else:
+        rule_regions = [Region(id="__image__", kind=RegionKind.counting, name="image",
+                               polygon=[(0, 0), (w, 0), (w, h), (0, h)])] + list(regions)
+    rids = points_regions([o.x for o in objects], [o.y for o in objects], rule_regions)
     kept = []
     dropped_mask = 0
-    for o in objects:
-        yi, xi = int(round(o.y)), int(round(o.x))
-        if not (0 <= yi < h and 0 <= xi < w) or not valid_full[yi, xi]:
+    for o, rid in zip(objects, rids):
+        if rid is not None and auto is not None:
+            yi, xi = min(max(int(round(o.y)), 0), h - 1), min(max(int(round(o.x)), 0), w - 1)
+            if auto[yi, xi]:
+                rid = None
+        if rid is None:
             dropped_mask += 1
             continue
         if win is not None and not (win[0] <= o.x < win[2] and win[1] <= o.y < win[3]):
             continue
+        o.region_id = rid if has_counting else None
         kept.append(o)
-    if dropped_mask:
-        notes.append(f"{dropped_mask} object(s) fell outside the valid mask and were dropped")
-    rids = points_regions([o.x for o in kept], [o.y for o in kept], regions)
-    for o, rid in zip(kept, rids):
-        o.region_id = rid
+    if dropped_mask and win is None:
+        notes.append(f"{dropped_mask} object(s) fell outside the counting regions / inside an exclusion and were dropped")
     progress(1.0, "done")
     notes.append(f"{len(kept)} object(s): " + ", ".join(
         f"{c}={sum(1 for o in kept if o.cls.value == c)}" for c in ("red", "green", "yellow", "uncertain")))

@@ -7,7 +7,12 @@ dense_cluster     another same-channel spot within 2 * minimum_distance_px
                   (or the spot came from dense decomposition)
 near_edge         distance to the valid-mask boundary (image border counts) < 2 * spot radius
 suspicious_shape  half-max blob elongation (sqrt of second-moment eigenvalue ratio) > elongation_max (1.8)
-debris_like       scale ratio (0.3r/0.4r vs 1r/1.4r normalised LoG, 5x5 max) >= 1.0 in any channel: FLAG ONLY
+debris_like       scale ratio (0.3r/0.4r vs 1r/1.4r normalised LoG, 5x5 max) >= 1.0 in any channel.
+                  Single-channel objects keep their class (flag only); a matched red+green pair with
+                  debris-like evidence in BOTH channels is NOT auto-classed yellow: it becomes
+                  ``uncertain`` (a compact bright speck in both channels is more likely autofluorescent
+                  debris/dust than a dual-labelled polony). One debris channel: stays yellow, queued.
+suspicious_shape  also set for a merged saturated plateau much larger than a spot
 ambiguous_match   set by matching.associate
 Defaults are starting points exposed for configuration, not validated cut-offs.
 """
@@ -20,7 +25,7 @@ import numpy as np
 from scipy import ndimage as ndi
 from scipy.spatial import cKDTree
 
-from ..schemas import DetectedObject, DetectionParams, ReviewReason
+from ..schemas import DetectedObject, DetectionParams, ObjectClass, ReviewReason
 from .engine import RawSpot
 from .matching import spot_index
 
@@ -63,6 +68,7 @@ def apply_review_reasons(objects: list[DetectedObject], red: Sequence[RawSpot], 
 
     for o in objects:
         reasons = set(o.review_reasons)
+        debris = {"red": False, "green": False}
         for key in ("red", "green"):
             ev = getattr(o, key)
             if not ev.detected:
@@ -80,6 +86,9 @@ def apply_review_reasons(objects: list[DetectedObject], red: Sequence[RawSpot], 
                 reasons.add(ReviewReason.suspicious_shape)
             if s.scale_ratio is not None and s.scale_ratio >= cfg.debris_ratio:
                 reasons.add(ReviewReason.debris_like)
+                debris[key] = True
+            if s.plateau_oversize:
+                reasons.add(ReviewReason.suspicious_shape)
             if s.simulated:
                 reasons.add(ReviewReason.dense_cluster)
             tree = trees[key]
@@ -92,3 +101,7 @@ def apply_review_reasons(objects: list[DetectedObject], red: Sequence[RawSpot], 
             if edt[yi, xi] < cfg.edge_radius_factor * p.spot_radius_px:
                 reasons.add(ReviewReason.near_edge)
         o.review_reasons = [r for r in _ORDER if r in reasons]
+        if o.cls == ObjectClass.yellow and debris["red"] and debris["green"]:
+            o.cls = ObjectClass.uncertain
+            o.history.append("auto: debris-like (compact, scale ratio >= "
+                             f"{cfg.debris_ratio:g}) in BOTH channels -> uncertain instead of yellow")

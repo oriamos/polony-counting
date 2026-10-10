@@ -7,6 +7,16 @@ centre is inside when x_a <= x < x_b for crossing pairs. So a rectangle
 [x0,x1) x [y0,y1) contains exactly the pixels with x0 <= c < x1, y0 <= r < y1.
 To cover a whole W x H image with a rectangle use (0,0)-(W,H).
 `point_region` uses the identical rule, so mask and point queries never disagree.
+
+This module is the ONE geometry rule of the app: detection (pipeline keep/drop), the
+review engine (membership, areas) and the export all call it (review/geometry.py only
+re-exports). Consequences: a 10x10 rectangle (10,10)-(20,20) has area exactly 100 px; the
+point (10,15) is inside and (20,15) is outside; two rectangles sharing an edge partition
+the pixels without double counting; the boundary of an exclusion polygon belongs to the
+exclusion only on its low (x0/y0) edges (half-open), so (10,15) is excluded and (20,15)
+is not. Overlapping counting regions: the FIRST listed region wins both for membership
+(`point_region`) and for area (`region_areas`: area net of earlier counting regions and of
+all exclusions), so per-region areas always sum to the union area.
 """
 from __future__ import annotations
 
@@ -141,3 +151,30 @@ def region_area_px(region_or_regions: Union[Region, Sequence[Region]], shape: tu
         p = _poly_array(region_or_regions)
         return 0.0 if p is None else float(rasterize_polygon(p, shape).sum())
     return float(build_valid_mask(shape, list(region_or_regions)).sum())
+
+
+def region_areas(regions: Sequence[Region], shape: tuple[int, int]) -> dict[str, float]:
+    """Per-region pixel area under the single geometry rule.
+
+    Counting region: pixels inside it, minus all exclusions, minus pixels of EARLIER
+    counting regions (first listed wins, same as `point_region`), so the counting areas
+    add up to the union area. Exclusion region: its own rasterised area (clipped to the
+    image). Duplicate ids: the later entry overwrites (ids are unique in practice)."""
+    exclusion = np.zeros(shape, bool)
+    for r in regions:
+        if r.kind == RegionKind.exclusion:
+            p = _poly_array(r)
+            if p is not None:
+                exclusion |= rasterize_polygon(p, shape)
+    taken = np.zeros(shape, bool)
+    out: dict[str, float] = {}
+    for r in regions:
+        p = _poly_array(r)
+        m = np.zeros(shape, bool) if p is None else rasterize_polygon(p, shape)
+        if r.kind == RegionKind.counting:
+            net = m & ~exclusion & ~taken
+            taken |= m & ~exclusion
+            out[r.id] = float(net.sum())
+        else:
+            out[r.id] = float(m.sum())
+    return out

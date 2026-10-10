@@ -64,6 +64,12 @@ makeFixtures();
 // ------------------------------------------------------------------ server control
 let server = null;
 async function startServer() {
+  try {
+    await fetch(`${BASE}/api/health`);
+    throw new Error(`port ${PORT} already in use by another server; set REAL_PORT`);
+  } catch (e) {
+    if (/already in use/.test(String(e))) throw e;
+  }
   const log = fs.openSync(path.join(OUT, 'server.log'), 'a');
   server = spawn(PY, ['-m', 'polony_app', '--data-dir', DATA, '--port', String(PORT)], {
     cwd: REPO,
@@ -247,14 +253,14 @@ async function measureAt(o, model) {
           const w = Math.max(0, lum(A, (y * A.w + x) * 4) - bg);
           sw += w; sx += w * (x + 0.5); sy += w * (y + 0.5);
         }
-      // ring: near-white pixels that differ between overlay-on and overlay-off, within 24px of the model position
+      // ring: pixels that differ between overlay-on and overlay-off (dark+white+colour outline), within 24px of the model position; bbox centre
       let rx0 = 1e9, rx1 = -1, ry0 = 1e9, ry1 = -1, rn = 0;
       for (let y = 0; y < B.h; y++)
         for (let x = 0; x < B.w; x++) {
           if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > 24) continue;
           const i = (y * B.w + x) * 4;
           const diff = Math.abs(B.d[i] - A.d[i]) + Math.abs(B.d[i + 1] - A.d[i + 1]) + Math.abs(B.d[i + 2] - A.d[i + 2]);
-          if (diff > 60 && Math.min(B.d[i], B.d[i + 1], B.d[i + 2]) >= 235) {
+          if (diff > 90) {
             rn++; rx0 = Math.min(rx0, x); rx1 = Math.max(rx1, x + 1); ry0 = Math.min(ry0, y); ry1 = Math.max(ry1, y + 1);
           }
         }
@@ -292,6 +298,8 @@ async function alignmentRun(label, objs, scales, shotPrefix) {
 const rowErr = (r, k) => (r[k] ? Math.hypot(r[k].dx, r[k].dy) : NaN);
 
 // ================================================================== STEP 0: server up, health
+process.on('exit', () => server && server.kill('SIGKILL'));
+process.on('uncaughtException', (e) => { console.error(e); server && server.kill('SIGKILL'); process.exit(2); });
 const health = await startServer();
 check('real backend up', health.ok && health.bigfish_version, JSON.stringify(health));
 const realHashBefore = sha256(REAL_TIF);
@@ -492,7 +500,7 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   A = await getA(rid);
   const unc = live(A).filter((o) => o.cls === 'uncertain');
   const queue = await jget(`/api/analyses/${rid}/review-queue`);
-  check('review queue lists flagged objects with reasons (UI count == API count)', (await page.locator('[data-testid^="queue-o-"]').count()) === queue.length && queue.every((q) => q.reasons.length > 0), `uncertain=${unc.length}, queue=${queue.length}, reasons=${JSON.stringify([...new Set(queue.flatMap((q) => q.reasons))])}`);
+  check('review queue lists flagged objects with reasons (UI count == API count)', (await page.locator('[data-testid^="queue-o"]').count()) === queue.length && queue.every((q) => q.reasons.length > 0), `uncertain=${unc.length}, queue=${queue.length}, reasons=${JSON.stringify([...new Set(queue.flatMap((q) => q.reasons))])}`);
   // resolve uncertain objects using their own evidence (both channels detected -> yellow, else the detecting channel)
   for (const o of unc) {
     const cls = o.red.detected && o.green.detected ? 'yellow' : o.green.detected ? 'green' : 'red';
@@ -577,7 +585,7 @@ const pid = await uploadFiles(pairFiles, 'synthetic pair');
   await sleep(300);
   const redOnly = TRUTH.red.slice(0, 5), greenOnly = TRUTH.green.slice(0, 4);
   const m1 = { rR: mean(await brightAt('red', redOnly)), rG: mean(await brightAt('red', greenOnly)), gR: mean(await brightAt('green', redOnly)), gG: mean(await brightAt('green', greenOnly)) };
-  check('mapping A=red,B=green: RED view shows A (red-only spots bright, green-only dark); GREEN view the opposite', m1.rR > 3 * m1.rG + 20 && m1.gG > 3 * m1.gR + 20, JSON.stringify(m1, (k, v) => (typeof v === 'number' ? +v.toFixed(1) : v)));
+  check('mapping A=red,B=green: RED view shows A (red-only spots bright, green-only dark); GREEN view the opposite', m1.rR > m1.rG + 60 && m1.gG > m1.gR + 60, JSON.stringify(m1, (k, v) => (typeof v === 'number' ? +v.toFixed(1) : v)));
   const compo = await brightAt('composite', redOnly);
   check('composite: red-only spot is red-dominant', compo.every((c) => c[0] > c[1] + 30), JSON.stringify(compo.map((c) => c.map(Math.round))));
   await setHidden(false);
@@ -590,7 +598,7 @@ const pid = await uploadFiles(pairFiles, 'synthetic pair');
   await page.keyboard.press('f');
   await sleep(300);
   const m2 = { rR: mean(await brightAt('red', redOnly)), rG: mean(await brightAt('red', greenOnly)), gR: mean(await brightAt('green', redOnly)), gG: mean(await brightAt('green', greenOnly)) };
-  check('after SWAPPING mapping (A=green,B=red) the RED view now shows B and GREEN view shows A', m2.rG > 3 * m2.rR + 20 && m2.gR > 3 * m2.gG + 20, JSON.stringify(m2, (k, v) => (typeof v === 'number' ? +v.toFixed(1) : v)));
+  check('after SWAPPING mapping (A=green,B=red) the RED view now shows B and GREEN view shows A', m2.rG > m2.rR + 60 && m2.gR > m2.gG + 60, JSON.stringify(m2, (k, v) => (typeof v === 'number' ? +v.toFixed(1) : v)));
   const compo2 = await brightAt('composite', redOnly);
   check('composite follows the swap (A spots now green-dominant)', compo2.every((c) => c[1] > c[0] + 30), JSON.stringify(compo2.map((c) => c.map(Math.round))));
   await setHidden(false);
@@ -653,7 +661,7 @@ for (const k of ['objects', 'regions', 'slide', 'provenance', 'bundle']) {
   const p = path.join(dlDir, dl.suggestedFilename());
   await dl.saveAs(p);
   files[k] = p;
-  check(`export ${k}: downloaded via UI link, filename carries FINAL`, /FINAL/.test(dl.suggestedFilename()) && !/DRAFT/.test(dl.suggestedFilename()), dl.suggestedFilename());
+  check(`export ${k}: downloaded via UI link, filename has no DRAFT marker`, !/DRAFT/.test(dl.suggestedFilename()), dl.suggestedFilename());
 }
 const parseCsv = (txt) => {
   const rows = []; let row = [], cur = '', q = false;

@@ -20,13 +20,27 @@ Verified against the installed source (bigfish.detection.detect_spots):
   the result as a *manual* threshold. A test checks equality with
   ``detect_spots(..., threshold=None, return_threshold=True)``.
 
-Masking choice: pixels outside the valid mask are replaced by the median of
-the valid pixels (~0 after background correction) BEFORE the LoG/threshold
-computation, so bright structures outside the counting area (saturated slide
-edge, debris) create neither spots nor a threshold bias, and there is no
-artificial step edge. Spots whose peak pixel is outside the mask are dropped.
-Spots next to the mask boundary are kept but measured only on valid pixels and
-flagged ``near_edge`` downstream.
+Masking (SCIENCE_NOTES 1.4): the LoG is computed on the REAL background-corrected image
+and its response is set to zero outside the valid mask; local maxima, the automatic
+threshold and the reported spots are restricted to pixels inside the mask. So spots whose
+centre lies outside the mask are never produced, the threshold is derived from inside
+maxima only, and a spot next to the boundary keeps an undistorted position (no
+median-fill step edge). Pixels are replaced by the median of the valid pixels only when
+they are farther than 4 sigma from the mask (cannot influence valid responses; saves
+nothing but is harmless) or when they are SATURATED and outside the mask (rim glare must
+not leak into valid pixels through the LoG kernel). Spots next to the boundary are flagged
+``near_edge`` downstream.
+
+Saturated plateaus: a clipped spot is a flat plateau whose LoG response is a ring (several
+local maxima). Connected saturated components (raw >= dtype max, inside the mask) are
+labelled and all spots within the component dilated by the spot radius are merged into ONE
+spot at the plateau centroid, flagged saturated; a plateau much larger than the spot
+(equivalent diameter > PLATEAU_SHAPE_FACTOR x spot radius) is also flagged suspicious_shape
+(it may be debris or several touching polonies that cannot be resolved from clipped data).
+
+Automatic threshold is computed once on the whole (masked) image per channel
+(``estimate_threshold``) and can be supplied back through ``threshold_info`` so that
+previews and tiles reuse the identical value.
 
 Tiling: the threshold is computed ONCE on the whole (masked) image, never per
 tile -- a per-tile automated threshold depends on that tile's content (an empty
@@ -52,6 +66,7 @@ from .errors import DetectionCancelled
 
 _MAD_TO_SIGMA = 1.4826
 NOISE_K = 5.0
+PLATEAU_SHAPE_FACTOR = 6.0   # saturated plateau diameter > this x spot radius => suspicious_shape
 
 
 class BigFishEngine:
@@ -69,20 +84,31 @@ class BigFishEngine:
 
     # ------------------------------------------------------------ public
     def detect(self, img, params: DetectionParams, valid_mask=None, raw=None, progress=None, cancelled=None,
-               measure=None):
-        spots, info = self.detect_with_info(img, params, valid_mask, raw, progress, cancelled, measure)
+               measure=None, threshold_info=None):
+        spots, info = self.detect_with_info(img, params, valid_mask, raw, progress, cancelled, measure,
+                                            threshold_info)
         self.last_info = info
         return spots
 
     # ------------------------------------------------------------ pieces
     @staticmethod
-    def _prepare(img: np.ndarray, valid: Optional[np.ndarray]) -> np.ndarray:
+    def _prepare(img: np.ndarray, valid: Optional[np.ndarray], raw: Optional[np.ndarray] = None,
+                 sigma: float = 5.0) -> np.ndarray:
+        """float32 copy of the detection image. NOT median-filled inside the LoG support
+        of the mask: only pixels > 4 sigma away from the mask and saturated pixels outside
+        the mask are replaced (by the median of the valid pixels)."""
         a = np.array(img, dtype=np.float32, copy=True, order="C")
         if not np.isfinite(a).all():
             raise ValueError("image contains NaN/inf")
         if valid is not None and not valid.all():
-            fill = float(np.median(a[valid])) if valid.any() else 0.0
-            a[~valid] = fill
+            if not valid.any():
+                return a
+            fill = float(np.median(a[valid]))
+            far = ndi.distance_transform_edt(~valid) > (4.0 * sigma + 1.0)
+            repl = far
+            if raw is not None and raw.dtype.kind in "ui":
+                repl = repl | ((raw >= np.iinfo(raw.dtype).max) & ~valid)
+            a[repl] = fill
         return a
 
     @staticmethod
@@ -90,15 +116,25 @@ class BigFishEngine:
         from bigfish import stack
         return stack.log_filter(img, (sigma, sigma))
 
-    def auto_threshold(self, filled: np.ndarray, params: DetectionParams,
-                       valid: Optional[np.ndarray]) -> Optional[float]:
-        """Big-FISH automated threshold (before threshold_scale)."""
-        from bigfish.detection import automated_threshold_setting, local_maximum_detection
+    @staticmethod
+    def _log_maxima(image: np.ndarray, valid: Optional[np.ndarray], params: DetectionParams):
+        """(LoG response with the outside of the mask zeroed, local maxima inside the mask)."""
+        from bigfish.detection import local_maximum_detection
         r, d = float(params.spot_radius_px), float(params.minimum_distance_px)
-        filt = self.log_filtered(filled, r)
+        filt = BigFishEngine.log_filtered(image, r)
+        if valid is not None:
+            filt = np.where(valid, filt, np.zeros((), filt.dtype))
         lm = local_maximum_detection(filt, (d, d))
         if valid is not None:
             lm &= valid
+        return filt, lm
+
+    def auto_threshold(self, filled: np.ndarray, params: DetectionParams,
+                       valid: Optional[np.ndarray]) -> Optional[float]:
+        """Big-FISH automated threshold (before threshold_scale), from local maxima
+        INSIDE the mask of the real LoG response."""
+        from bigfish.detection import automated_threshold_setting
+        filt, lm = self._log_maxima(filled, valid, params)
         if not lm.any():
             return None
         try:
@@ -120,20 +156,55 @@ class BigFishEngine:
         sig = _MAD_TO_SIGMA * float(np.median(np.abs(vals - med)))
         return NOISE_K * sig if sig > 0 else None
 
+    def estimate_threshold(self, img, params: DetectionParams, valid_mask=None, raw=None, measure=None) -> dict:
+        """Automatic threshold of the WHOLE masked image (before ``threshold_scale``).
+
+        Returns {"auto": float|None, "base": float|None, "fallback": bool, "notes": [...]}
+        where ``base`` is the Big-FISH automatic value or, if unusable, the noise fallback.
+        The pipeline caches this and passes it back as ``threshold_info`` so that preview
+        windows and tiles use exactly the value of the full run."""
+        valid = None if valid_mask is None else np.asarray(valid_mask, bool)
+        out: dict = {"auto": None, "base": None, "fallback": False, "notes": []}
+        if valid is not None and not valid.any():
+            out["notes"].append("no valid pixels: nothing to detect")
+            return out
+        filled = self._prepare(img, valid, raw, float(params.spot_radius_px))
+        auto = None
+        try:
+            auto = self.auto_threshold(filled, params, valid)
+        except ValueError as exc:  # bigfish get_breaking_point on a short/monotone curve
+            out["notes"].append(f"Big-FISH automatic threshold raised ({exc})")
+        out["auto"] = auto
+        if auto is None or auto <= 0:
+            nt = self.noise_threshold(filled if measure is None else np.asarray(measure, np.float32), params, valid)
+            if nt is None:
+                out["notes"].append("automatic threshold failed and no noise estimate possible; no spots reported")
+                return out
+            out["notes"].append(
+                f"WARNING automatic threshold unusable ({'none' if auto is None else auto}); fell back to "
+                f"{NOISE_K:g} x robust noise sigma of the LoG response = {nt:.4g}. Set a threshold manually if unsure.")
+            out["fallback"] = True
+            out["auto"] = None
+            out["base"] = nt
+        else:
+            out["base"] = auto
+        return out
+
     @staticmethod
-    def _detect_coords(image: np.ndarray, thr: float, params: DetectionParams) -> np.ndarray:
-        from bigfish.detection import detect_spots
-        r, d = float(params.spot_radius_px), float(params.minimum_distance_px)
+    def _detect_coords(image: np.ndarray, thr: float, params: DetectionParams,
+                       valid: Optional[np.ndarray] = None) -> np.ndarray:
+        from bigfish.detection import spots_thresholding
+        filt, lm = BigFishEngine._log_maxima(image, valid, params)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)  # "No spots were detected"
-            sp = detect_spots(image, threshold=float(thr), remove_duplicate=True, return_threshold=False,
-                              voxel_size=(1, 1), spot_radius=(r, r), log_kernel_size=(r, r),
-                              minimum_distance=(d, d))
+            sp, _ = spots_thresholding(filt, lm, float(thr), remove_duplicate=True)
         return np.asarray(sp, dtype=np.int64).reshape(-1, 2)
 
     # ------------------------------------------------------------ main
     def detect_with_info(self, img, params: DetectionParams, valid_mask=None, raw=None,
-                         progress=None, cancelled=None, measure=None):
+                         progress=None, cancelled=None, measure=None, threshold_info=None):
+        """``threshold_info``: result of ``estimate_threshold`` computed on the full image;
+        when given it is used instead of estimating from ``img`` (preview windows)."""
         progress = progress or (lambda f, m: None)
         cancelled = cancelled or (lambda: False)
         if img.ndim != 2:
@@ -145,14 +216,15 @@ class BigFishEngine:
         if measure is not None and measure.shape != img.shape:
             raise ValueError("measure shape differs from image shape")
         valid = None if valid_mask is None else np.asarray(valid_mask, bool)
-        info: dict = {"notes": [], "threshold": None, "auto_threshold": None, "n_tiles": 1}
+        info: dict = {"notes": [], "threshold": None, "auto_threshold": None, "n_tiles": 1,
+                      "threshold_info": None}
         h, w = img.shape
         if valid is not None and not valid.any():
             info["notes"].append("no valid pixels: nothing to detect")
             return [], info
 
         r, md = float(params.spot_radius_px), float(params.minimum_distance_px)
-        filled = self._prepare(img, valid)
+        filled = self._prepare(img, valid, raw, r)
         progress(0.0, "threshold")
         if cancelled():
             raise DetectionCancelled()
@@ -161,25 +233,15 @@ class BigFishEngine:
             thr = float(params.threshold)
             info["notes"].append("manual threshold used as given (threshold_scale ignored)")
         else:
-            auto = None
-            try:
-                auto = self.auto_threshold(filled, params, valid)
-            except ValueError as exc:  # bigfish get_breaking_point on a short/monotone curve
-                info["notes"].append(f"Big-FISH automatic threshold raised ({exc})")
-            info["auto_threshold"] = auto
-            if auto is None or auto <= 0:
-                nt = self.noise_threshold(filled if measure is None else np.asarray(measure, np.float32), params, valid)
-                if nt is None:
-                    info["notes"].append("automatic threshold failed and no noise estimate possible; no spots reported")
-                    return [], info
-                info["notes"].append(
-                    f"WARNING automatic threshold unusable ({'none' if auto is None else auto}); fell back to "
-                    f"{NOISE_K:g} x robust noise sigma of the LoG response = {nt:.4g}. Set a threshold manually if unsure.")
-                info["fallback_threshold"] = True
-                auto = None
-                thr = nt * float(params.threshold_scale)
-            else:
-                thr = auto * float(params.threshold_scale)
+            ti = threshold_info if threshold_info is not None else \
+                self.estimate_threshold(img, params, valid, raw, measure)
+            info["threshold_info"] = ti
+            info["notes"] += list(ti.get("notes", []))
+            info["auto_threshold"] = ti.get("auto")
+            info["fallback_threshold"] = bool(ti.get("fallback"))
+            if ti.get("base") is None:
+                return [], info
+            thr = float(ti["base"]) * float(params.threshold_scale)
         info["threshold"] = thr
         if cancelled():
             raise DetectionCancelled()
@@ -188,7 +250,7 @@ class BigFishEngine:
         ts = int(params.tile_size)
         if ts <= 0 or ts >= max(h, w):
             progress(0.2, "detecting")
-            coords = self._detect_coords(filled, thr, params)
+            coords = self._detect_coords(filled, thr, params, valid)
         else:
             support = int(math.ceil(4 * r)) + int(math.ceil(md)) + 2
             halo = max(int(params.tile_overlap_px), support)
@@ -210,7 +272,8 @@ class BigFishEngine:
                         continue
                     py0, py1 = max(0, y0 - halo), min(h, y1 + halo)
                     px0, px1 = max(0, x0 - halo), min(w, x1 + halo)
-                    c = self._detect_coords(np.ascontiguousarray(filled[py0:py1, px0:px1]), thr, params)
+                    vt = None if valid is None else valid[py0:py1, px0:px1]
+                    c = self._detect_coords(np.ascontiguousarray(filled[py0:py1, px0:px1]), thr, params, vt)
                     if c.size == 0:
                         continue
                     c = c + np.array([py0, px0])
@@ -223,6 +286,13 @@ class BigFishEngine:
             coords = coords[valid[coords[:, 0], coords[:, 1]]]
         if cancelled():
             raise DetectionCancelled()
+
+        # ---- saturated plateaus: one spot per connected saturated component
+        overrides: dict = {}
+        if raw is not None and len(coords):
+            coords, overrides, pnote = self._merge_plateaus(coords, raw, valid, r)
+            if pnote:
+                info["notes"].append(pnote)
 
         # ---- optional dense decomposition (global: needs all spots)
         simulated = np.zeros(len(coords), bool)
@@ -253,14 +323,77 @@ class BigFishEngine:
                 info["notes"].append(f"dense decomposition failed ({type(exc).__name__}: {exc}); skipped")
 
         progress(0.85, "measuring")
-        spots = self._measure(filled, valid, coords, simulated, params, raw, thr, measure)
+        spots = self._measure(filled, valid, coords, simulated, params, raw, thr, measure, overrides)
         spots = self._suppress(spots, params.remove_duplicate_radius_px)
         spots.sort(key=lambda s: (s.y, s.x))
         progress(1.0, "done")
         return spots, info
 
+    # ------------------------------------------------------------ saturated plateaus
+    @staticmethod
+    def _merge_plateaus(coords: np.ndarray, raw: np.ndarray, valid: Optional[np.ndarray], r: float):
+        """Merge all spots within a saturated component dilated by the spot radius into one.
+
+        Returns (coords, overrides, note). ``overrides[(iy, ix)]`` carries the plateau
+        centroid (x, y float), area, elongation and the oversize flag for the merged
+        spot whose integer measurement position is (iy, ix)."""
+        if raw.dtype.kind not in "ui" or len(coords) == 0:
+            return coords, {}, None
+        sat = raw >= np.iinfo(raw.dtype).max
+        if valid is not None:
+            sat &= valid
+        if not sat.any():
+            return coords, {}, None
+        h, w = raw.shape
+        lab, n = ndi.label(sat, structure=np.ones((3, 3), bool))
+        rr = int(math.ceil(r)) + 1
+        member: dict[int, list[int]] = {}
+        for k, (y, x) in enumerate(coords):
+            y0, y1, x0, x1 = max(0, y - rr), min(h, y + rr + 1), max(0, x - rr), min(w, x + rr + 1)
+            win = lab[y0:y1, x0:x1]
+            if not win.any():
+                continue
+            yy, xx = np.nonzero(win)
+            d2 = (yy + y0 - y) ** 2 + (xx + x0 - x) ** 2
+            j = int(np.argmin(d2))
+            if d2[j] <= r * r:
+                member.setdefault(int(win[yy[j], xx[j]]), []).append(k)
+        if not member:
+            return coords, {}, None
+        slices = ndi.find_objects(lab)
+        drop = np.zeros(len(coords), bool)
+        new_rows: list[list[int]] = []
+        overrides: dict = {}
+        n_merged = 0
+        for l, ks in member.items():
+            sl = slices[l - 1]
+            yy, xx = np.nonzero(lab[sl] == l)
+            yy = yy + sl[0].start
+            xx = xx + sl[1].start
+            area = int(yy.size)
+            cy, cx = float(yy.mean()), float(xx.mean())
+            cxx = float(((xx - cx) ** 2).mean()) + 1 / 12
+            cyy = float(((yy - cy) ** 2).mean()) + 1 / 12
+            cxy = float(((xx - cx) * (yy - cy)).mean())
+            tr, det = cxx + cyy, cxx * cyy - cxy * cxy
+            disc = math.sqrt(max(tr * tr / 4 - det, 0.0))
+            elong = float(math.sqrt((tr / 2 + disc) / max(tr / 2 - disc, 1e-9)))
+            diam = 2.0 * math.sqrt(area / math.pi)
+            iy, ix = int(min(max(round(cy), 0), h - 1)), int(min(max(round(cx), 0), w - 1))
+            drop[ks] = True
+            n_merged += len(ks)
+            new_rows.append([iy, ix])
+            overrides[(iy, ix)] = dict(x=cx, y=cy, area=area, elongation=elong,
+                                       oversize=bool(diam > PLATEAU_SHAPE_FACTOR * max(r, 1.0)))
+        coords = np.concatenate([coords[~drop], np.array(new_rows, dtype=np.int64).reshape(-1, 2)])
+        coords = coords[np.lexsort((coords[:, 1], coords[:, 0]))]
+        note = (f"{n_merged} spot(s) on {len(member)} saturated plateau(s) merged into {len(member)} "
+                "spot(s) at the plateau centroid (flagged saturated)")
+        return coords, overrides, note
+
     # ------------------------------------------------------------ measurement
-    def _measure(self, img, valid, coords, simulated, params, raw, thr, measure=None) -> list[RawSpot]:
+    def _measure(self, img, valid, coords, simulated, params, raw, thr, measure=None,
+                 overrides=None) -> list[RawSpot]:
         if len(coords) == 0:
             return []
         h, w = img.shape
@@ -305,10 +438,7 @@ class BigFishEngine:
             else:
                 bg, std = float("nan"), 0.0
             c3 = mwin[R - 1:R + 2, R - 1:R + 2]
-            peak = float(np.nanmax(c3))
-            snr = None
-            if not math.isnan(bg) and std > 1e-9 * max(1.0, abs(peak)):
-                snr = float((peak - bg) / std)
+            c3_max = float(np.nanmax(c3))
             # LoG response and sub-pixel refinement on the matched-filter output
             y0c, y1c, x0c, x1c = max(0, y - K), min(h, y + K + 1), max(0, x - K), min(w, x + K + 1)
             crop = img[y0c:y1c, x0c:x1c]
@@ -322,6 +452,12 @@ class BigFishEngine:
             if L[1, 1] >= L.max() and L[1, 1] > 0:
                 dy = _parab(L[0, 1], L[1, 1], L[2, 1])
                 dx = _parab(L[1, 0], L[1, 1], L[1, 2])
+            # peak = measured image interpolated AT the refined centre (not the max of the
+            # 3x3 block, which is biased upward by noise: at true A=0 it gives SNR ~ +1.5)
+            peak = _interp_at(mwin, R + dy, R + dx, c3_max)
+            snr = None
+            if not math.isnan(bg) and std > 1e-9 * max(1.0, abs(peak)):
+                snr = float((peak - bg) / std)
             # scale-selection ratio (debris filter, flag only): max over small sigmas of
             # s^2 * -LoG divided by the same over large sigmas, max in a 5x5 window.
             def _norm_max(sg):
@@ -335,7 +471,7 @@ class BigFishEngine:
             sub = win[R - he:R + he + 1, R - he:R + he + 1]
             bgz = 0.0 if math.isnan(bg) else bg
             d = np.nan_to_num(sub - bgz, nan=0.0)
-            pk = peak - bgz
+            pk = c3_max - bgz
             if pk > 0:
                 m = d >= 0.5 * pk
                 lab, _n = ndi.label(m)
@@ -362,9 +498,18 @@ class BigFishEngine:
                 a0, a1, b0, b1 = max(0, y - rs), min(h, y + rs + 1), max(0, x - rs), min(w, x + rs + 1)
                 dm = sdisk[a0 - (y - rs):a1 - (y - rs), b0 - (x - rs):b1 - (x - rs)]
                 sat = bool((raw[a0:a1, b0:b1][dm] >= dmax).any())
-            out.append(RawSpot(x=float(x + dx), y=float(y + dy), peak=peak, background=bg, snr=snr,
+            sx_, sy_ = float(x + dx), float(y + dy)
+            plateau_area, oversize = None, False
+            ov = (overrides or {}).get((y, x))
+            if ov is not None:  # merged saturated plateau: centroid, plateau shape
+                sx_, sy_, sat = ov["x"], ov["y"], True
+                elong, plateau_area, oversize = ov["elongation"], ov["area"], ov["oversize"]
+                peak = c3_max  # clipped plateau: the interpolated value adds nothing
+                snr = None if (math.isnan(bg) or std <= 1e-9 * max(1.0, abs(peak))) else float((peak - bg) / std)
+            out.append(RawSpot(x=sx_, y=sy_, peak=peak, background=bg, snr=snr,
                                saturated=sat, log_response=resp, threshold=float(thr),
-                               elongation=elong, scale_ratio=ratio, simulated=bool(sim)))
+                               elongation=elong, scale_ratio=ratio, simulated=bool(sim),
+                               plateau_area_px=plateau_area, plateau_oversize=oversize))
         return out
 
     @staticmethod
@@ -373,7 +518,8 @@ class BigFishEngine:
         closer than ``radius``. Deterministic."""
         if radius <= 0 or len(spots) < 2:
             return spots
-        order = sorted(range(len(spots)), key=lambda i: (-(spots[i].log_response or 0.0), spots[i].y, spots[i].x))
+        order = sorted(range(len(spots)), key=lambda i: (spots[i].plateau_area_px is None,
+                                                          -(spots[i].log_response or 0.0), spots[i].y, spots[i].x))
         xy = np.array([[s.x, s.y] for s in spots])
         tree = cKDTree(xy)
         dead = np.zeros(len(spots), bool)
@@ -384,6 +530,22 @@ class BigFishEngine:
                 if j != i:
                     dead[j] = True
         return [s for s, dd in zip(spots, dead) if not dd]
+
+
+def _interp_at(win: np.ndarray, fy: float, fx: float, fallback: float) -> float:
+    """Bilinear value of ``win`` at the (float) position (fy, fx); NaN neighbours are
+    skipped (weights renormalised); ``fallback`` if all four are NaN."""
+    y0, x0 = int(math.floor(fy)), int(math.floor(fx))
+    ty, tx = fy - y0, fx - x0
+    num = den = 0.0
+    for yy, wy in ((y0, 1 - ty), (y0 + 1, ty)):
+        for xx, wx in ((x0, 1 - tx), (x0 + 1, tx)):
+            if 0 <= yy < win.shape[0] and 0 <= xx < win.shape[1]:
+                v = float(win[yy, xx])
+                if not math.isnan(v) and wy * wx > 0:
+                    num += wy * wx * v
+                    den += wy * wx
+    return num / den if den > 0 else fallback
 
 
 def _parab(a: float, b: float, c: float) -> float:

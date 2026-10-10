@@ -6,14 +6,17 @@ Algorithm
   minimising the summed distance, gated at the tolerance (non-candidates cost a
   large constant and are discarded afterwards). So a maximum number of pairs is
   formed first and, among those, the smallest total distance -- each spot is used
-  at most once and each physical object appears exactly once.
+  at most once in the one-to-one association (a spot is never in two objects; whether
+  two spots are really one physical object, or one object was split into two spots,
+  is NOT decided here and is what review reasons / the reviewer are for).
 * matched pair -> ``yellow`` at the mean of the two positions; unmatched red /
   green -> ``red`` / ``green``.
 
 Ambiguity rule (documented, tested; margins are keyword-only parameters)
 For each matched pair with distance d1, look at every OTHER spot of the opposite
-channel within the tolerance of either member (alternative partner at distance
-d2). The pair is ambiguous when
+channel within tolerance + max(ambiguity_abs_px, ambiguity_rel * tolerance) of either member
+(alternative partner at distance d2; so a 5.9 px pair with a 6.1 px alternative IS ambiguous
+although the alternative is beyond the 6 px matching tolerance). The pair is ambiguous when
     d2 - d1 < ambiguity_abs_px (1.5)      or      d2 < (1 + ambiguity_rel) * d1  (25 %).
 All objects tied together by such alternatives (the pair and the competing
 spot's object) become ``uncertain`` with review reason ``ambiguous_match`` and
@@ -126,9 +129,16 @@ def associate(red: list[RawSpot], green: list[RawSpot], tolerance_px: float, *,
             links.setdefault(a, set()).add(b)
             links.setdefault(b, set()).add(a)
 
+    # alternative partners are searched out to tolerance + margin (a 6.1 px alternative of a
+    # 5.9 px pair is just as plausible as the pair even though it is beyond the tolerance)
+    ext = max(tolerance_px + ambiguity_abs_px, tolerance_px * (1.0 + ambiguity_rel))
+    xi_, xj_, xd_ = ei, ej, ed
+    if nr and ng and tolerance_px > 0 and ext > tolerance_px:
+        rec2 = cKDTree(rxy).sparse_distance_matrix(cKDTree(gxy), ext, output_type="ndarray")
+        xi_, xj_, xd_ = rec2["i"].astype(int), rec2["j"].astype(int), rec2["v"].astype(float)
     adj_r: dict[int, list[tuple[int, float]]] = {}
     adj_g: dict[int, list[tuple[int, float]]] = {}
-    for i, j, d in zip(ei, ej, ed):
+    for i, j, d in zip(xi_, xj_, xd_):
         adj_r.setdefault(int(i), []).append((int(j), float(d)))
         adj_g.setdefault(int(j), []).append((int(i), float(d)))
 

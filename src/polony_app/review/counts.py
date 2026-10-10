@@ -16,10 +16,13 @@ REASON_PRIORITY = {
     ReviewReason.saturated: 1,
     ReviewReason.weak_signal: 2,
     ReviewReason.near_threshold: 2,
-    ReviewReason.dense_cluster: 3,
-    ReviewReason.suspicious_shape: 4,
-    ReviewReason.near_edge: 5,
+    ReviewReason.debris_like: 3,   # below saturated/weak, above dense_cluster: every flagged object must be queued
+    ReviewReason.dense_cluster: 4,
+    ReviewReason.suspicious_shape: 5,
+    ReviewReason.near_edge: 6,
 }
+# Every ReviewReason must have a priority: an object whose ONLY reason is missing here would
+# never reach the review queue (this was the case for debris_like).
 UNCERTAIN_PRIORITY = 0
 
 

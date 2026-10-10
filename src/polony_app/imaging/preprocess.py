@@ -2,7 +2,9 @@
 
 All work is float32. ``valid_mask`` (optional extension of the contract
 signature) keeps pixels outside the counting area -- bright edge structures,
-debris -- from biasing the background estimate of valid pixels.
+debris -- from biasing the background estimate of valid pixels. Saturated raw pixels
+(integer dtype maximum) additionally get weight 0 in the gaussian background estimate,
+inside or outside the mask.
 """
 from __future__ import annotations
 
@@ -58,8 +60,22 @@ def _masked_gaussian(a: np.ndarray, w: np.ndarray, sigma: float) -> np.ndarray:
     return np.ascontiguousarray(up[:h, :wd], dtype=np.float32)
 
 
-def gaussian_background(arr: np.ndarray, sigma_px: float, valid_mask: Optional[np.ndarray] = None) -> np.ndarray:
+def saturated_mask(arr: np.ndarray) -> np.ndarray:
+    """Pixels at the integer dtype maximum (clipped, so their true value is unknown).
+    All-False for float arrays (no saturation information)."""
+    if arr.dtype.kind in "ui":
+        return arr >= np.iinfo(arr.dtype).max
+    return np.zeros(arr.shape, bool)
+
+
+def gaussian_background(arr: np.ndarray, sigma_px: float, valid_mask: Optional[np.ndarray] = None,
+                        exclude: Optional[np.ndarray] = None) -> np.ndarray:
     """Large-sigma gaussian background estimate, robust to spots.
+
+    Pixels in ``exclude`` (saturated raw pixels, see ``correct_background``) get weight 0
+    in the normalised convolution in every case, valid mask or not: a clipped pixel is a
+    lower bound of the true value and would otherwise bias the estimate (e.g. a saturated
+    slide rim lifting the background under adjacent valid pixels).
 
     Pass 1: masked gaussian of all valid pixels. Pass 2: pixels more than 3
     robust sigmas above pass 1 (spots, bright structures) get weight 0 and the
@@ -68,6 +84,8 @@ def gaussian_background(arr: np.ndarray, sigma_px: float, valid_mask: Optional[n
     """
     a = np.asarray(arr, dtype=np.float32)
     w = np.ones(a.shape, np.float32) if valid_mask is None else valid_mask.astype(np.float32)
+    if exclude is not None:
+        w = w * (~exclude).astype(np.float32)
     if not w.any():
         return np.zeros_like(a)
     bg = _masked_gaussian(a, w, sigma_px)
@@ -96,7 +114,8 @@ def correct_background(arr: np.ndarray, p: BackgroundParams,
     if p.method == "gaussian_subtract":
         if p.sigma_px <= 0:
             raise ValueError("sigma_px must be > 0")
-        out = a - gaussian_background(a, float(p.sigma_px), valid_mask)
+        # saturated raw pixels carry weight 0 in the background estimate (in all cases)
+        out = a - gaussian_background(a, float(p.sigma_px), valid_mask, exclude=saturated_mask(arr))
     elif p.method == "white_tophat":
         if p.radius_px < 1:
             raise ValueError("radius_px must be >= 1")
