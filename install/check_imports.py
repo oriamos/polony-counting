@@ -5,6 +5,8 @@ try:
     import bigfish  # noqa: F401
     import fastapi  # noqa: F401
     import openpyxl  # noqa: F401
+    import psycopg  # noqa: F401
+    import psycopg_pool  # noqa: F401
     import scipy  # noqa: F401
     import skimage  # noqa: F401
     import tifffile  # noqa: F401

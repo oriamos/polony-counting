@@ -2,7 +2,8 @@
 
     python -m polony_app.launcher [launch] [--no-browser]   start the server (if needed) + open the browser
     python -m polony_app.launcher stop                       stop the background server
-    python -m polony_app.launcher status                     print whether it runs, where, and which data dir
+    python -m polony_app.launcher status                     print whether it runs, where, which data dir, shared database
+    python -m polony_app.launcher set-database|clear-database  (hidden input) shared Neon/PostgreSQL database in config.json
     python -m polony_app.launcher --self-test                start a throw-away server, GET /api/health and '/', stop
 
 Files (all under the install home, default ~/PolonyReview, or %LOCALAPPDATA%\\PolonyReview on Windows;
@@ -20,6 +21,7 @@ shutdown: a running detection must not be killed); use `stop`.
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import signal
@@ -87,11 +89,25 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    p = config_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    os.replace(tmp, p)
+    """Atomic write, mode 0600 (the file may hold the shared-database password)."""
+    from polony_app.config import save_config_file
+
+    save_config_file(cfg, config_path())
+    _restrict_acl(config_path())
+
+
+def _restrict_acl(p: Path) -> None:
+    """Windows: only the current user may read the config file (no-op elsewhere)."""
+    if not IS_WIN:
+        return
+    user = os.environ.get("USERNAME")
+    if not user:
+        return
+    try:
+        subprocess.run(["icacls", str(p), "/inheritance:r", "/grant:r", f"{user}:(R,W)"], capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def data_dir(cfg: Optional[dict] = None) -> Path:
@@ -108,6 +124,12 @@ _log_ok = True
 
 def log(msg: str) -> None:
     global _log_ok
+    try:  # the database URL (password!) must never reach a log
+        from polony_app.config import redact
+
+        msg = redact(msg, configured_database_url())
+    except Exception:
+        pass
     line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}"
     try:
         print(line, flush=True)
@@ -226,10 +248,16 @@ def server_command(port: int, data: Path) -> list[str]:
     return [exe, "-m", "polony_app", "--data-dir", str(data), "--port", str(port)]
 
 
-def spawn_server(port: int, data: Path, logfile: Path) -> subprocess.Popen:
+def spawn_server(port: int, data: Path, logfile: Path, local_only: bool = False,
+                 config: Optional[Path] = None) -> subprocess.Popen:
+    """local_only: never use a shared database (self-test): ignore POLONY_DATABASE_URL and use `config`."""
     data.mkdir(parents=True, exist_ok=True)
     logfile.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
+    env["POLONY_HOME"] = str(home_dir())
+    env["POLONY_CONFIG"] = str(config or config_path())  # a path, not a secret; the URL itself stays in the file
+    if local_only:
+        env.pop("POLONY_DATABASE_URL", None)
     env["PYTHONPATH"] = str(_src_dir()) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["PYTHONUNBUFFERED"] = "1"
     env["POLONY_DATA_DIR"] = str(data)
@@ -338,6 +366,7 @@ def cmd_launch(no_browser: bool = False) -> int:
             log(f"port {preferred} is used by another program; using {port}")
         data = data_dir(cfg)
         log(f"starting server on {HOST}:{port}, data dir {data}")
+        log(_database_line(cfg, None))
         try:
             proc = spawn_server(port, data, server_log_path())
         except Exception as e:
@@ -405,10 +434,70 @@ def cmd_status() -> int:
     if h is not None:
         print(f"running: http://{HOST}:{port}/  (pid {(info or {}).get('pid', '?')}, version {h.get('version')})")
         print(f"data dir: {data_dir(cfg)}")
+        print(_database_line(cfg, port))
         return 0
     print("not running")
     print(f"data dir: {data_dir(cfg)}")
+    print(_database_line(cfg, None))
     return 3
+
+
+def configured_database_url(cfg: Optional[dict] = None) -> Optional[str]:
+    cfg = load_config() if cfg is None else cfg
+    u = (os.environ.get("POLONY_DATABASE_URL") or "").strip() or cfg.get("database_url")
+    return u.strip() if isinstance(u, str) and u.strip() else None
+
+
+def _database_line(cfg: dict, port: Optional[int]) -> str:
+    url = configured_database_url(cfg)
+    if not url:
+        return "Shared database: Local only"
+    from polony_app.config import mask_url
+
+    shown = mask_url(url)
+    if port is not None:
+        try:
+            with urllib.request.urlopen(f"http://{HOST}:{port}/api/storage", timeout=5) as r:
+                st = json.loads(r.read().decode("utf-8"))
+            state = "connected" if st.get("connected") else "NOT reachable"
+            return f"Shared database: {state} ({shown})"
+        except (OSError, ValueError):
+            pass
+    return f"Shared database: configured ({shown})"
+
+
+def _read_secret(prompt: str) -> str:
+    """Hidden input from the terminal; when stdin is not a terminal, one line from stdin."""
+    if sys.stdin is not None and sys.stdin.isatty():
+        return getpass.getpass(prompt).strip()
+    return (sys.stdin.readline() if sys.stdin is not None else "").strip()
+
+
+def valid_database_url(url: str) -> bool:
+    return url.startswith(("postgresql://", "postgres://")) and "@" in url and len(url) < 2000
+
+
+def cmd_set_database() -> int:
+    url = _read_secret("Paste the shared-database connection string (input is hidden), then Enter: ")
+    if not valid_database_url(url):
+        print("That does not look like a PostgreSQL connection string (postgresql://user:password@host/db). Nothing changed.")
+        return 1
+    cfg = load_config()
+    cfg["database_url"] = url
+    save_config(cfg)
+    log("shared database set")
+    print("Saved. Restart Polony Review (stop, then start) to use it.")
+    return 0
+
+
+def cmd_clear_database() -> int:
+    cfg = load_config()
+    if "database_url" in cfg:
+        cfg.pop("database_url")
+        save_config(cfg)
+    log("shared database cleared")
+    print("Shared database removed: Polony Review uses local storage only. Restart it to apply.")
+    return 0
 
 
 def self_test() -> int:
@@ -416,7 +505,7 @@ def self_test() -> int:
     port = free_port()
     with tempfile.TemporaryDirectory(prefix="polony-selftest-") as td:
         td_p = Path(td)
-        proc = spawn_server(port, td_p / "data", td_p / "server.log")
+        proc = spawn_server(port, td_p / "data", td_p / "server.log", local_only=True, config=td_p / "config.json")
         try:
             if not wait_for_health(port, START_TIMEOUT_S, alive=lambda: proc.poll() is None):
                 print("SELF-TEST FAILED: server did not become healthy")
@@ -427,6 +516,14 @@ def self_test() -> int:
                 return 1
             h = health(port) or {}
             print(f"health ok: version={h.get('version')} big-fish={h.get('bigfish_version')}")
+            try:
+                import psycopg  # noqa: F401
+                import psycopg_pool  # noqa: F401
+
+                print(f"psycopg import ok ({psycopg.__version__})")
+            except ImportError as e:
+                print(f"SELF-TEST FAILED: {e}")
+                return 1
             try:
                 with urllib.request.urlopen(f"http://{HOST}:{port}/", timeout=10) as r:
                     body = r.read().decode("utf-8", "replace")
@@ -448,7 +545,7 @@ def self_test() -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="polony_app.launcher", description=__doc__.split("\n")[0])
-    ap.add_argument("command", nargs="?", default="launch", choices=["launch", "stop", "status"])
+    ap.add_argument("command", nargs="?", default="launch", choices=["launch", "stop", "status", "set-database", "clear-database"])
     ap.add_argument("--no-browser", action="store_true", help="start the server but do not open a browser")
     ap.add_argument("--self-test", action="store_true", help="start a temporary server, check it, stop it")
     a = ap.parse_args(argv)
@@ -459,6 +556,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_stop()
         if a.command == "status":
             return cmd_status()
+        if a.command == "set-database":
+            return cmd_set_database()
+        if a.command == "clear-database":
+            return cmd_clear_database()
         return cmd_launch(no_browser=a.no_browser)
     except Exception as e:  # last resort: the person double-clicked an icon, they must see something
         import traceback
