@@ -130,7 +130,7 @@ def models_dir(data_dir: str | Path) -> Path:
     return Path(data_dir) / "models"
 
 
-def test_lock_path(data_dir: str | Path) -> Path:
+def lock_file_path(data_dir: str | Path) -> Path:
     return datasets_dir(data_dir) / "test_lock.json"
 
 

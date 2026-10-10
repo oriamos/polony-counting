@@ -882,6 +882,7 @@ async function engineSuite() {
   // --- overlay layers
   const before = (await (await fetch(`${BASE}/api/__mock/raw-requests`)).json()).length;
   check('no raw-detections fetched until toggled', before === 0, String(before));
+  await tid('fit').click();
   await tid('engine-layers').locator('summary.btn').click();
   check('legend lists patterns + wording', /long-dash/.test(await tid('layer-legend').innerText()) && /dotted/.test(await tid('layer-legend').innerText()) && /double ring/.test(await tid('layer-legend').innerText()));
   await tid('layer-raw-bigfish').check();
@@ -897,6 +898,7 @@ async function engineSuite() {
   check('show excluded adds faint invalid points', (await page.locator('[data-testid=raw-bigfish] g[data-valid="0"]').count()) === 2);
   check('raw shapes: hollow circle vs triangle', (await page.locator('[data-testid=raw-bigfish] circle').count()) > 0 && (await page.locator('[data-testid=raw-spotiflow] path').count()) > 0);
   await shot('engine-layers');
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
   await setHidden(true);
   check('H hides raw layers too', (await tid('raw-bigfish').count()) === 0);
   await setHidden(false);
@@ -939,7 +941,7 @@ async function engineSuite() {
   check('Approve = confirm; summary Confirmed', true);
 
   // --- QC sample
-  await page.locator('[data-testid=qc-sample] summary').click();
+  await page.locator('[data-testid=qc-sample] > summary').click();
   check('QC explains agreement is not ground truth', /Agreement is not ground truth/.test(await tid('qc-sample').innerText()));
   await tid('qc-fraction').fill('0.5');
   await tid('qc-seed').fill('7');

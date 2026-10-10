@@ -248,7 +248,8 @@ def _config_for_run(run, registry_ids: set[str]) -> Optional[str]:
 
 
 def gather_analysis(store, aid: str, g: Gathered, *, reference: str, tol: float, numbering: str = "index",
-                    registry_ids: Optional[set] = None, configs: Sequence[str] = CONFIGS) -> None:
+                    registry_ids: Optional[set] = None, configs: Sequence[str] = CONFIGS,
+                    run_filter: Optional[set] = None) -> None:
     registry_ids = registry_ids or set()
     with store.view(aid) as st:
         a = st.analysis.model_copy(deep=True)
@@ -360,7 +361,7 @@ def gather_analysis(store, aid: str, g: Gathered, *, reference: str, tol: float,
             runs = list(runs_fn(aid))
             latest: dict = {}
             for run in runs:
-                if run.status != "ok":
+                if run.status != "ok" or (run_filter and run.run_id not in run_filter):
                     continue
                 cfg = _config_for_run(run, registry_ids)
                 if cfg in wanted:
@@ -420,12 +421,22 @@ def acceptance_summary(acc: dict) -> dict:
 
 def evaluate_analyses(store, analysis_ids: Sequence[str], *, reference: str = "analysis", tolerance_px: float = DEFAULT_TOLERANCE_PX,
                       configs: Sequence[str] = CONFIGS, numbering: str = "index", registry_ids: Optional[set] = None) -> dict:
+    """``analysis_ids`` entries are ``<analysis id>`` or ``<analysis id>:<engine run id>[,<run id>...]`` (restrict the
+    engine-based configurations to those runs)."""
     g = Gathered()
+    filt: dict = defaultdict(set)
+    plain = []
+    for ent in analysis_ids:
+        aid, _, runs = str(ent).partition(":")
+        plain.append(aid)
+        if runs:
+            filt[aid] |= {r for r in runs.split(",") if r}
+    analysis_ids = plain
     for aid in sorted(set(analysis_ids)):
         if not store.exists(aid):
             raise MLError(f"analysis '{aid}' not found")
         gather_analysis(store, aid, g, reference=reference, tol=tolerance_px, numbering=numbering,
-                        registry_ids=registry_ids, configs=configs)
+                        registry_ids=registry_ids, configs=configs, run_filter=filt.get(aid))
     # unknown reviewers are one anonymous session each; several analyses by 'unknown' still cannot establish 2 annotators
     n_ann = len({r for r in g.reviewers if not r.startswith("unknown:")}) or (1 if g.reviewers else 0)
     report = {"generated_at": utc_now(), "reference": reference, "tolerance_px": tolerance_px, "numbering": numbering,

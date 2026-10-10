@@ -182,6 +182,13 @@ def _detector_kwargs(fn, aid: str, a: Analysis) -> dict:
         return {}
     accepts_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
     want = {"analysis_id": aid, "image_sha256": dict(a.image.sha256) if a.image else {}}
+    # Engine runs are recorded against the channel index of each role (= the TIFF page of a 2-page stack) and the
+    # role is passed ONLY from the user-confirmed mapping (never inferred from page order).
+    if a.image is not None:
+        by_role = {c.role.value: c for c in a.image.channels if c.role is not None and c.role_confirmed}
+        if "red" in by_role and "green" in by_role:
+            want["pages"] = (int(by_role["red"].index), int(by_role["green"].index))
+            want["roles"] = ("red", "green")
     return {k: v for k, v in want.items() if k in params or accepts_kw}
 
 
@@ -756,10 +763,14 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             red, green = images.raw_pair(st)
             regions = [r.model_copy(deep=True) for r in st.analysis.regions]
             align = (int(st.analysis.alignment_dy), int(st.analysis.alignment_dx))
+            from polony_app.detection import pipeline as _plp
+
+            extra_kw = _detector_kwargs(_plp.run_detection, aid, st.analysis)
         from polony_app.detection import pipeline
 
         res = pipeline.run_detection(red, green, regions, body, lambda f, m="": None,
-                                     lambda: False, window=body.preview_window, alignment=align)
+                                     lambda: False, window=body.preview_window, alignment=align,
+                                     **extra_kw)
         return {"objects": [o.model_dump(mode="json") for o in res.objects], "notes": list(res.notes)}
 
     @api.get("/jobs/{jid}")

@@ -169,6 +169,7 @@ def test_hybrid_is_deterministic(monkeypatch, tmp_path):
     sc = syn.default_scene()
     fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=fake_points(drop=[(60, 50)], add=[(30.0, 270.0)]))
     a = run(sc, req(EngineChoice.hybrid), spotiflow_engine=fs.engine())
+    fs.points_fn = fake_points(drop=[(60, 50)], add=[(30.0, 270.0)])       # fresh call counter
     b = run(sc, req(EngineChoice.hybrid), spotiflow_engine=fs.engine())
     assert [o.model_dump() for o in a.objects] == [o.model_dump() for o in b.objects]
     assert [d.model_dump(exclude={"run_id"}) for d in a.raw_detections] == [d.model_dump(exclude={"run_id"}) for d in b.raw_detections]
@@ -271,3 +272,19 @@ def test_hybrid_window_preview(monkeypatch, tmp_path):
     assert any("preview window with Spotiflow" in n for n in res.notes)
     # the model input is limited to the (padded) window: never larger than the page
     assert all(c["shape"][0] <= 300 and c["shape"][1] <= 400 for c in fs.calls)
+
+
+def test_spotiflow_only_measurement_matches_bigfish_measurement_code():
+    from polony_app.detection.bigfish_engine import BigFishEngine
+    from polony_app.detection.two_engine import measure_spots_at
+    from polony_app.imaging.preprocess import correct_background
+    sc = syn.default_scene()
+    eng = BigFishEngine()
+    measured = correct_background(sc.red, DP.background.model_copy(update={"clip_negative": False}), None)
+    corrected = np.maximum(measured, 0.0)
+    (bf_spot,) = [s for s in eng.detect(corrected, DP, None, raw=sc.red, measure=measured)
+                  if abs(s.x - 60) < 2 and abs(s.y - 50) < 2]
+    (m,) = measure_spots_at(eng, DP, corrected, measured, np.ones(sc.red.shape, bool), sc.red, [60.3], [50.2], 10.0)
+    assert (m.x, m.y) == (60.3, 50.2)                       # Spotiflow position kept, not refined
+    assert m.peak == pytest.approx(bf_spot.peak, rel=0.03) and m.snr > 20
+    assert m.background == pytest.approx(bf_spot.background, abs=5.0) and not m.saturated

@@ -28,7 +28,7 @@ from polony_app.legacy_import.splits import (
     group_key,
 )
 
-from .common import MLError, atomic_write_text, hash_obj, pretty_json, test_lock_path, utc_now
+from .common import MLError, atomic_write_text, hash_obj, pretty_json, lock_file_path, utc_now
 
 LOCK_SCHEMA = "polony-ml-test-lock"
 _SLIDE_META = re.compile(r"^(?P<sample>.+)_(?P<rep>[A-Za-z])$")
@@ -103,7 +103,7 @@ def _record(src: SourceInfo, ident: dict, reserved: Optional[str]) -> ImageRecor
 
 # ------------------------------------------------------------------ lock
 def load_lock(data_dir: str | Path) -> Optional[dict]:
-    p = test_lock_path(data_dir)
+    p = lock_file_path(data_dir)
     if not p.is_file():
         return None
     try:
@@ -159,7 +159,7 @@ def write_lock(data_dir: str | Path, *, snapshot: str, test_content_sha256: str,
         lock["history"].append({"replaced_at": utc_now(), "reason": reason, "previous_snapshot": existing.get("snapshot"),
                                 "previous_lock_sha256": lock_fingerprint(existing)})
     lock["lock_sha256"] = lock_fingerprint(lock)
-    atomic_write_text(test_lock_path(data_dir), pretty_json(lock))
+    atomic_write_text(lock_file_path(data_dir), pretty_json(lock))
     return lock
 
 
