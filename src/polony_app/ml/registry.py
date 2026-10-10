@@ -14,12 +14,41 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .common import MLError, atomic_write_text, file_lock, models_dir, pretty_json, registry_path, sha256_file, utc_now
+from .common import (DEFAULT_NORMALISER, MLError, atomic_write_text, check_downscale, file_lock, models_dir, pretty_json,
+                     registry_path, sha256_file, utc_now)
 
 REGISTRY_SCHEMA = 1
 DEFAULT_PRETRAINED = "general"
 STATUSES = ("candidate", "active", "retired")
 PRIMARY_METRIC = "f1"
+PROMOTION_TOLERANCE = "10"          # px; promotion compares F1 at this matching tolerance (evaluations carry 5 / 10 / 15)
+LEGACY_NORMALISER = "legacy_per_crop"   # models trained before page-level normalisation existed
+
+
+def make_config(downscale: int = 1, normaliser: str = DEFAULT_NORMALISER) -> dict:
+    """The inference configuration a model is trained / evaluated / run at."""
+    return {"downscale": check_downscale(downscale), "normaliser": normaliser}
+
+
+def config_of(entry: Optional[dict], default: Optional[dict] = None) -> Optional[dict]:
+    """Recorded inference configuration of a registry entry. A fine-tuned model without one (trained by an earlier version
+    of this tool, at native scale on per-crop normalised data) is reported as such, never silently as 'current'."""
+    if entry is None:
+        return default
+    c = entry.get("inference_config")
+    if c:
+        return make_config(c.get("downscale", 1), c.get("normaliser", DEFAULT_NORMALISER))
+    if entry.get("kind") == "finetuned":
+        return make_config(1, LEGACY_NORMALISER)
+    return default
+
+
+def same_config(a: Optional[dict], b: Optional[dict]) -> bool:
+    return bool(a) and bool(b) and (int(a["downscale"]), a["normaliser"]) == (int(b["downscale"]), b["normaliser"])
+
+
+def describe_config(c: Optional[dict]) -> str:
+    return "unrecorded" if not c else f"downscale {c['downscale']}, normaliser {c['normaliser']}"
 
 
 def pretrained_id(name: str) -> str:
@@ -41,7 +70,27 @@ class ModelRef:
     status: Optional[str] = None
     base: Optional[str] = None
     dataset_version: Optional[str] = None
+    # configuration the model was TRAINED at ({downscale, normaliser}); None for official pretrained models (no recorded one).
+    # The engine / app compares it with the analysis' own downscale / normaliser and warns on a difference.
+    inference_config: Optional[dict] = None
     info: dict = field(default_factory=dict)
+
+    @property
+    def trained_downscale(self) -> Optional[int]:
+        return None if not self.inference_config else int(self.inference_config["downscale"])
+
+    def config_warning(self, downscale: int, normaliser: Optional[str] = None) -> Optional[str]:
+        """Text for the app when its inference settings differ from the model's training configuration, else None."""
+        c = self.inference_config
+        if not c:
+            return None
+        diffs = []
+        if int(downscale) != int(c["downscale"]):
+            diffs.append(f"downscale {downscale} (trained at {c['downscale']})")
+        if normaliser is not None and normaliser != c["normaliser"]:
+            diffs.append(f"normaliser '{normaliser}' (trained with '{c['normaliser']}')")
+        return (f"model '{self.name}' is run with " + " and ".join(diffs) + ": results may be much worse than its evaluation"
+                if diffs else None)
 
 
 class Registry:
@@ -133,10 +182,14 @@ class Registry:
         evs = [e for e in self.get(model_id).get("evaluations", []) if e.get("lock_sha256") == lock_sha256]
         return evs[-1] if evs else None
 
-    def promote(self, model_id: str, *, lock_sha256: Optional[str] = None, force: bool = False, reason: str = "") -> dict:
+    def promote(self, model_id: str, *, lock_sha256: Optional[str] = None, force: bool = False, reason: str = "",
+                app_config: Optional[dict] = None, acknowledge_config: bool = False) -> dict:
         """Make ``model_id`` the active model. Requires a locked-test evaluation of the candidate AND of the model it
-        replaces (the active one, else the app default pretrained 'general'), and that the candidate is not worse on F1.
-        ``force`` bypasses these checks but needs a recorded reason."""
+        replaces (the active one, else the app default pretrained 'general'), each evaluated at ITS OWN recorded
+        configuration (downscale + normaliser), and that the candidate is not worse on F1 (at 10 px).
+        ``app_config`` = the app's current inference configuration: a candidate trained at a different one is refused
+        unless ``acknowledge_config`` (the researcher accepts that the analyses must then be run at the model's own
+        downscale). ``force`` bypasses all checks but needs a recorded reason."""
         if force and not reason.strip():
             raise MLError("--force requires --reason (the override is recorded in the registry)")
 
@@ -152,20 +205,36 @@ class Registry:
             lock = lock_sha256
             if not lock:
                 problems.append("no locked test set exists (ml split --lock-test); promotion needs evaluation on it")
-            comparison: dict = {"candidate": model_id, "baseline": base_id, "lock_sha256": lock}
+            base = d["models"].get(base_id)
+            cfg_c = config_of(cand, app_config or make_config())
+            cfg_b = config_of(base, app_config or make_config())
+            comparison: dict = {"candidate": model_id, "baseline": base_id, "lock_sha256": lock,
+                                "candidate_config": cfg_c, "baseline_config": cfg_b, "app_config": app_config,
+                                "config_acknowledged": bool(acknowledge_config)}
+            if app_config is None:
+                comparison["app_config_note"] = "the app's current inference configuration was not supplied: not compared"
+            elif not same_config(cfg_c, app_config):
+                msg = (f"'{model_id}' was trained/evaluated at {describe_config(cfg_c)} but the app's current inference "
+                       f"configuration is {describe_config(app_config)}; promoting it would make the app run it outside the "
+                       "configuration it was validated at")
+                if acknowledge_config:
+                    comparison["config_mismatch_acknowledged"] = msg
+                else:
+                    problems.append(msg + " (acknowledge with --acknowledge-config and set the analyses to the model's downscale)")
             if lock:
-                ev_c = _find_eval(cand, lock)
+                ev_c = _find_eval(cand, lock, cfg_c)
                 if ev_c is None:
-                    problems.append(f"'{model_id}' has no evaluation on the current locked test set "
+                    problems.append(f"'{model_id}' has no evaluation on the current locked test set at {describe_config(cfg_c)} "
                                     f"(run: ml eval-model --model {model_id})")
-                base = d["models"].get(base_id)
-                ev_b = _find_eval(base, lock) if base else None
+                ev_b = _find_eval(base, lock, cfg_b) if base else None
                 if ev_b is None:
-                    problems.append(f"the model it would replace ('{base_id}') has no evaluation on the locked test set, so "
-                                    f"there is nothing to compare against (run: ml eval-model --model {base_id})")
+                    problems.append(f"the model it would replace ('{base_id}') has no evaluation on the locked test set at its "
+                                    f"own configuration ({describe_config(cfg_b)}), so there is nothing to compare against "
+                                    f"(run: ml eval-model --model {base_id} --downscale {cfg_b['downscale']})")
                 if ev_c and ev_b:
-                    mc, mb = ev_c["metrics"], ev_b["metrics"]
-                    comparison.update({"candidate_metrics": mc, "baseline_metrics": mb,
+                    mc, mb = _metrics_at(ev_c, PROMOTION_TOLERANCE), _metrics_at(ev_b, PROMOTION_TOLERANCE)
+                    comparison.update({"tolerance_px": float(PROMOTION_TOLERANCE),
+                                       "candidate_metrics": mc, "baseline_metrics": mb,
                                        "delta": {k: (None if mc.get(k) is None or mb.get(k) is None else mc[k] - mb[k])
                                                  for k in ("precision", "recall", "f1", "mean_match_distance_px")}})
                     fc, fb = mc.get(PRIMARY_METRIC), mb.get(PRIMARY_METRIC)
@@ -207,11 +276,19 @@ class Registry:
         return self._mutate(fn)
 
 
-def _find_eval(entry: Optional[dict], lock_sha256: str) -> Optional[dict]:
+def _find_eval(entry: Optional[dict], lock_sha256: str, config: Optional[dict] = None) -> Optional[dict]:
+    """Latest evaluation on the lock; with ``config`` only one made at that downscale + normaliser."""
     if not entry:
         return None
-    evs = [e for e in entry.get("evaluations", []) if e.get("lock_sha256") == lock_sha256 and e.get("metrics")]
+    evs = [e for e in entry.get("evaluations", []) if e.get("lock_sha256") == lock_sha256 and e.get("metrics")
+           and (config is None or same_config(e.get("config"), config))]
     return evs[-1] if evs else None
+
+
+def _metrics_at(ev: dict, tol: str) -> dict:
+    """Metrics of an evaluation at matching tolerance ``tol`` px (evaluations carry 5 / 10 / 15 side by side)."""
+    bt = (ev["metrics"].get("by_tolerance") or {}).get(tol)
+    return dict(ev["metrics"], **bt) if bt else ev["metrics"]
 
 
 # ---------------------------------------------------------------------- engine entry point
@@ -243,5 +320,6 @@ def resolve_model(name: str, data_dir: str | Path) -> ModelRef:
     if e.get("weights_sha256") and sha256_file(w) != e["weights_sha256"]:
         raise MLError(f"weights of registry model '{name}' do not match the recorded sha256 (file modified): {w}")
     return ModelRef(name, "finetuned", name, path, weights_sha256=e.get("weights_sha256"), status=e.get("status"),
-                    base=e.get("base"), dataset_version=e.get("dataset_version"),
-                    info={"seed": e.get("seed"), "hyperparameters": e.get("hyperparameters")})
+                    base=e.get("base"), dataset_version=e.get("dataset_version"), inference_config=config_of(e),
+                    info={"seed": e.get("seed"), "hyperparameters": e.get("hyperparameters"),
+                          "lo_hi_policy": e.get("lo_hi_policy")})

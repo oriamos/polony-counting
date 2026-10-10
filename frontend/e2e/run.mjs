@@ -947,13 +947,17 @@ async function engineSuite() {
 
   // --- QC sample
   await page.locator('[data-testid=qc-sample] > summary').click();
-  check('QC explains agreement is not ground truth', /Agreement is not ground truth/.test(await tid('qc-sample').innerText()));
-  await tid('qc-fraction').fill('0.5');
+  check('QC explains agreement is not ground truth', /Agreement is not ground truth/.test(await tid('qc-sample').innerText()) && /agreement ≠ ground truth/.test(await tid('qc-sample').innerText()));
+  check('QC default sample size is 40', (await tid('qc-n').inputValue()) === '40');
+  check('QC shows no bound before review', /No QC sample drawn yet/.test(await tid('qc-bound').innerText()));
+  await tid('qc-n').fill('3');
   await tid('qc-seed').fill('7');
   await tid('qc-run').click();
   await page.waitForFunction(() => document.querySelectorAll('[data-testid^="queue-o-"]').length > 0 && /QC sample/.test(document.querySelector('[data-testid=review-tab]').innerText));
   reqs = await (await fetch(`${BASE}/api/__mock/raw-requests`)).json();
-  check('QC sample posts fraction + seed, queue gains QC items', reqs.some((u) => u.startsWith('qc') && /"fraction":0.5/.test(u) && /"seed":7/.test(u)));
+  check('QC sample posts a fixed n + seed (no fraction), queue gains QC items', reqs.some((u) => u.startsWith('qc') && /"n":3/.test(u) && /"seed":7/.test(u) && !/fraction/.test(u)));
+  await page.waitForFunction(() => /none reviewed yet/.test(document.querySelector('[data-testid=qc-bound]')?.innerText ?? ''));
+  check('QC reports the sample size before review (no bound yet)', /QC sample of \d+ agreements: none reviewed yet/.test(await tid('qc-bound').innerText()));
   await shot('engine-review');
   await reset();
 }

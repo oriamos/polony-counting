@@ -10,17 +10,20 @@ from polony_app.ml.registry import DEFAULT_PRETRAINED, Registry, pretrained_id, 
 LOCK = "a" * 64
 
 
-def ev(f1, lock=LOCK, p=None, r=None):
-    return {"lock_sha256": lock, "params": {}, "label": "preliminary",
+CFG = {"downscale": 1, "normaliser": "valid_unsaturated"}
+
+
+def ev(f1, lock=LOCK, p=None, r=None, config=CFG):
+    return {"lock_sha256": lock, "params": {}, "label": "preliminary", "config": config,
             "metrics": {"precision": p or f1, "recall": r or f1, "f1": f1, "mean_match_distance_px": 1.0}}
 
 
-def add_ft(reg, data_dir, mid, weights=b"w"):
+def add_ft(reg, data_dir, mid, weights=b"w", config=CFG):
     d = models_dir(data_dir) / mid
     d.mkdir(parents=True)
     (d / "best.pt").write_bytes(weights)
     reg.add({"id": mid, "kind": "finetuned", "base": {"name": "general"}, "dataset_version": "ds-1", "artifact": mid,
-             "weights_file": "best.pt", "weights_sha256": sha256_file(d / "best.pt")})
+             "weights_file": "best.pt", "weights_sha256": sha256_file(d / "best.pt"), "inference_config": config})
     return d
 
 
@@ -134,3 +137,80 @@ def test_unknown_model_message(tmp_path, reg):
         reg.promote("nope", lock_sha256=LOCK)
     with pytest.raises(MLError, match="not in the registry"):
         reg.get("nope")
+
+
+# ---------------------------------------------------------------- configuration identity (downscale + normaliser)
+def test_resolve_model_exposes_the_training_configuration(tmp_path, reg):
+    add_ft(reg, tmp_path, "ft-4", config={"downscale": 4, "normaliser": "valid_unsaturated"})
+    r = resolve_model("ft-4", tmp_path)
+    assert r.inference_config == {"downscale": 4, "normaliser": "valid_unsaturated"} and r.trained_downscale == 4
+    assert "downscale 1 (trained at 4)" in r.config_warning(1, "valid_unsaturated")
+    assert "normaliser 'auto'" in r.config_warning(4, "auto")
+    assert r.config_warning(4, "valid_unsaturated") is None
+    p = resolve_model("general", tmp_path)
+    assert p.inference_config is None and p.trained_downscale is None and p.config_warning(4) is None
+
+
+def test_legacy_model_without_recorded_configuration_is_not_silently_current(tmp_path, reg):
+    d = models_dir(tmp_path) / "ft-old"
+    d.mkdir(parents=True)
+    (d / "best.pt").write_bytes(b"w")
+    reg.add({"id": "ft-old", "kind": "finetuned", "artifact": "ft-old", "weights_file": "best.pt",
+             "weights_sha256": sha256_file(d / "best.pt")})
+    assert resolve_model("ft-old", tmp_path).inference_config == {"downscale": 1, "normaliser": "legacy_per_crop"}
+
+
+def _setup_pair(tmp_path, reg, cand_cfg, base_cfg_eval=CFG, cand_eval_cfg=None):
+    add_ft(reg, tmp_path, "ft-1", config=cand_cfg)
+    reg.ensure_pretrained("general")
+    reg.add_evaluation("pretrained-general", ev(0.70, config=base_cfg_eval))
+    reg.add_evaluation("ft-1", ev(0.80, config=cand_eval_cfg or cand_cfg))
+
+
+def test_promotion_refused_when_candidate_config_differs_from_the_app(tmp_path, reg):
+    c4 = {"downscale": 4, "normaliser": "valid_unsaturated"}
+    _setup_pair(tmp_path, reg, c4, base_cfg_eval=CFG)
+    with pytest.raises(MLError, match="downscale 4, normaliser valid_unsaturated.*app's current inference configuration is downscale 1"):
+        reg.promote("ft-1", lock_sha256=LOCK, app_config=CFG)
+    assert reg.active_id() is None
+    e = reg.promote("ft-1", lock_sha256=LOCK, app_config=CFG, acknowledge_config=True)
+    cmp = e["promotion"]["comparison"]
+    assert reg.active_id() == "ft-1" and cmp["candidate_config"] == c4 and cmp["baseline_config"] == CFG
+    assert cmp["config_acknowledged"] and "config_mismatch_acknowledged" in cmp
+
+
+def test_promotion_refused_when_the_normaliser_differs_from_the_app_default(tmp_path, reg):
+    _setup_pair(tmp_path, reg, CFG)
+    with pytest.raises(MLError, match="normaliser auto"):
+        reg.promote("ft-1", lock_sha256=LOCK, app_config={"downscale": 1, "normaliser": "auto"})
+    assert reg.promote("ft-1", lock_sha256=LOCK, app_config=CFG)["status"] == "active"
+
+
+def test_each_model_is_compared_at_its_own_recorded_configuration(tmp_path, reg):
+    c4 = {"downscale": 4, "normaliser": "valid_unsaturated"}
+    # the candidate was evaluated at a configuration other than its own: that evaluation does not count
+    _setup_pair(tmp_path, reg, c4, cand_eval_cfg=CFG)
+    with pytest.raises(MLError, match="no evaluation on the current locked test set at downscale 4"):
+        reg.promote("ft-1", lock_sha256=LOCK)
+    reg.add_evaluation("ft-1", ev(0.80, config=c4, p=0.8))
+    e = reg.promote("ft-1", lock_sha256=LOCK)            # app configuration not supplied: not compared, and said so
+    assert e["status"] == "active" and "not compared" in e["promotion"]["comparison"]["app_config_note"]
+    # the baseline pretrained model counts at the app's configuration; one made at another downscale is not a comparison
+    reg2 = Registry(tmp_path / "other")
+    add_ft(reg2, tmp_path / "other", "ft-1", config=c4)
+    reg2.ensure_pretrained("general")
+    reg2.add_evaluation("pretrained-general", ev(0.70, config=CFG))
+    reg2.add_evaluation("ft-1", ev(0.80, config=c4))
+    with pytest.raises(MLError, match=r"downscale 4.*nothing to compare against.*--downscale 4"):
+        reg2.promote("ft-1", lock_sha256=LOCK, app_config=c4)
+
+
+def test_promotion_compares_f1_at_10_px(tmp_path, reg):
+    add_ft(reg, tmp_path, "ft-1")
+    reg.ensure_pretrained("general")
+    cand = ev(0.9)
+    cand["metrics"]["by_tolerance"] = {"5": {"f1": 0.9}, "10": {"f1": 0.60}, "15": {"f1": 0.9}}
+    reg.add_evaluation("pretrained-general", ev(0.70))
+    reg.add_evaluation("ft-1", cand)
+    with pytest.raises(MLError, match="WORSE"):
+        reg.promote("ft-1", lock_sha256=LOCK)

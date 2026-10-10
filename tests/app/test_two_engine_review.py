@@ -76,10 +76,61 @@ def test_qc_sample_deterministic_idempotent_and_eligibility():
             consensus.mark_qc_sample(st, bad, 1)
 
 
-def test_qc_fraction_extremes():
-    objs = [cobj(f"a{i}", 10 + i, 10, CS.agreement) for i in range(20)]
-    assert consensus.mark_qc_sample(make_state(objs, [counting()]), 0.0, 1)["marked"] == 0
-    assert consensus.mark_qc_sample(make_state([o.model_copy(deep=True) for o in objs], [counting()]), 1.0, 1)["marked"] == 20
+def test_qc_fixed_size_sample_and_fraction_compat():
+    objs = [cobj(f"a{i}", 10 + i % 100, 10 + 5 * (i // 100), CS.agreement) for i in range(300)]
+    mk = lambda: make_state([o.model_copy(deep=True) for o in objs], [counting()])
+    r = consensus.mark_qc_sample(mk(), None, 1)
+    assert r["marked"] == r["n"] == 40 and r["eligible"] == 300                      # default fixed n = 40
+    assert consensus.mark_qc_sample(mk(), None, 1, n=17)["marked"] == 17
+    assert consensus.mark_qc_sample(mk(), None, 1, n=1000)["marked"] == 300           # clamped to N eligible
+    assert consensus.mark_qc_sample(mk(), None, 1, n=0)["marked"] == 1                # clamped to >= 1
+    # compatibility: fraction maps to max(40, ceil(fraction * N)); the old 5 % can no longer shrink the sample
+    assert consensus.mark_qc_sample(mk(), 0.05, 1)["marked"] == 40
+    assert consensus.mark_qc_sample(mk(), 0.5, 1)["marked"] == 150
+    assert consensus.mark_qc_sample(mk(), 0.0, 1)["marked"] == 40
+    assert consensus.mark_qc_sample(mk(), 0.9, 1, n=5)["marked"] == 5                 # explicit n wins
+    small = make_state([o.model_copy(deep=True) for o in objs[:20]], [counting()])
+    assert consensus.mark_qc_sample(small, 1.0, 1)["marked"] == 20
+    assert consensus.mark_qc_sample(make_state([], [counting()]), None, 1)["marked"] == 0
+    # nested samples: a larger n with the same seed is a superset (one random order)
+    s1, s2 = mk(), mk()
+    consensus.mark_qc_sample(s1, None, 5, n=20)
+    consensus.mark_qc_sample(s2, None, 5, n=60)
+    ids = lambda st: {o.id for o in st.analysis.objects if R.qc_sample in o.review_reasons}
+    assert ids(s1) < ids(s2)
+    with pytest.raises(ReviewError):
+        consensus.mark_qc_sample(mk(), None, 1, n=-3)
+
+
+def test_finite_population_sample_sizes_for_plus_minus_005():
+    # p = 0.153 (pooled agreement error), 95 %, finite-population correction
+    assert [consensus.n_for_margin(N) for N in (24, 49, 67, 67, 203, 296)] == [22, 40, 51, 51, 101, 120]
+    assert consensus.n_for_margin(0) == 0 and consensus.n_for_margin(5) == 5
+    assert consensus.n_for_margin(296, p=0.5) > consensus.n_for_margin(296)
+
+
+def test_clopper_pearson_known_values():
+    lo, hi = consensus.clopper_pearson(0, 40)
+    assert lo == 0.0 and abs(hi - 0.0881) < 1e-3                 # 1 - 0.025^(1/40)
+    lo, hi = consensus.clopper_pearson(6, 40)
+    assert abs(lo - 0.0571) < 2e-3 and abs(hi - 0.2984) < 2e-3
+    assert consensus.clopper_pearson(40, 40)[1] == 1.0 and consensus.clopper_pearson(0, 0) == (0.0, 1.0)
+
+
+def test_qc_status_reports_interval_after_review():
+    objs = [cobj(f"a{i}", 10 + i, 10, CS.agreement) for i in range(60)]
+    st = make_state(objs, [counting()])
+    r = consensus.mark_qc_sample(st, None, 3, n=20)
+    assert r["qc"]["sample_size"] == 20 and r["qc"]["reviewed"] == 0 and r["qc"]["ci95"] is None
+    ids = sorted(o.id for o in st.analysis.objects if R.qc_sample in o.review_reasons)
+    engine.apply_action(st, "delete", {"object_ids": ids[:3]})            # 3 sampled agreements rejected
+    engine.apply_action(st, "confirm", {"object_ids": ids[3:]})           # 17 confirmed
+    q = consensus.consensus_summary(st)["qc"]
+    assert (q["sample_size"], q["reviewed"], q["confirmed"], q["rejected"], q["pending"]) == (20, 20, 17, 3, 0)
+    lo, hi = consensus.clopper_pearson(3, 20)
+    assert q["error_rate"] == 0.15 and q["ci95"] == [lo, hi] and q["seed"] == 3
+    assert q["population_agreements"] == 60 and q["n_for_margin_0_05"] == consensus.n_for_margin(60)
+    assert "not ground truth" in q["note"] and "NOT reviewed" in q["note"]
 
 
 def test_manual_add_is_human_added_on_its_channels_and_summary_counts():
@@ -133,3 +184,11 @@ def test_merge_deletions_are_not_rejections():
     engine.apply_action(st, "merge", {"object_ids": ["m1", "m2"]})
     s = consensus.consensus_summary(st)
     assert s["total"]["human_rejected"] == 0 and s["total"]["rejected"] == 0
+
+
+def test_debris_like_bigfish_only_is_queued_with_saturated_priority():
+    from polony_app.review.counts import object_priority
+    both = cobj("both", 10, 10, CS.bigfish_only, review_reasons=[R.bigfish_only, R.debris_like])
+    bf = cobj("bf", 11, 10, CS.bigfish_only, review_reasons=[R.bigfish_only])
+    deb = cobj("deb", 12, 10, CS.agreement, review_reasons=[R.debris_like])
+    assert object_priority(both) == 1 and object_priority(bf) == 2 and object_priority(deb) == 4

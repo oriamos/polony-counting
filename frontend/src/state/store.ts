@@ -170,7 +170,7 @@ export interface AppState {
   prepareModel: (name: string) => Promise<void>;
   setLayer: (p: Partial<EngineLayers>) => void;
   loadRaw: () => Promise<void>;
-  qcSample: (fraction: number, seed: number) => Promise<void>;
+  qcSample: (n: number, seed: number) => Promise<void>;
 }
 
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
@@ -579,12 +579,12 @@ export const useApp = create<AppState>((set, get) => ({
       }
   },
 
-  qcSample: async (fraction, seed) => {
+  qcSample: async (n, seed) => {
     const a = get().current;
     if (!a) return;
     try {
-      const r = await api.qcSample(a.id, fraction, seed);
-      get().toast('info', `${r.marked} agreement candidate${r.marked === 1 ? '' : 's'} marked for QC review`);
+      const r = await api.qcSample(a.id, n, seed);
+      get().toast('info', `${r.marked} of ${r.eligible} unreviewed agreement candidate${r.eligible === 1 ? '' : 's'} marked for QC review`);
       await get().refreshDerived();
     } catch (e) {
       get().toast('error', `QC sample: ${errText(e)}`);

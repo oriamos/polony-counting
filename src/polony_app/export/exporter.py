@@ -11,6 +11,7 @@ from pathlib import Path
 
 import polony_app
 from polony_app.export import lab
+from polony_app.review.consensus import QC_NOTE, qc_status
 from polony_app.review.counts import compute_counts, counted_objects
 from polony_app.review.engine import (
     action_log_summary,
@@ -335,6 +336,9 @@ def provenance_dict(state: AnalysisState, originals_dir: str | Path | None = Non
                    "slide": counts["slide"].model_dump(mode="json")},
         "engine_runs": [r.model_dump(mode="json") for r in (engine_runs or [])],  # model name/version/checksum, params, preprocessing, device, errors
         "engine_scores_note": SCORE_NOTE,
+        # agreement QC: confirmed/rejected among the SAMPLED agreements + exact 95 % interval (null until reviewed)
+        "agreement_qc": qc_status(state),
+        "agreement_review_note": QC_NOTE,
         "action_log_summary": action_log_summary(state),
         "events": list(state.events),  # complete: mapping/alignment/settings/undo/redo/reopen, never truncated
         "files_note": {
@@ -441,6 +445,13 @@ TWO-ENGINE DETECTION
   engine's own coordinates and score. AGREEMENT IS NOT TRUTH: two engines can make the same
   mistake, and an engine that missed a spot is not evidence that the spot is absent. Nothing is
   removed because one engine did not see it; disagreements are reviewed by a person first.
+  AGREEMENT OBJECTS ARE NOT REVIEWED UNLESS SAMPLED. The optional agreement QC sample is a fixed number
+  of agreement objects per slide (default 40), drawn deterministically from (seed, object id); objects
+  carrying the review reason qc_sample are the sample. provenance.json (agreement_qc) reports, for the
+  sampled agreements, confirmed vs rejected and the exact Clopper-Pearson 95 % interval of the
+  agreement error rate. That interval bounds the error rate of the UNSAMPLED agreements only under
+  random sampling (one seed per slide) and only for the agreements present when the sample was drawn;
+  it says nothing about spots both engines missed. Agreement is not ground truth.
   A MODEL SCORE IS NOT A PROBABILITY (Spotiflow: raw model score; Big-FISH: LoG response in noise
   units): neither is calibrated and neither is a confidence percentage. human_rejected (a candidate a
   user deleted) is derived from the action log and not stored on objects.

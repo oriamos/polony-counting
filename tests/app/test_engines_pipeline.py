@@ -165,6 +165,24 @@ def test_hybrid_end_to_end(monkeypatch, tmp_path):
     assert sm[(1, "green")].agreement == 8
 
 
+def test_consensus_tolerance_follows_the_spotiflow_downscale_unless_explicit(monkeypatch, tmp_path):
+    from polony_app.schemas import SpotiflowParams
+    sc = syn.default_scene()
+    none = lambda a: (np.zeros((0, 2)), np.zeros(0))
+
+    count = iter(range(100))
+
+    def note(**kw):
+        fs = FakeSpotiflow(monkeypatch, tmp_path / f"t{next(count)}", points_fn=none)
+        r = run(sc, req(EngineChoice.hybrid, **kw), spotiflow_engine=fs.engine())
+        return next(n for n in r.notes if "consensus (tolerance" in n)
+    assert "tolerance 4 px" in note()                                                          # downscale 1: the 4 px default
+    n8 = note(spotiflow=SpotiflowParams(downscale=8))
+    assert "tolerance 8 px" in n8 and "raised" in n8
+    assert "tolerance 3 px" in note(spotiflow=SpotiflowParams(downscale=8), consensus_tolerance_px=3.0)   # explicit wins
+    assert "tolerance 4 px" in note(spotiflow=SpotiflowParams(downscale=2))
+
+
 def test_hybrid_is_deterministic(monkeypatch, tmp_path):
     sc = syn.default_scene()
     fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=fake_points(drop=[(60, 50)], add=[(30.0, 270.0)]))

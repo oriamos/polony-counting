@@ -29,6 +29,7 @@ REASON_PRIORITY = {
 # Every ReviewReason must have a priority: an object whose ONLY reason is missing here would
 # never reach the review queue (this was the case for debris_like).
 UNCERTAIN_PRIORITY = 0
+DEBRIS_BF_ONLY_PRIORITY = 1
 
 
 def _tally(objs, scope: str, analysis: Analysis) -> Counts:
@@ -95,6 +96,10 @@ def object_priority(o: DetectedObject) -> int | None:
     pr = [REASON_PRIORITY[r] for r in o.review_reasons if r in REASON_PRIORITY]
     if o.cls == ObjectClass.uncertain:
         pr.append(UNCERTAIN_PRIORITY)
+    # a Big-FISH-only detection that is also debris_like (compact + bright at both scales) is a speck in 97 % of cases
+    # (345 objects on 7 research slides; 18 % for the other Big-FISH-only): review it as early as saturated objects
+    if ReviewReason.bigfish_only in o.review_reasons and ReviewReason.debris_like in o.review_reasons:
+        pr.append(DEBRIS_BF_ONLY_PRIORITY)
     return min(pr) if pr else None
 
 

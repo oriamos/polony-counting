@@ -115,7 +115,8 @@ class PrepareModelBody(BaseModel):
 
 
 class QcSampleBody(BaseModel):
-    fraction: float = 0.05
+    n: Optional[int] = None                # fixed per-slide sample size (default 40, clamped to [1, N eligible])
+    fraction: Optional[float] = None       # compatibility only: mapped to max(40, fraction * N eligible)
     seed: int = 0
 
 
@@ -916,7 +917,7 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
     @api.post("/analyses/{aid}/consensus/qc-sample")
     def post_qc_sample(aid: str, body: QcSampleBody):
         with store.edit(aid_ok(aid)) as st:
-            return consensus_mod.mark_qc_sample(st, body.fraction, body.seed)
+            return consensus_mod.mark_qc_sample(st, body.fraction, body.seed, body.n)
 
     # ------------------------------------------------------------- review
     @api.get("/analyses/{aid}/counts")

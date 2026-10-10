@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ConsensusSummary } from '../api/types';
-import { ENGINE_FILTERS, type EngineFilter } from '../lib/consensus';
+import { clampQcN, ENGINE_FILTERS, QC_DEFAULT_N, qcBoundText, type EngineFilter } from '../lib/consensus';
 import { useApp } from '../state/store';
 import { AgreementInfo } from './EngineLayers';
 
@@ -43,6 +43,12 @@ export function ConsensusSummaryCard() {
           ))}
         </ul>
       )}
+      {sm.qc && sm.qc.sample_size > 0 && (
+        <div className="small" data-testid="summary-qc">
+          <strong>Agreement QC: </strong>
+          {qcBoundText(sm.qc)}
+        </div>
+      )}
       <div className="hint">“Both engines” means both proposed a nearby point. It is not a verified polony.</div>
     </section>
   );
@@ -69,26 +75,37 @@ export function EngineFilterBar({ filter, onChange }: { filter: EngineFilter; on
 export function QcSample() {
   const qc = useApp((s) => s.qcSample);
   const locked = useApp((s) => s.current?.status === 'finalized');
-  const [fraction, setFraction] = useState(0.05);
+  const status = useApp((s) => s.consensusSummary?.qc);
+  const [n, setN] = useState(QC_DEFAULT_N);
   const [seed, setSeed] = useState(1);
+  const pop = status?.population_agreements ?? null;
+  const nEff = clampQcN(n, pop);
   return (
     <details className="infopop" data-testid="qc-sample">
       <summary>QC sample of agreements</summary>
       <div className="infopop-body">
         <p>
-          <strong>Agreement is not ground truth.</strong> To see how often both engines are wrong together, pick a random sample of unreviewed agreement candidates to check by eye. The same seed gives the same sample.
+          <strong>Agreement is not ground truth</strong> (agreement ≠ ground truth): two engines can be wrong together, and agreement objects are not reviewed unless sampled. Pick a fixed number of unreviewed agreement candidates at random and check them by eye; the result bounds the error rate of the agreements you did not check, only if the sample is random (one seed per slide). The same seed gives the same sample.
         </p>
         <div className="row wrap">
           <label>
-            Fraction{' '}
-            <input className="input sm num" type="number" min={0.01} max={1} step={0.01} value={fraction} onChange={(e) => setFraction(Math.min(1, Math.max(0, Number(e.target.value))))} data-testid="qc-fraction" />
+            Sample size{' '}
+            <input className="input sm num" type="number" min={1} step={1} value={n} onChange={(e) => setN(Math.max(1, Math.round(Number(e.target.value) || QC_DEFAULT_N)))} data-testid="qc-n" />
           </label>
           <label>
             Seed <input className="input sm num" type="number" step={1} value={seed} onChange={(e) => setSeed(Math.round(Number(e.target.value)))} data-testid="qc-seed" />
           </label>
-          <button className="btn sm" disabled={locked || !(fraction > 0)} onClick={() => void qc(fraction, seed)} data-testid="qc-run">
-            Mark sample for review
+          <button className="btn sm" disabled={locked || !(n >= 1)} onClick={() => void qc(nEff, seed)} data-testid="qc-run">
+            Mark {nEff} for review
           </button>
+        </div>
+        {status && status.population_agreements > 0 && (
+          <div className="hint small" data-testid="qc-needed">
+            {status.population_agreements} agreement candidates on this slide. Sample size for a ±0.05 margin on the error rate: {status.n_for_margin_0_05} (assuming the measured {Math.round(100 * status.planning_error_rate)} % error; {status.n_for_margin_0_05_conservative} if unknown).
+          </div>
+        )}
+        <div className="small" data-testid="qc-bound">
+          {qcBoundText(status)}
         </div>
         <AgreementInfo />
       </div>

@@ -11,6 +11,7 @@ import type {
   CountsResponse,
   CsvImport,
   ConsensusSummaryResponse,
+  QcSampleResponse,
   EngineInfo,
   EngineName,
   EngineRunInfo,
@@ -118,8 +119,8 @@ export const api = {
   rawDetections: (id: string, q: { engine: EngineName; page: number; valid?: boolean; limit?: number }) =>
     request<RawDetection[]>('GET', `/analyses/${id}/raw-detections?engine=${q.engine}&page=${q.page}${q.valid != null ? `&valid=${q.valid}` : ''}&limit=${q.limit ?? RAW_LIMIT}`),
   consensusSummary: (id: string) => request<ConsensusSummaryResponse>('GET', `/analyses/${id}/consensus/summary`),
-  qcSample: (id: string, fraction: number, seed: number) =>
-    request<{ marked: number }>('POST', `/analyses/${id}/consensus/qc-sample`, { fraction, seed }),
+  qcSample: (id: string, n: number, seed: number) =>
+    request<QcSampleResponse>('POST', `/analyses/${id}/consensus/qc-sample`, { n, seed }),
   listCsv: () => request<CsvImport[]>('GET', '/csv-imports'),
   uploadCsv: (file: File) => {
     const fd = new FormData();

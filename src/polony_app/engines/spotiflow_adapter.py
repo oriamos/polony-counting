@@ -39,6 +39,7 @@ SUPPORTED_DOWNSCALE = (1, 2, 4, 8)
 NORMALIZERS = ("auto", "none", "valid_unsaturated")
 NORM_PMIN, NORM_PMAX = 1.0, 99.8
 MIN_NORM_PIXELS = 1000
+MODEL_STRIDE = 16        # U-Net down-sampling (2**4 for the shipped models): the output depends on the input's phase mod 16
 _SIDECAR = ".polony_checksums.json"
 _WEIGHT_SUFFIXES = (".pt", ".pth", ".ckpt", ".safetensors")
 _PARAM_FIELDS = set(SpotiflowParams.model_fields)
@@ -466,12 +467,14 @@ class SpotiflowEngine:
             x0, x1 = max(0, int(cols[0]) - pad), min(w, int(cols[-1]) + 1 + pad)
             y0, y1 = max(0, int(rows[0]) - pad), min(h, int(rows[-1]) + 1 + pad)
         trimmed_px = {"right": 0, "bottom": 0}
+        # Anchor the crop to the image-wide grid of the MODEL: origin = multiple of MODEL_STRIDE*d full-resolution pixels
+        # (downscale > 1 only; extended OUTWARD, still inside the image), far side = next multiple (capped at the last full block of the
+        # image). Block means then sit on the same grid whatever the counting area, and the U-Net's strided layers see
+        # the same phase, so detections do not depend on where the area starts (1-3 px shifts: see TWO_ENGINE.md).
         if d > 1:
-            # Anchor the crop to the image-wide block grid: origin = multiple of d (extended OUTWARD, still inside
-            # the image), far side = next multiple of d, capped at the last full block of the image. The block grid is
-            # then identical whatever the counting area is, so detections do not depend on where the area starts.
-            x0, y0 = (x0 // d) * d, (y0 // d) * d
-            x1, y1 = min(-(-x1 // d) * d, (w // d) * d), min(-(-y1 // d) * d, (h // d) * d)
+            S = MODEL_STRIDE * d
+            x0, y0 = (x0 // S) * S, (y0 // S) * S
+            x1, y1 = min(-(-x1 // S) * S, (w // d) * d), min(-(-y1 // S) * S, (h // d) * d)
             trimmed_px = {"right": w % d if x1 == (w // d) * d else 0, "bottom": h % d if y1 == (h // d) * d else 0}
             if (x1 - x0) // d < 2 or (y1 - y0) // d < 2:
                 raise EngineError(f"image region {x1 - x0}x{y1 - y0} px is too small for downscale {d}")
@@ -508,6 +511,12 @@ class SpotiflowEngine:
             hh, ww = sub.shape
             model_in = sub.reshape(hh // d, d, ww // d, d).astype(np.float32).mean(axis=(1, 3), dtype=np.float32)
             kw["subpix"] = False
+        pad_hw = (-model_in.shape[0] % MODEL_STRIDE, -model_in.shape[1] % MODEL_STRIDE) if d > 1 else (0, 0)
+        if any(pad_hw):
+            # pad on the right/bottom ourselves (reflect) so Spotiflow's centred padding is a no-op and the grid phase
+            # stays anchored at the (aligned) crop origin
+            model_in = np.pad(model_in, ((0, pad_hw[0]), (0, pad_hw[1])), mode="reflect")
+        in_shape_hw = (model_in.shape[0] - pad_hw[0], model_in.shape[1] - pad_hw[1])
 
         def wrapper(it, total=None, **_):
             k = 0
@@ -552,6 +561,9 @@ class SpotiflowEngine:
             raise EngineError(f"Spotiflow returned {len(pts)} points but "
                               f"{'no' if prob is None else len(prob)} per-point scores; refusing to guess")
         prob = np.asarray(prob, dtype=float).reshape(-1)
+        keep = (pts[:, 0] <= in_shape_hw[0] - 0.5) & (pts[:, 1] <= in_shape_hw[1] - 0.5)   # drop peaks in our padding
+        if not keep.all():
+            pts, prob = pts[keep], prob[keep]
         refined = 0
         if d > 1:
             if extras["refine_peaks"] and len(pts):
@@ -571,6 +583,7 @@ class SpotiflowEngine:
                 thr_used = None
         rp = sp.model_dump(mode="json")
         rp.update(extras)
+        rp["normalizer"] = norm_mode
         rp["prob_thresh_used"] = thr_used
         rp["prob_thresh_source"] = "user" if sp.prob_thresh is not None else "model optimised threshold"
         rp["runtime"] = {"spotiflow": self.version(), "torch": _pkg_version("torch")}
@@ -582,14 +595,15 @@ class SpotiflowEngine:
                "normalizer_mode": norm_mode, "normalizer_stats": norm_info,
                "cast": "float32 inside Spotiflow (lossless for 8/16-bit integers)", "eight_bit_conversion": False,
                "downscale": d, "trimmed_px": trimmed_px,
-               "downscaled_shape_hw": list(model_in.shape),
+               "downscaled_shape_hw": list(in_shape_hw), "reflect_pad_hw": list(pad_hw),
                "downscale_note": ("none (native scale)" if d == 1 else
                                   f"block mean (area average) over {d}x{d} pixels on an image-anchored block grid "
                                   f"(crop origin is a multiple of {d}); points mapped back with "
                                   f"x_full = x0 + i*{d} + {(d - 1) / 2:g}; peaks refined by a quadratic fit on the "
                                   f"heatmap: {extras['refine_peaks']} ({refined} refined); measured localisation "
-                                  f"error vs native scale: RMS 0.83/1.74/3.60 px, max 1.4/3.25/5.57 px at d=2/4/8 "
-                                  f"(before refinement)"),
+                                  f"error: RMS 0.83/1.74/3.60 px, max 1.4/3.25/5.57 px at d=2/4/8 vs the native-scale "
+                                  f"model (independent review, unrefined); RMS 1.25/1.83/3.31 px unrefined and "
+                                  f"1.04/1.21/2.13 px refined vs a model-free blob centre (3 real slides)"),
                "page_to_channel": ("confirmed mapping" if channel_role else "unconfirmed (no colour assigned)")}
         run = EngineRunInfo(
             run_id=run_id, analysis_id=analysis_id, image_sha256=dict(image_sha256 or {}),

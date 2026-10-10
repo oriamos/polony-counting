@@ -110,9 +110,18 @@ export function EngineSection({ req, set, disabled }: { req: DetectionRequest; s
               Large blobs (÷4)
             </button>
             <span className="hint" data-testid="spotiflow-downscale-note">
-              Polonies are ~25 px blobs; the pretrained models expect small spots. On one slide, ÷4 raised recall from 0.14 to 0.57 at precision 0.92 (exploratory, not validated — see docs). Default stays ÷1. Localisation is coarser (~±2 px).
+              Polonies are ~25 px blobs; the pretrained models expect small spots. Over 8 research slides, ÷4 with the “valid unsaturated” normalisation matched the researcher marks with precision 0.73 and recall 0.77 at probability threshold 0.2 (10 px tolerance; exploratory, one threshold for all slides, not validated; see docs/app/SPOTIFLOW_EXPLORATION.md). Default stays ÷1. Positions are good to about 1 to 2 px at ÷4 (RMS 1.2 px after peak refinement).
             </span>
           </div>
+          <label className="match">
+            Intensity normalisation
+            <select className="input sm" value={spot.normalizer ?? 'auto'} onChange={(e) => set({ ...req, spotiflow: { ...spot, normalizer: e.target.value as SpotiflowParams['normalizer'] } })} data-testid="spotiflow-normalizer" aria-label="Spotiflow intensity normalisation">
+              <option value="auto">Spotiflow auto (legacy, saturation-sensitive)</option>
+              <option value="valid_unsaturated">Valid unsaturated pixels (recommended for ÷2 to ÷8)</option>
+              <option value="none">None (raw values)</option>
+            </select>
+            <span className="hint">“Valid unsaturated” takes the 1st and 99.8th percentile of the pixels inside the counting area that are not saturated, once per page, so a saturated rim or debris cannot change the detector’s sensitivity. “Auto” uses all pixels of the cropped area, saturated ones included.</span>
+          </label>
           <label className="match">
             Probability threshold
             <NumInput
@@ -150,7 +159,7 @@ export function EngineSection({ req, set, disabled }: { req: DetectionRequest; s
           Engine consensus tolerance <span className="unit">px</span>
           <NumInput value={req.consensus_tolerance_px ?? 4} min={0} step={0.5} onChange={(v) => set({ ...req, consensus_tolerance_px: v ?? 4 })} testid="consensus-tol" disabled={disabled} />
           <span className="hint">
-            A Big-FISH and a Spotiflow point on the same channel closer than this are paired one-to-one (“both engines”). Unpaired points become “Big-FISH only” or “Spotiflow only” candidates. Not the same as the red/green match tolerance.
+            A Big-FISH and a Spotiflow point on the same channel closer than this are paired one-to-one (“both engines”). If you never change it, the default 4 px is raised to the Spotiflow downscale (for example 8 px at ÷8); a value you set yourself is used as entered. Unpaired points become “Big-FISH only” or “Spotiflow only” candidates. Not the same as the red/green match tolerance.
           </span>
         </label>
       )}

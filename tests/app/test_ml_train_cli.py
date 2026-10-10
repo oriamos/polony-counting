@@ -37,7 +37,7 @@ def stub_models(monkeypatch):
 def test_dry_run_validates_without_training_or_writing(tmp_path, stub_models):
     _, _, r = snapshot(tmp_path)
     say = Recorder()
-    out = train_candidate(tmp_path / "data", r.version, TrainOptions(base="x", epochs=3), dry_run=True, say=say)
+    out = train_candidate(tmp_path / "data", r.version, TrainOptions(base="x", epochs=3, allow_small=True), dry_run=True, say=say)
     assert out["dry_run"] and out["n_train"] > 0 and out["n_val"] > 0 and out["train_config"]["num_epochs"] == 3
     assert "nothing was trained" in say.text()
     assert not (tmp_path / "data" / "models").exists() or list((tmp_path / "data" / "models").iterdir()) == []
@@ -76,12 +76,13 @@ def test_train_records_a_candidate_with_full_provenance(tmp_path, stub_models):
 
     def fit(model, train, val, save_dir, cfg, device, logger):
         seen.update(n_train=len(train[0]), n_val=len(val[0]), cfg=cfg, device=device)
-        assert train[0][0].dtype == np.uint16 and train[1][0].ndim == 2 and train[1][0].shape[1] == 2
+        assert train[1][0].ndim == 2 and train[1][0].shape[1] == 2
+        assert train[0][0].dtype == np.float32 and train[0][0].max() < 4 and train[0][0].min() > -1   # page-normalised, not raw uint16
         save_dir.mkdir(parents=True)
         (save_dir / "best.pt").write_bytes(b"weights-v1")
         (save_dir / "config.yaml").write_text("sigma: 1.0\n")
 
-    e = train_candidate(tmp_path / "data", r.version, TrainOptions(base="x", epochs=2, seed=7), say=Recorder(), fit_fn=fit)
+    e = train_candidate(tmp_path / "data", r.version, TrainOptions(base="x", epochs=2, seed=7, allow_small=True), say=Recorder(), fit_fn=fit)
     assert e["status"] == "candidate" and e["kind"] == "finetuned" and e["dataset_version"] == r.version
     assert e["seed"] == 7 and e["hyperparameters"]["num_epochs"] == 2 and e["hyperparameters"]["device"] == "cpu"
     assert e["base"]["name"] == "stubbase" and e["duration_s"] >= 0 and e["hardware"]["platform"] == "test"
@@ -101,7 +102,7 @@ def test_failed_training_leaves_nothing_behind(tmp_path, stub_models):
         raise RuntimeError("out of memory")
 
     with pytest.raises(RuntimeError):
-        train_candidate(tmp_path / "data", r.version, TrainOptions(base="x"), say=Recorder(), fit_fn=boom)
+        train_candidate(tmp_path / "data", r.version, TrainOptions(base="x", allow_small=True), say=Recorder(), fit_fn=boom)
     assert Registry(tmp_path / "data").list() == []
     assert not [p for p in models_dir(tmp_path / "data").iterdir()]
 
@@ -155,7 +156,7 @@ def test_cli_refusals_exit_2_with_a_message(tmp_path, capsys):
 def test_cli_train_dry_run(tmp_path, capsys, stub_models):
     _, _, r = snapshot(tmp_path)
     code, out, err = run(capsys, "--data-dir", str(tmp_path / "data"), "train", "--snapshot", r.version, "--base", "x",
-                         "--epochs", "2", "--dry-run")
+                         "--epochs", "2", "--dry-run", "--allow-small")
     assert code == 0, err
     assert "[dry-run]" in out and "nothing was trained" in out and "ok: snapshot" in out
 
@@ -170,7 +171,7 @@ def test_cli_evaluate_writes_markdown_and_json(tmp_path, capsys):
     md = out_md.read_text()
     assert "# Evaluation report" in md and "preliminary" in md
     rep = json.loads(out_md.with_suffix(".json").read_text())
-    assert rep["reference"] == "analysis" and rep["tolerance_px"] == 5.0 and "union_before_review" in rep["configs"]
+    assert rep["reference"] == "analysis" and rep["tolerance_px"] == 10.0 and rep["tolerances_px"] == [5.0, 10.0, 15.0] and "union_before_review" in rep["configs"]
 
 
 # ---------------------------------------------------------------- opt-in end-to-end (real Spotiflow, CPU)
@@ -200,7 +201,8 @@ def test_e2e_tiny_finetune_on_cpu(tmp_path, capsys):
     base = tmp_path / "tiny_base"
     Spotiflow(SpotiflowModelConfig(initial_fmaps=8, levels=2, sigma=1.0)).save(base, which="best")
     t0 = time.time()
-    e = train_candidate(d, r.version, TrainOptions(base=str(base), epochs=2, batch_size=2, crop_size=64, seed=0, device="cpu"),
+    e = train_candidate(d, r.version, TrainOptions(base=str(base), epochs=2, batch_size=2, crop_size=64, seed=0, device="cpu",
+                                                   allow_small=True),
                         say=print)
     dt = time.time() - t0
     assert e["status"] == "candidate" and len(e["weights_sha256"]) == 64

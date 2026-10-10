@@ -96,7 +96,8 @@ export interface SpotiflowParams {
   max_tile_size: number | null;
   /** integer image downscale divisor (1, 2, 4, 8) for ~25 px blobs; 1 = native scale (default) */
   downscale: 1 | 2 | 4 | 8;
-  normalizer: 'auto' | 'none';
+  /** 'auto' = Spotiflow's own percentile normalisation (legacy; saturation-sensitive); 'valid_unsaturated' = p1/p99.8 of valid, unsaturated page pixels */
+  normalizer: 'auto' | 'none' | 'valid_unsaturated';
   device: 'auto' | 'cpu' | 'cuda' | 'mps';
 }
 
@@ -179,9 +180,43 @@ export interface ConsensusSummary {
   unresolved: number;
 }
 
+/** Agreement QC: confirmed/rejected among the SAMPLED agreements and the exact 95 % interval of the agreement error rate. */
+export interface QcStatus {
+  sample_size: number;
+  reviewed: number;
+  pending: number;
+  confirmed: number;
+  rejected: number;
+  population_agreements: number;
+  seed: number | string | null;
+  error_rate: number | null;
+  ci95: [number, number] | null;
+  interval_method: string;
+  n_for_margin_0_05: number;
+  n_for_margin_0_05_conservative: number;
+  planning_error_rate: number;
+  note: string;
+}
+
+export interface QcSampleResponse {
+  marked: number;
+  newly_marked: number;
+  eligible: number;
+  n: number;
+  n_requested: number;
+  fraction: number | null;
+  seed: number | string;
+  population_agreements: number;
+  n_for_margin_0_05: number;
+  n_for_margin_0_05_conservative: number;
+  qc: QcStatus;
+  note: string;
+}
+
 export interface ConsensusSummaryResponse {
   pages: ConsensusSummary[];
   total: ConsensusSummary;
+  qc?: QcStatus;
 }
 
 export interface EngineModelInfo {

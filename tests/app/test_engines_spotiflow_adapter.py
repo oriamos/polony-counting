@@ -321,17 +321,18 @@ def test_downscale_input_trim_and_coordinate_mapping(monkeypatch, tmp_path):
     c = fs.calls[0]
     from scipy.ndimage import zoom
     assert "scale" not in c["kw"] and c["kw"]["subpix"] is False and c["kw"]["prob_thresh"] == 0.1
-    # the adapter downscales (frame-unambiguous): model input = zoom(float32 trimmed crop, 1/4, order=1)
-    assert c["shape"] == (25, 50) and c["dtype"] == np.float32
-    assert np.array_equal(c["values"], zoom(img[:100, :200].astype(np.float32), 0.25, order=1))
+    # the adapter downscales (frame-unambiguous): model input = block mean (area) of the float32 trimmed crop
+    # (25, 50) blocks, reflect-padded by us on the right/bottom to a multiple of the model stride (16): (32, 64)
+    assert c["shape"] == (32, 64) and c["dtype"] == np.float32
+    bm = img[:100, :200].astype(np.float32).reshape(25, 4, 50, 4).mean((1, 3))
+    assert np.allclose(c["values"][:25, :50], bm) and np.allclose(c["values"][25:, :50], bm[-2:-9:-1][:7])
     pre = res.run.preprocessing
     assert pre["downscaled_shape_hw"] == [25, 50]
     assert pre["downscale"] == 4 and pre["trimmed_px"] == {"right": 2, "bottom": 3}
-    assert pre["crop_box_xyxy"] == [0, 0, 200, 100] and any("trimmed" in n for n in res.run.notes)
+    assert pre["crop_box_xyxy"] == [0, 0, 200, 100] and any("block grid" in n for n in res.run.notes)
     got = {(round(d.x, 6), round(d.y, 6)) for d in res.detections}
-    # align-corners: first/last downscaled pixel centres coincide with first/last full-res pixel centres
-    assert (0.0, 0.0) in got and (199.0, 99.0) in got
-    assert any(abs(x - 20 * 199 / 49) < 1e-5 and abs(y - 10 * 99 / 24) < 1e-5 for x, y in got)
+    # block-mean: block i covers pixels i*d..i*d+d-1, centre i*d + (d-1)/2
+    assert (1.5, 1.5) in got and (49 * 4 + 1.5, 24 * 4 + 1.5) in got and (81.5, 41.5) in got
 
 
 def test_downscale_with_crop_offset(monkeypatch, tmp_path):
@@ -340,9 +341,25 @@ def test_downscale_with_crop_offset(monkeypatch, tmp_path):
     valid[100:150, 200:260] = True
     fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=lambda a: (np.array([[0.0, 0.0]]), np.array([0.9])))
     res = call(fs.engine(), img, valid, params={"downscale": 2})
-    # crop 168..292 x 68..182 (124 x 114), both even -> nothing trimmed; point (0,0) = crop origin
-    assert res.run.preprocessing["crop_box_xyxy"] == [168, 68, 292, 182]
-    assert (res.detections[0].x, res.detections[0].y) == (168.0, 68.0)
+    # padded box 168..292 x 68..182 extended outward to multiples of 16*d = 32: 160..320 x 64..192;
+    # point (0,0) = block centre (d-1)/2 = 0.5 from the origin
+    assert res.run.preprocessing["crop_box_xyxy"] == [160, 64, 320, 192]
+    assert (res.detections[0].x, res.detections[0].y) == (160.5, 64.5)
+
+
+def test_downscale_crop_origin_is_anchored_to_the_block_grid(monkeypatch, tmp_path):
+    """Whatever the counting area, the crop origin is a multiple of 16*d (extended outward inside the image) so the
+    block grid does not depend on where the area starts."""
+    img = np.zeros((300, 400), np.uint16)
+    for d in (2, 4, 8):
+        for ox in (0, 1, 2, 3):
+            valid = np.zeros(img.shape, bool)
+            valid[103 + ox:151 + ox, 203 + ox:259 + ox] = True
+            fs = FakeSpotiflow(monkeypatch, tmp_path / f"{d}{ox}", points_fn=lambda a: (np.zeros((0, 2)), np.zeros(0)))
+            res = call(fs.engine(), img, valid, params={"downscale": d})
+            x0, y0, x1, y1 = res.run.preprocessing["crop_box_xyxy"]
+            assert x0 % (16 * d) == 0 and y0 % (16 * d) == 0 and (x1 - x0) % d == 0 and (y1 - y0) % d == 0
+            assert x0 <= 203 + ox - 32 and y0 <= 103 + ox - 32 and x1 >= 259 + ox + 32 - d and y1 >= 151 + ox + 32 - d
 
 
 @pytest.mark.parametrize("bad", [0, 3, 16, -2])
@@ -362,15 +379,109 @@ def test_downscale_rejects_subpix_and_tiny_images(monkeypatch, tmp_path):
     assert not fs.calls
 
 
-def test_downscale_mapping_matches_scipy_zoom_convention():
-    """The mapping used by the adapter inverts scipy.ndimage.zoom(order=1) (what Spotiflow 0.6.5 uses)."""
-    from scipy.ndimage import zoom
+@pytest.mark.parametrize("d", [2, 4, 8])
+def test_block_mean_centre_mapping_is_unbiased_for_subpixel_gaussians(d):
+    """Model-free: the centroid of the block-mean image mapped with i*d + (d-1)/2 recovers the true centre."""
     n = 400
     yy, xx = np.mgrid[:n, :n]
+    worst = 0.0
+    for cx, cy in ((100.0, 200.0), (100.5, 150.25), (201.3, 99.75), (57.9, 301.1)):
+        img = np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * 6.0 ** 2)).astype(np.float32)
+        z = img.reshape(n // d, d, n // d, d).mean((1, 3))
+        idx = np.arange(n // d)
+        gx = (z.sum(0) * idx).sum() / z.sum() * d + (d - 1) / 2
+        gy = (z.sum(1) * idx).sum() / z.sum() * d + (d - 1) / 2
+        worst = max(worst, abs(gx - cx), abs(gy - cy))
+    assert worst < 0.02, worst
+
+
+def test_block_mean_end_to_end_with_a_fake_peak_finder(monkeypatch, tmp_path):
+    """Full path: a bright blob at a known sub-pixel position, the fake model returns the argmax of the downscaled
+    input; the mapped position is within d/2 px of the truth and (for a blob centred on a block) unbiased."""
+    n = 256
+    yy, xx = np.mgrid[:n, :n]
     for d in (2, 4, 8):
-        m = n // d
-        for cx in (100.0, 100.5, 201.3):
-            img = np.exp(-((xx - cx) ** 2 + (yy - 200.0) ** 2) / (2 * 6.0 ** 2)).astype(np.float32)
-            z = zoom(img, (1 / d, 1 / d), order=1)
-            cs = (z.sum(0) * np.arange(m)).sum() / z.sum(0).sum()
-            assert abs(cs * (n - 1) / (m - 1) - cx) < 0.02
+        cx, cy = 96.0 + (d - 1) / 2, 136.0 + (d - 1) / 2     # exactly a block centre
+        img = (1000 + 30000 * np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * 6.0 ** 2))).astype(np.uint16)
+
+        def peak(a):
+            r, c = np.unravel_index(np.argmax(a), a.shape)
+            return np.array([[float(r), float(c)]]), np.array([0.9])
+        fs = FakeSpotiflow(monkeypatch, tmp_path / f"e{d}", points_fn=peak)
+        res = call(fs.engine(), img, params={"downscale": d})
+        assert abs(res.detections[0].x - cx) <= 1e-6 + 0 and abs(res.detections[0].y - cy) <= 1e-6
+
+
+# ------------------------------------------------------------------ normaliser 'valid_unsaturated'
+def _norm_image():
+    rng = np.random.default_rng(0)
+    img = rng.integers(300, 3000, size=(200, 240)).astype(np.uint16)
+    img[:, :30] = 65535                      # saturated rim OUTSIDE the counting area
+    img[100:104, 100:110] = 65535            # saturated debris INSIDE the counting area
+    valid = np.zeros(img.shape, bool)
+    valid[10:190, 60:230] = True
+    return img, valid
+
+
+def test_valid_unsaturated_normaliser_excludes_saturated_and_outside_pixels(monkeypatch, tmp_path):
+    img, valid = _norm_image()
+    fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=lambda a: (np.zeros((0, 2)), np.zeros(0)))
+    res = call(fs.engine(), img, valid, params={"normalizer": "valid_unsaturated", "prob_thresh": 0.2})
+    norm = fs.calls[0]["kw"]["normalizer"]
+    assert callable(norm)
+    sel = valid & (img < 65535)
+    lo, hi = np.percentile(img[sel].astype(np.float64), [1, 99.8])
+    pre = res.run.preprocessing
+    st = pre["normalizer_stats"]
+    assert pre["normalizer_mode"] == "valid_unsaturated"
+    assert abs(st["lo"] - lo) < 1e-9 and abs(st["hi"] - hi) < 1e-9 and hi < 5000     # not 65535
+    assert st["n_used"] == int(sel.sum()) and st["n_valid_saturated"] == 40 and st["n_valid"] == int(valid.sum())
+    assert res.run.params["normalizer"] == "valid_unsaturated"
+    out = norm(np.array([lo, hi], np.float32))
+    assert np.allclose(out, [0.0, 1.0], atol=1e-4) and out.dtype == np.float32
+
+
+def test_valid_unsaturated_range_is_independent_of_crop_and_applied_identically_when_downscaled(monkeypatch, tmp_path):
+    img, valid = _norm_image()
+    ranges = []
+    for kwp in ({"crop_to_valid": True}, {"crop_to_valid": False}, {"downscale": 4}, {"downscale": 2}):
+        fs = FakeSpotiflow(monkeypatch, tmp_path / str(len(ranges)), points_fn=lambda a: (np.zeros((0, 2)), np.zeros(0)))
+        res = call(fs.engine(), img, valid, params={"normalizer": "valid_unsaturated", **kwp})
+        st = res.run.preprocessing["normalizer_stats"]
+        ranges.append((st["lo"], st["hi"]))
+    assert len(set(ranges)) == 1
+
+
+def test_valid_unsaturated_fallback_and_float_images(monkeypatch, tmp_path):
+    img = np.full((100, 100), 65535, np.uint16)
+    img[:20, :20] = np.arange(400, dtype=np.uint16).reshape(20, 20) + 100
+    valid = np.ones(img.shape, bool)
+    fs = FakeSpotiflow(monkeypatch, tmp_path / "a", points_fn=lambda a: (np.zeros((0, 2)), np.zeros(0)))
+    res = call(fs.engine(), img, valid, params={"normalizer": "valid_unsaturated"})
+    assert any("fallback" in n for n in res.run.notes)
+    fl = np.random.default_rng(1).random((80, 80)).astype(np.float32)
+    fs = FakeSpotiflow(monkeypatch, tmp_path / "b", points_fn=lambda a: (np.zeros((0, 2)), np.zeros(0)))
+    res = call(fs.engine(), fl, None, params={"normalizer": "valid_unsaturated"})
+    assert res.run.preprocessing["normalizer_stats"]["saturation_level"] is None
+
+
+def test_unknown_normalizer_is_rejected(monkeypatch, tmp_path):
+    fs = FakeSpotiflow(monkeypatch, tmp_path)
+    with pytest.raises(EngineError, match="normalizer"):
+        call(fs.engine(), np.zeros((64, 64), np.uint16), params={"normalizer": "magic"})
+
+
+def test_auto_normaliser_is_documented_as_legacy_saturation_sensitive(monkeypatch, tmp_path):
+    fs = FakeSpotiflow(monkeypatch, tmp_path)
+    res = call(fs.engine(), np.zeros((64, 64), np.uint16), params={})
+    assert "legacy" in res.run.preprocessing["normalizer"] and fs.calls[0]["kw"]["normalizer"] == "auto"
+
+
+def test_quadratic_peak_refinement_recovers_subpixel_offsets():
+    from polony_app.engines.spotiflow_adapter import _refine_peaks
+    yy, xx = np.mgrid[:20, :20]
+    hm = np.exp(-((xx - 9.3) ** 2 + (yy - 11.4) ** 2) / (2 * 2.0 ** 2))
+    pts, n = _refine_peaks(np.array([[11.0, 9.0]]), hm)
+    assert n == 1 and abs(pts[0, 0] - 11.4) < 0.05 and abs(pts[0, 1] - 9.3) < 0.05
+    same, n0 = _refine_peaks(np.array([[0.0, 5.0]]), hm)             # border: untouched
+    assert n0 == 0 and same[0, 0] == 0.0

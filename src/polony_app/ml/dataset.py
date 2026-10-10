@@ -41,12 +41,18 @@ from polony_app.schemas import (
 )
 
 from .common import (
+    DEFAULT_NORMALISER,
+    DEFAULT_PERCENTILES,
+    LO_HI_POLICY,
     MLError,
     app_version,
     atomic_write_text,
+    check_downscale,
+    check_normaliser,
     datasets_dir,
     fnum,
     hash_obj,
+    page_bounds,
     pixel_box,
     pretty_json,
     rect_of,
@@ -85,6 +91,11 @@ class BuildOptions:
     min_crop_px: int = 32
     created_at: Optional[str] = None
     include_raw: bool = True
+    # What the network will see. Exported crops stay at NATIVE resolution (provenance); the downscale and the normaliser
+    # are recorded and applied on the fly by `train` / `eval-model` (block mean, page-level lo/hi).
+    downscale: int = 1
+    normaliser: str = DEFAULT_NORMALISER
+    percentiles: tuple = DEFAULT_PERCENTILES
 
 
 @dataclass
@@ -208,6 +219,7 @@ class _CropCand:
     crop: np.ndarray
     dy_dx: tuple
     source_sha: str
+    norm: Optional[dict] = None     # page lo/hi record (filled after the region loop)
 
 
 @dataclass
@@ -436,11 +448,48 @@ def extract_analysis(store, aid: str, opts: BuildOptions) -> _Extract:
             pos.sort(key=lambda t: (t[0], t[1], t[2]["object_id"]))
             base.cands.append(_CropCand(r, role, page, fname, rect, (fx0, fy0, fx1, fy1), bbox_only,
                                         [(a_, b_) for a_, b_, _ in pos], rej, edge, crop, (dy, dx), shas[fname]))
+    if base.cands:
+        _page_normalisation(a, src, base, loaded, opts, mapping or {})
     src.n_crops = len(base.cands)
     base.info = SourceInfo(
         analysis_id=aid, name=a.name, sha256=hash_obj(shas), file_names=sorted(shas), width=img.width, height=img.height,
         dtype=img.dtype, bit_depth=img.bit_depth, n_planes=len(img.channels), slide_meta_id=a.slide.slide_id)
     return base
+
+
+def _stored_valid_mask(a: Analysis, role: str, shape_hw: tuple) -> np.ndarray:
+    """The detection valid mask of the app (counting union minus exclusions; green also loses the strip that the
+    alignment shift does not cover), expressed in the STORED page's pixel frame."""
+    from polony_app.detection.masks import build_valid_mask
+    from polony_app.imaging.registration import apply_shift, shifted_valid_region
+    valid = build_valid_mask(shape_hw, a.regions)
+    dy, dx = _shift_for(a, role)
+    if (dy, dx) == (0, 0):
+        return valid
+    valid &= shifted_valid_region(shape_hw, dy, dx)
+    return apply_shift(valid.astype(np.uint8), -dy, -dx).astype(bool)
+
+
+def _page_normalisation(a: Analysis, src: SourceAnalysis, ex: "_Extract", loaded: dict, opts: BuildOptions,
+                        mapping: dict) -> None:
+    """lo/hi ONCE per page (valid, unsaturated pixels of the whole page), stored per channel role in the manifest and
+    attached to every crop cand of that page (``cand.norm``)."""
+    done: dict = {}
+    for c in ex.cands:
+        if c.role in done:
+            continue
+        plane = loaded[(c.source_file, c.page)]
+        valid = _stored_valid_mask(a, c.role, plane.shape)
+        b = page_bounds(plane, valid, opts.percentiles)
+        b.update({"file": c.source_file, "page": int(c.page), "mode": opts.normaliser, "policy": LO_HI_POLICY,
+                  "valid_mask": "counting regions minus exclusions of the analysis"
+                                + (", minus the strip not covered by the alignment shift" if _shift_for(a, c.role) != (0, 0) else "")})
+        if b["fallback"]:
+            ex.warnings.append(f"analysis {src.analysis_id} page {c.page} ({c.role}): {b['fallback']}")
+        done[c.role] = b
+    src.page_normalization = done
+    for c in ex.cands:
+        c.norm = done[c.role]
 
 
 # ====================================================================== writers
@@ -479,6 +528,32 @@ def safe_id(s: str) -> str:
 
 def test_content_hash(crops: list[CropRecord]) -> str:
     return hash_obj(sorted([c.crop_id, c.tif_sha256, c.csv_sha256] for c in crops if c.split == "test"))
+
+
+# ====================================================================== annotation completeness
+UNMARKED_RADIUS_PX = 5.0
+BRIGHT_QUANTILE = 0.25
+
+
+def unmarked_proposals(raw: list, marks: list, positives: list, radius: float = UNMARKED_RADIUS_PX) -> dict:
+    """How many raw engine proposals the annotator left unmarked. ``raw`` = [(x, y, score|None)], ``marks`` = every point
+    the annotator touched or confirmed (positives and rejected) as [(x, y)], ``positives`` = the positive ones.
+    A proposal is *unmarked* when no mark lies within ``radius`` px. It is *bright* when its score is at least the
+    lower quartile of the scores of the proposals the annotator DID confirm (scores are heatmap values, not
+    probabilities: the threshold only says 'comparable to what was confirmed'). A cue that the labels are incomplete
+    (precision against them is a lower bound), not proof: some of these are real polonies nobody marked."""
+    def near(p, pts):
+        if not pts:
+            return False
+        a = np.asarray(pts, float).reshape(-1, 2)
+        return bool((np.hypot(a[:, 0] - p[0], a[:, 1] - p[1]) <= radius).any())
+
+    conf_scores = [sc for x, y, sc in raw if sc is not None and near((x, y), positives)]
+    thr = float(np.quantile(conf_scores, BRIGHT_QUANTILE)) if len(conf_scores) >= 5 else None
+    unm = [(x, y, sc) for x, y, sc in raw if not near((x, y), marks)]
+    return {"n_raw_proposals": len(raw), "n_unmarked": len(unm),
+            "n_unmarked_bright": (sum(1 for _, _, sc in unm if sc is not None and sc >= thr) if thr is not None else None),
+            "bright_score_threshold": thr, "radius_px": radius, "n_confirmed_proposals": len(conf_scores)}
 
 
 # ====================================================================== snapshot
@@ -525,6 +600,8 @@ def _version_of(m: SnapshotManifest) -> str:
 def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: Optional[BuildOptions] = None, *,
                    say: Say = print, dry_run: bool = False) -> BuildResult:
     opts = opts or BuildOptions()
+    opts.downscale = check_downscale(opts.downscale)
+    opts.normaliser = check_normaliser(opts.normaliser)
     ids = sorted(set(analysis_ids))
     if not ids:
         raise MLError("no analysis selected (pass --analyses ID [ID ...])")
@@ -584,6 +661,8 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
                     shape_hw=list(c.crop.shape), dtype=str(c.crop.dtype), n_positive=len(c.points),
                     n_rejected=c.n_rejected, n_edge_dropped=c.n_edge, split=split, group_id=ga.group_of[aid],
                     tif_sha256=tsha, csv_sha256=csha, bbox_of_polygon=c.bbox_only,
+                    norm_lo=(c.norm or {}).get("lo"), norm_hi=(c.norm or {}).get("hi"), normaliser=opts.normaliser,
+                    downscale=opts.downscale,
                     path_tif=f"{rel}/{cid}.tif", path_csv=f"{rel}/{cid}.csv")
                 crops.append(rec)
         for e in exts:  # crops per analysis for the manifest
@@ -611,6 +690,11 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
                               "groups": lock.get("groups", []), "n_frozen_test_crops": len(frozen),
                               "test_content_sha256": lock.get("test_content_sha256")}
             say(f"carried {len(frozen)} locked test crop(s) over from snapshot {lock['snapshot']} (labels unchanged)")
+            odd = sorted({(c.downscale, c.normaliser or "legacy") for c in frozen} - {(opts.downscale, opts.normaliser)})
+            if odd:
+                warnings.append("the carried-over locked test crops were built for a different downscale / normaliser "
+                                f"{odd} than this snapshot ({opts.downscale}, {opts.normaliser}); each crop keeps its own "
+                                "recorded values, and a model is always evaluated at ITS OWN configuration")
 
         crops.sort(key=lambda c: (c.split, c.crop_id))
         n_pos_total = sum(c.n_positive for c in crops)
@@ -668,6 +752,33 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
         label_counts = {"points_by_status": dict(sorted(counts.items())), "positives_total": n_pos_total,
                         "by_split": {k: {"crops": v["crops"], "positives": v["positives"], "groups": len(v["groups"])}
                                      for k, v in sorted(by_split.items())}}
+        label_counts["precision_label"] = "precision is measured against THIS annotator's marks (unmarked polonies count as false positives)"
+        if opts.include_raw:
+            unm = {"match_radius_px": UNMARKED_RADIUS_PX}
+            tot = {"n_raw_proposals": 0, "n_unmarked": 0, "n_unmarked_bright": 0, "n_confirmed_proposals": 0}
+            have_raw = False
+            for e in exts:
+                mine = [c for c in live_crops if c.analysis_id == e.src.analysis_id]
+                for role in {c.channel_role for c in mine}:
+                    boxes = [c.box_reference_frame for c in mine if c.channel_role == role]
+                    inb = lambda r: any(b[0] <= r["x"] < b[2] and b[1] <= r["y"] < b[3] for b in boxes)  # noqa: E731
+                    raw = [(r["x"], r["y"], r.get("score")) for r in e.rows if r["status"] == "raw_proposal"
+                           and r["role"] == role and r.get("valid", True) and inb(r)]
+                    if not raw:
+                        continue
+                    have_raw = True
+                    pos = [(r["x"], r["y"]) for r in e.rows if r["status"] in POSITIVE and r["role"] == role and inb(r)]
+                    mk = pos + [(r["x"], r["y"]) for r in e.rows if r["status"] == "rejected" and r["role"] == role and inb(r)]
+                    u = unmarked_proposals(raw, mk, pos)
+                    for k in ("n_raw_proposals", "n_unmarked", "n_confirmed_proposals"):
+                        tot[k] += u[k]
+                    tot["n_unmarked_bright"] += u["n_unmarked_bright"] or 0
+            label_counts["unmarked_raw_proposals"] = dict(unm, **tot) if have_raw else None
+            if have_raw:
+                label_counts["unmarked_raw_proposals"]["note"] = (
+                    "raw proposals inside exported crops with no mark of this annotator within the radius; 'bright' = score >= the "
+                    "lower quartile of the confirmed proposals (heatmap value, not a probability). Precision against these labels "
+                    "is a lower bound.")
         for need in ("train", "val"):
             if not by_split.get(need):
                 warnings.append(f"the snapshot has NO {need} crops (too few independent groups or reviewed regions); "
@@ -689,7 +800,8 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
             options={"seed": opts.seed, "fractions": (ga.fractions if ga else None), "level": opts.level,
                      "allow_unconfirmed_identity": opts.allow_unconfirmed_identity, "allow_bbox": opts.allow_bbox,
                      "strict_reviewed": opts.strict_reviewed, "roles": list(opts.roles), "min_crop_px": opts.min_crop_px,
-                     "include_raw": opts.include_raw},
+                     "include_raw": opts.include_raw, "downscale": opts.downscale, "normaliser": opts.normaliser,
+                     "percentiles": [float(x) for x in opts.percentiles], "lo_hi_policy": LO_HI_POLICY},
             sources=[e.src for e in exts], crops=crops,
             skipped_crops=sorted((s for e in exts for s in e.skipped_crops),
                                  key=lambda s: (s["analysis_id"], s["region_id"], str(s.get("page")))),

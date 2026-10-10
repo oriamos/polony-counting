@@ -87,3 +87,28 @@ def test_real_model_downscale4_on_25px_blobs(engine):
             found = [e for e in out[d][1] if np.isfinite(e)]
             assert len(found) >= 4 and max(found) <= 4.5
             assert res.run.preprocessing["downscale"] == 4 and res.run.params["downscale"] == 4
+
+
+def test_real_model_valid_unsaturated_is_independent_of_the_counting_area_origin(engine):
+    """Real model, synthetic 25 px blobs on a page with a saturated rim: the detections are (nearly) identical when the
+    valid area is shifted by 1-3 px (crop origin and block grid are anchored), and the normaliser ignores the rim."""
+    rng = np.random.default_rng(3)
+    xs, ys = np.meshgrid(np.arange(80, 920, 70), np.arange(80, 720, 70))
+    spots = [(float(x + rng.uniform(-8, 8)), float(y + rng.uniform(-8, 8)), 3500.0) for x, y in zip(xs.ravel(), ys.ravel())]
+    sc = syn.make_scene((800, 1000), spots, [spots[0]], sigma=5.3, noise=15.0)
+    img = sc.red.copy()
+    img[:, :25] = 65535                                       # saturated rim outside the counting area
+    found = {}
+    for sh in (0, 1, 2, 3):
+        valid = np.zeros(img.shape, bool)
+        valid[40 + sh:760 + sh, 60 + sh:960 + sh] = True
+        res = engine.detect_page(img, analysis_id="e2e", page=0, channel_role="red", valid_mask=valid,
+                                 params={"downscale": 4, "prob_thresh": 0.1, "normalizer": "valid_unsaturated"},
+                                 image_sha256={}, progress=lambda f, m: None, cancelled=lambda: False)
+        assert res.run.preprocessing["normalizer_stats"]["hi"] < 20000      # not set by the 65535 rim
+        found[sh] = np.array([[d.x, d.y] for d in res.detections if d.valid]).reshape(-1, 2)
+    for sh in (1, 2, 3):
+        a, b = found[0], found[sh]
+        d = np.hypot(a[:, None, 0] - b[None, :, 0], a[:, None, 1] - b[None, :, 1])
+        miss = int((d.min(1) > 2.0).sum()) if len(b) else len(a)
+        assert miss <= max(2, 0.03 * len(a)), (sh, miss, len(a))

@@ -64,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--roles", default="red,green", help="channel roles to cut (only from a confirmed mapping)")
     b.add_argument("--min-crop-px", type=int, default=32)
     b.add_argument("--no-raw", action="store_true", help="do not list raw engine proposals in points.csv")
+    b.add_argument("--downscale", type=int, default=1, choices=[1, 2, 4, 8],
+                   help="the model input is downscaled by this factor (block mean) at training / evaluation time; crops are still "
+                        "exported at native resolution. Must equal the downscale the app will run the model with.")
+    b.add_argument("--normaliser", default="valid_unsaturated", choices=["valid_unsaturated", "none"],
+                   help="valid_unsaturated: page-level percentiles 1/99.8 of the valid, unsaturated pixels (as at inference)")
     b.add_argument("--dry-run", action="store_true")
     b.add_argument("--created-at", help=argparse.SUPPRESS)
 
@@ -92,19 +97,28 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--no-optimize-threshold", action="store_true")
     t.add_argument("--early-stopping-patience", type=int, default=0)
     t.add_argument("--notes", default="")
+    t.add_argument("--allow-small", action="store_true",
+                   help="train even with fewer than 4 independent training groups / fewer than --min-train-crops crops")
+    t.add_argument("--min-train-groups", type=int, default=4)
+    t.add_argument("--min-train-crops", type=int, default=20)
     t.add_argument("--dry-run", action="store_true", help="validate everything, train nothing, write nothing")
 
     e = sub.add_parser("eval-model", help="score a model on the LOCKED test crops and record it in the registry")
     e.add_argument("--model", required=True, help="registry id, official pretrained name, or model folder")
     e.add_argument("--snapshot", help="default: the snapshot the test lock refers to")
-    e.add_argument("--tolerance", type=float, default=5.0)
+    e.add_argument("--tolerance", type=float, default=10.0, help="headline matching tolerance in px (5, 10 and 15 are always reported)")
     e.add_argument("--device", default="cpu", choices=["cpu", "auto", "cuda", "mps"])
     e.add_argument("--prob-thresh", type=float)
+    e.add_argument("--downscale", type=int, choices=[1, 2, 4, 8],
+                   help="official pretrained models only (default 1): a fine-tuned model is always run at the downscale it was "
+                        "trained at; a different value is refused")
+    e.add_argument("--normaliser", choices=["valid_unsaturated", "none"],
+                   help="official pretrained models only (default valid_unsaturated); fine-tuned: the one it was trained with")
 
     ev = sub.add_parser("evaluate", help="compare detection configurations against a reference")
     ev.add_argument("--predictions", nargs="+", required=True, help="analysis ids (optionally id:runid[,runid])")
     ev.add_argument("--reference", choices=["analysis", "roi"], default="analysis")
-    ev.add_argument("--tolerance", type=float, default=5.0)
+    ev.add_argument("--tolerance", type=float, default=10.0, help="headline matching tolerance in px (5, 10 and 15 are always reported)")
     ev.add_argument("--numbering", choices=["index", "ordinal"], default="index")
     ev.add_argument("--configs", nargs="+")
     ev.add_argument("--out", help="Markdown report path (a .json with the same stem is written next to it)")
@@ -116,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("model")
     pr.add_argument("--force", action="store_true")
     pr.add_argument("--reason", default="")
+    pr.add_argument("--app-downscale", type=int, choices=[1, 2, 4, 8],
+                    help="the app's current inference downscale (default: the app's default Spotiflow setting)")
+    pr.add_argument("--app-normaliser", choices=["auto", "none", "valid_unsaturated"],
+                    help="the app's current Spotiflow normaliser (default: the app's default setting)")
+    pr.add_argument("--acknowledge-config", action="store_true",
+                    help="accept that the candidate was trained/evaluated at a different downscale/normaliser than the app currently uses")
 
     sub.add_parser("rollback", help="restore the previously active model")
 
@@ -155,7 +175,7 @@ def _run(a, data_dir: str) -> int:
             strict_reviewed=a.strict_reviewed, roles=tuple(r for r in a.roles.split(",") if r),
             identity_map=(json.loads(Path(a.identity_map).read_text(encoding="utf-8")) if a.identity_map else None),
             require_finalized=a.require_finalized, min_crop_px=a.min_crop_px, created_at=a.created_at,
-            include_raw=not a.no_raw)
+            include_raw=not a.no_raw, downscale=a.downscale, normaliser=a.normaliser)
         res = ds.build_snapshot(_store(data_dir), data_dir, a.analyses, opts, say=_p, dry_run=a.dry_run)
         _p(("[dry-run] " if res.dry_run else "") + f"dataset version: {res.version}")
         return 0
@@ -188,7 +208,8 @@ def _run(a, data_dir: str) -> int:
         o = TrainOptions(base=a.base, epochs=a.epochs, batch_size=a.batch_size, lr=a.lr, crop_size=a.crop_size, seed=a.seed,
                          device=a.device, num_train_samples=a.num_train_samples, pos_weight=a.pos_weight,
                          augment=not a.no_augment, optimize_threshold=not a.no_optimize_threshold,
-                         early_stopping_patience=a.early_stopping_patience, notes=a.notes)
+                         early_stopping_patience=a.early_stopping_patience, notes=a.notes, allow_small=a.allow_small,
+                         min_train_groups=a.min_train_groups, min_train_crops=a.min_train_crops)
         _p(f"training request: snapshot {a.snapshot}, base {a.base}" + (" (dry run)" if a.dry_run else ""))
         out = train_candidate(data_dir, a.snapshot, o, dry_run=a.dry_run, say=_p)
         if not a.dry_run:
@@ -220,7 +241,11 @@ def _run(a, data_dir: str) -> int:
     if a.cmd == "promote":
         from .splits import load_lock
         lock = load_lock(data_dir)
-        e = Registry(data_dir).promote(a.model, lock_sha256=(lock or {}).get("lock_sha256"), force=a.force, reason=a.reason)
+        from .registry import make_config
+        dflt = _app_defaults()
+        app_cfg = {"downscale": a.app_downscale or dflt["downscale"], "normaliser": a.app_normaliser or dflt["normaliser"]}
+        e = Registry(data_dir).promote(a.model, lock_sha256=(lock or {}).get("lock_sha256"), force=a.force, reason=a.reason,
+                                       app_config=app_cfg, acknowledge_config=a.acknowledge_config)
         prom = e["promotion"]
         _p(f"promoted {a.model} (previous active: {e['previous_active'] or 'app default'})"
            + (f"  FORCED, overridden: {prom['overridden_checks']}" if prom["forced"] else ""))
@@ -244,18 +269,29 @@ def _run(a, data_dir: str) -> int:
             reg = Registry(data_dir)
             rows = reg.list()
             for e in rows:
+                from .registry import config_of, describe_config
                 _p(f"{'*' if e['is_active'] else ' '} {e['id']:<28} {e['kind']:<9} {e['status']:<9} dataset={e.get('dataset_version')} "
-                   f"evaluations={len(e.get('evaluations', []))}")
+                   f"evaluations={len(e.get('evaluations', []))} config=[{describe_config(config_of(e))}]")
             if not rows:
                 _p("registry is empty (the app uses the default pretrained model)")
         return 0
     return 1
 
 
+def _app_defaults() -> dict:
+    """The app's default Spotiflow inference settings (what an analysis uses unless the researcher changes them)."""
+    try:
+        from polony_app.schemas import SpotiflowParams
+        sp = SpotiflowParams()
+        return {"downscale": int(sp.downscale), "normaliser": str(sp.normalizer)}
+    except Exception:  # pragma: no cover
+        return {"downscale": 1, "normaliser": "auto"}
+
+
 def _eval_model(a, data_dir: str) -> int:
-    from .dataset import load_manifest
+    from .common import DEFAULT_NORMALISER
     from .evaluate import evaluate_on_snapshot, make_spotiflow_predictor
-    from .registry import Registry, pretrained_id
+    from .registry import Registry, config_of, describe_config, make_config, pretrained_id
     from .spotiflow_io import describe_base
     from .splits import load_lock
     lock = load_lock(data_dir)
@@ -263,7 +299,6 @@ def _eval_model(a, data_dir: str) -> int:
         raise MLError("there is no locked test set (ml split --snapshot <v> --lock-test); a model cannot be evaluated on "
                       "'the test set' before one is frozen")
     version = a.snapshot or lock["snapshot"]
-    _p(f"evaluating '{a.model}' on the locked test crops of snapshot {version} (tolerance {a.tolerance} px) ...")
     reg = Registry(data_dir)
     base = describe_base(a.model, data_dir)
     mid = base["registry_id"] or None
@@ -273,13 +308,31 @@ def _eval_model(a, data_dir: str) -> int:
             mid = pretrained_id(base["name"])
         else:
             raise MLError("only registry ids and official pretrained names can be evaluated into the registry")
-    pred = make_spotiflow_predictor(a.model, data_dir, device=a.device, prob_thresh=a.prob_thresh)
-    res = evaluate_on_snapshot(data_dir, version, pred, tolerance_px=a.tolerance)
-    reg.add_evaluation(mid, {"at": utc_now(), "lock_sha256": lock["lock_sha256"], "snapshot": version,
-                             "params": {"tolerance_px": a.tolerance, "prob_thresh": a.prob_thresh}, **res})
+    own = config_of(reg.get(mid)) if base["kind"] == "registry" else None
+    want_d, want_n = getattr(a, "downscale", None), getattr(a, "normaliser", None)
+    if own:                                     # fine-tuned: ALWAYS its own recorded configuration, never native
+        if (want_d is not None and want_d != own["downscale"]) or (want_n is not None and want_n != own["normaliser"]):
+            raise MLError(f"'{mid}' was trained at {describe_config(own)}; evaluating it at a different downscale / normaliser "
+                          "would not measure the model (use the recorded configuration)")
+        cfg = own
+        if cfg["normaliser"] not in ("valid_unsaturated", "none"):
+            raise MLError(f"'{mid}' was trained with the legacy per-crop normalisation ({describe_config(own)}) that the "
+                          "locked test crops (page-level lo/hi) cannot reproduce; retrain it with a rebuilt snapshot")
+    else:
+        cfg = make_config(want_d or 1, want_n or DEFAULT_NORMALISER)
+    _p(f"evaluating '{a.model}' at {describe_config(cfg)} on the locked test crops of snapshot {version} "
+       f"(tolerances 5, 10, 15 px; headline {a.tolerance:g}) ...")
+    pred = make_spotiflow_predictor(a.model, data_dir, device=a.device, prob_thresh=a.prob_thresh, downscale=cfg["downscale"])
+    res = evaluate_on_snapshot(data_dir, version, pred, tolerance_px=a.tolerance, downscale=cfg["downscale"],
+                               normaliser=cfg["normaliser"])
+    reg.add_evaluation(mid, {"at": utc_now(), "lock_sha256": lock["lock_sha256"], "snapshot": version, "config": cfg,
+                             "params": {"tolerance_px": a.tolerance, "prob_thresh": a.prob_thresh, **cfg}, **res})
     m = res["metrics"]
-    _p(f"{mid}: precision={m['precision']} recall={m['recall']} f1={m['f1']} mean_match_distance_px={m['mean_match_distance_px']} "
+    _p(f"{mid} ({describe_config(cfg)}): precision vs annotator's marks={m['precision']} recall={m['recall']} f1={m['f1']} "
+       f"mean_match_distance_px={m['mean_match_distance_px']} "
        f"[{res['label']}{': ' + '; '.join(res['preliminary_reasons']) if res['preliminary_reasons'] else ''}]")
+    for k, v in m["by_tolerance"].items():
+        _p(f"  @{k} px: P={v['precision']} R={v['recall']} F1={v['f1']}")
     return 0
 
 
@@ -298,9 +351,14 @@ def _compare(a, data_dir: str) -> int:
             raise MLError(f"'{mid}' has no evaluation on the current locked test set (run: ml eval-model --model {m})")
         rows.append((mid, ev))
     cols = ["precision", "recall", "f1", "mean_match_distance_px", "fp_per_field", "fn_per_field", "count_mae"]
-    _p("| model | " + " | ".join(cols) + " | label |")
-    _p("|" + "|".join(["---"] * (len(cols) + 2)) + "|")
+    _p("Precision is vs this annotator's marks (unmarked polonies count as false positives).")
+    _p("| model | configuration | " + " | ".join(cols) + " | F1 @5 px | F1 @10 px | F1 @15 px | label |")
+    _p("|" + "|".join(["---"] * (len(cols) + 6)) + "|")
+    from .registry import describe_config
     for mid, ev in rows:
-        _p(f"| {mid} | " + " | ".join("-" if ev['metrics'].get(c) is None else f"{ev['metrics'][c]:.4f}" for c in cols)
-           + f" | {ev['label']} |")
+        bt = ev["metrics"].get("by_tolerance", {})
+        f1s = ["-" if (bt.get(k) or {}).get("f1") is None else f"{bt[k]['f1']:.4f}" for k in ("5", "10", "15")]
+        _p(f"| {mid} | {describe_config(ev.get('config'))} | "
+           + " | ".join("-" if ev['metrics'].get(c) is None else f"{ev['metrics'][c]:.4f}" for c in cols)
+           + " | " + " | ".join(f1s) + f" | {ev['label']} |")
     return 0

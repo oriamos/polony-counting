@@ -219,6 +219,13 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     check()
 
     choice = request.engine
+    # same-channel consensus tolerance: an explicit request value is honoured; the default (4 px) is raised to the
+    # Spotiflow downscale d, because the AI detector's positions are only good to ~d px at downscale d
+    cons_tol = float(request.consensus_tolerance_px)
+    cons_tol_note = ""
+    if "consensus_tolerance_px" not in request.model_fields_set and float(request.spotiflow.downscale) > cons_tol:
+        cons_tol = float(request.spotiflow.downscale)
+        cons_tol_note = f", raised from the {request.consensus_tolerance_px:g} px default to the Spotiflow downscale"
     run_bf = choice in (EngineChoice.bigfish, EngineChoice.hybrid)
     run_sf = choice in (EngineChoice.spotiflow, EngineChoice.hybrid)
     if run_sf:
@@ -384,7 +391,7 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
             bf_invalid = [sp[i] for d, i in zip(bf_res.detections, bf_order) if not d.valid]
             bf_spot_of = {d.id: s_ for d, s_ in bf_valid}
             sf_valid_dets = [d for d in sf_res.detections if d.valid]
-            pairs = match_engines([d for d, _ in bf_valid], sf_valid_dets, request.consensus_tolerance_px)
+            pairs = match_engines([d for d, _ in bf_valid], sf_valid_dets, cons_tol)
             need = [p.spotiflow for p in pairs if p.bigfish is None]
             if need and not hasattr(engine, "_measure"):
                 raise EngineError("the injected Big-FISH engine cannot measure spots; hybrid needs it")
@@ -397,7 +404,7 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
             sp = union + bf_invalid          # BF spots outside the valid area flow through exactly as today
             consensus_summaries += summarize(pairs)
             n_by = {st: sum(1 for p in pairs if p.status == st) for st in ConsensusStatus}
-            notes.append(f"{name}: consensus (tolerance {request.consensus_tolerance_px:g} px) "
+            notes.append(f"{name}: consensus (tolerance {cons_tol:g} px{cons_tol_note}) "
                          f"agreement={n_by[ConsensusStatus.agreement]}, "
                          f"bigfish_only={n_by[ConsensusStatus.bigfish_only]}, "
                          f"spotiflow_only={n_by[ConsensusStatus.spotiflow_only]}")

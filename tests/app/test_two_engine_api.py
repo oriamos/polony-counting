@@ -192,13 +192,21 @@ def test_consensus_summary_and_qc_sample_endpoints(client, aid, hybrid):
     # unflagged agreements are not queued; disagreements are
     ids = [q["object_id"] for q in client.get(f"/api/analyses/{aid}/review-queue").json()]
     assert "s1" in ids and "a1" not in ids and "b1" not in ids
-    r1 = client.post(f"/api/analyses/{aid}/consensus/qc-sample", json={"fraction": 0.25, "seed": 3}).json()
-    r2 = client.post(f"/api/analyses/{aid}/consensus/qc-sample", json={"fraction": 0.25, "seed": 3}).json()
-    assert r1["marked"] == r2["marked"] > 0 and r2["newly_marked"] == 0
+    r1 = client.post(f"/api/analyses/{aid}/consensus/qc-sample", json={"n": 10, "seed": 3}).json()
+    r2 = client.post(f"/api/analyses/{aid}/consensus/qc-sample", json={"n": 10, "seed": 3}).json()
+    assert r1["marked"] == r2["marked"] == r1["n"] == 10 and r2["newly_marked"] == 0
+    assert r1["qc"]["sample_size"] == 10 and r1["qc"]["ci95"] is None and "not ground truth" in r1["note"]
+    assert s["qc"]["sample_size"] == 0 and s["qc"]["n_for_margin_0_05"] > 0
+    # legacy body (fraction only) still works and maps to max(40, fraction * N) clamped to the eligible agreements
+    rf = client.post(f"/api/analyses/{aid}/consensus/qc-sample", json={"fraction": 0.05, "seed": 3}).json()
+    assert rf["n"] == min(40, rf["eligible"]) and rf["fraction"] == 0.05
+    r1 = rf
     q = client.get(f"/api/analyses/{aid}/review-queue").json()
     qc = [i for i in q if i["reasons"] == ["qc_sample"]]
     assert len(qc) == r1["marked"] and q[-1]["reasons"] == ["qc_sample"]      # after every disagreement
     assert client.post(f"/api/analyses/{aid}/consensus/qc-sample", json={"fraction": 2}).status_code == 422
+    assert client.post(f"/api/analyses/{aid}/consensus/qc-sample", json={"n": -1}).status_code == 422
+    assert client.get(f"/api/analyses/{aid}/consensus/summary").json()["qc"]["sample_size"] == r1["marked"]
     assert client.post(f"/api/analyses/{aid}/undo").status_code == 200
 
 

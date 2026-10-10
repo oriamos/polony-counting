@@ -590,7 +590,35 @@ function consensusSummary(a) {
     for (const k of Object.keys(t)) if (k !== 'page' && k !== 'channel_role') t[k] += p[k];
     return t;
   }, { page: null, channel_role: null, agreement: 0, bigfish_only: 0, spotiflow_only: 0, human_added: 0, human_rejected: 0, confirmed: 0, rejected: 0, unresolved: 0 });
-  return { pages, total };
+  return { pages, total, qc: qcStatus(a) };
+}
+
+const QC_NOTE = 'agreement is not ground truth. Agreement objects are NOT reviewed unless sampled; the interval bounds the error rate of the UNSAMPLED agreements only if the sample is random.';
+const nForMargin = (N, p) => {
+  if (N <= 0) return 0;
+  const n0 = (1.96 * 1.96 * p * (1 - p)) / (0.05 * 0.05);
+  return Math.min(N, Math.ceil((N * n0) / (N + n0 - 1) - 1e-9));
+};
+/** exact Clopper-Pearson 95 % interval by bisection on the binomial tail */
+function clopperPearson(k, n) {
+  const logC = (m, j) => { let r = 0; for (let i = 1; i <= j; i++) r += Math.log((m - j + i) / i); return r; };
+  const cdf = (p, kk) => { let t = 0; for (let j = 0; j <= kk; j++) t += Math.exp(logC(n, j) + (j ? j * Math.log(p) : 0) + (n - j ? (n - j) * Math.log(1 - p) : 0)); return t; };
+  const solve = (f) => { let lo = 1e-12, hi = 1 - 1e-12; for (let i = 0; i < 80; i++) { const mid = (lo + hi) / 2; if (f(mid)) lo = mid; else hi = mid; } return (lo + hi) / 2; };
+  const lower = k <= 0 ? 0 : solve((p) => 1 - cdf(p, k - 1) < 0.025);
+  const upper = k >= n ? 1 : solve((p) => cdf(p, k) > 0.025);
+  return [lower, upper];
+}
+function qcStatus(a) {
+  const sampled = a.objects.filter((o) => o.review_reasons.includes('qc_sample'));
+  const rejected = sampled.filter((o) => o.deleted).length;
+  const confirmed = sampled.filter((o) => !o.deleted && o.reviewed).length;
+  const reviewed = rejected + confirmed;
+  const pop = a.objects.filter((o) => [o.red, o.green].some((e) => e.detected) && [o.red, o.green].filter((e) => e.detected).every((e) => e.consensus_status === 'agreement')).length;
+  return {
+    sample_size: sampled.length, reviewed, pending: sampled.length - reviewed, confirmed, rejected, population_agreements: pop, seed: null,
+    error_rate: reviewed ? rejected / reviewed : null, ci95: reviewed ? clopperPearson(rejected, reviewed) : null,
+    interval_method: 'Clopper-Pearson exact, 95 % two-sided', n_for_margin_0_05: nForMargin(pop, 0.153), n_for_margin_0_05_conservative: nForMargin(pop, 0.5), planning_error_rate: 0.153, note: QC_NOTE,
+  };
 }
 
 function applyAction(a, type, p) {
@@ -1066,14 +1094,17 @@ async function handle(req, res) {
     }
     if (sub === 'consensus/summary' && m === 'GET') return send(res, 200, consensusSummary(a));
     if (sub === 'consensus/qc-sample' && m === 'POST') {
-      if (!(body.fraction > 0 && body.fraction <= 1)) throw new HttpError(422, 'bad_fraction', 'fraction must be in (0, 1]');
+      if (body.fraction != null && !(body.fraction >= 0 && body.fraction <= 1)) throw new HttpError(422, 'invalid_fraction', 'fraction must be in 0..1');
+      if (body.n != null && !(Number.isInteger(body.n) && body.n >= 0)) throw new HttpError(422, 'invalid_n', 'n must be a non-negative integer');
       const pool = live(a).filter((o) => !o.reviewed && [o.red.consensus_status, o.green.consensus_status].includes('agreement') && !o.review_reasons.includes('qc_sample')).sort((x, y) => x.id.localeCompare(y.id));
-      const n = Math.ceil(pool.length * body.fraction);
+      const want = body.n != null ? body.n : body.fraction != null ? Math.max(40, Math.ceil(pool.length * body.fraction)) : 40;
+      const n = pool.length ? Math.min(Math.max(want, 1), pool.length) : 0;
       const off = pool.length ? Math.abs(body.seed | 0) % pool.length : 0;
       const pick = pool.map((_, i) => pool[(i + off) % pool.length]).slice(0, n);
       pick.forEach((o) => o.review_reasons.push('qc_sample'));
       store.rawRequests.push('qc ' + JSON.stringify(body));
-      return send(res, 200, { marked: pick.length });
+      const pop = a.objects.filter((o) => !o.deleted && [o.red, o.green].filter((e) => e.detected).every((e) => e.consensus_status === 'agreement') && (o.red.detected || o.green.detected)).length;
+      return send(res, 200, { marked: pick.length, newly_marked: pick.length, eligible: pool.length, n, n_requested: want, fraction: body.fraction ?? null, seed: body.seed ?? 0, population_agreements: pop, n_for_margin_0_05: nForMargin(pop, 0.153), n_for_margin_0_05_conservative: nForMargin(pop, 0.5), qc: qcStatus(a), note: QC_NOTE });
     }
     if (sub === 'review-queue' && m === 'GET') return send(res, 200, queue(a));
     if (sub === 'actions' && m === 'POST') {
