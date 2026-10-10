@@ -435,11 +435,57 @@ def cmd_status() -> int:
         print(f"running: http://{HOST}:{port}/  (pid {(info or {}).get('pid', '?')}, version {h.get('version')})")
         print(f"data dir: {data_dir(cfg)}")
         print(_database_line(cfg, port))
+        print(_ai_line())
         return 0
     print("not running")
     print(f"data dir: {data_dir(cfg)}")
     print(_database_line(cfg, None))
+    print(_ai_line())
     return 3
+
+
+def _ai_line() -> str:
+    """'AI detector: installed (spotiflow x, torch y, device d) / not installed' (imports torch: a few seconds)."""
+    import importlib.util
+    from importlib import metadata
+
+    try:
+        have = importlib.util.find_spec("spotiflow") is not None and importlib.util.find_spec("torch") is not None
+    except (ImportError, ValueError):
+        have = False
+    if not have:
+        return "AI detector: not installed (Big-FISH only; re-run the installer with --with-ai / -WithAi to add it)"
+    try:
+        import torch
+
+        dev = "cuda" if torch.cuda.is_available() else (
+            "mps" if getattr(getattr(torch, "backends", None), "mps", None) and torch.backends.mps.is_available() else "cpu")
+        return f"AI detector: installed (spotiflow {metadata.version('spotiflow')}, torch {torch.__version__}, device {dev})"
+    except Exception as e:  # broken install: say so, Big-FISH still works
+        return f"AI detector: installed but cannot be loaded ({type(e).__name__}: {str(e)[:150]}); Big-FISH still works"
+
+
+def cmd_prepare_model(model: str) -> int:
+    """Download (once) and verify the Spotiflow model into <POLONY_HOME>/models/spotiflow; print its sha256."""
+    os.environ.setdefault("POLONY_HOME", str(home_dir()))
+    try:
+        from polony_app.engines.spotiflow_adapter import ensure_model, model_cache_dir
+    except Exception as e:
+        print(f"The AI detector is not installed ({e}). Re-run the installer with --with-ai / -WithAi.")
+        return 1
+    print(f"Model folder: {model_cache_dir()}")
+
+    def progress(frac: float, msg: str) -> None:
+        print(f"  [{int(frac * 100):3d}%] {msg}", flush=True)
+
+    try:
+        info = ensure_model(model, progress=progress)
+    except Exception as e:
+        print(f"Could not prepare model '{model}': {e}")
+        return 1
+    print(f"Model '{info.name}' ready ({'already on disk' if info.cached else 'downloaded now'}): {info.path}")
+    print(f"sha256: {info.checksum_sha256}")
+    return 0
 
 
 def configured_database_url(cfg: Optional[dict] = None) -> Optional[str]:
@@ -545,7 +591,8 @@ def self_test() -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="polony_app.launcher", description=__doc__.split("\n")[0])
-    ap.add_argument("command", nargs="?", default="launch", choices=["launch", "stop", "status", "set-database", "clear-database"])
+    ap.add_argument("command", nargs="?", default="launch", choices=["launch", "stop", "status", "set-database", "clear-database", "prepare-model"])
+    ap.add_argument("--model", default="general", help="prepare-model: Spotiflow model name (default: general)")
     ap.add_argument("--no-browser", action="store_true", help="start the server but do not open a browser")
     ap.add_argument("--self-test", action="store_true", help="start a temporary server, check it, stop it")
     a = ap.parse_args(argv)
@@ -556,6 +603,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_stop()
         if a.command == "status":
             return cmd_status()
+        if a.command == "prepare-model":
+            return cmd_prepare_model(a.model)
         if a.command == "set-database":
             return cmd_set_database()
         if a.command == "clear-database":

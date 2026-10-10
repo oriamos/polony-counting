@@ -6,6 +6,7 @@
 # Re-running it updates the installation. Options (after `bash -s --` when piped):
 #   --dry-run        print what would be done, change nothing
 #   --no-launch      do not start the app at the end
+#   --with-ai        also install the optional AI detector (Spotiflow + PyTorch, 0.8-2.5 GB); --without-ai never asks
 #   --ref NAME       git branch/tag to install (default: claude/polony-hitl-app)
 #   --python PATH    use this Python (3.10-3.13) instead of searching / downloading one
 # Environment: POLONY_HOME (default ~/PolonyReview), POLONY_DATA_DIR (default ~/PolonyReviewData),
@@ -24,12 +25,14 @@ main() {
   REF="${POLONY_REF:-claude/polony-hitl-app}"
   PH="${POLONY_HOME:-$HOME/PolonyReview}"
   DATA="${POLONY_DATA_DIR:-$HOME/PolonyReviewData}"
-  DRY=0; NO_LAUNCH=0; PY_ARG=""; SHORTCUTS_ONLY=0
+  DRY=0; NO_LAUNCH=0; PY_ARG=""; SHORTCUTS_ONLY=0; WITH_AI=""
   CI="${POLONY_CI:-}"; [ "$CI" = "0" ] && CI=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --dry-run) DRY=1 ;;
       --no-launch) NO_LAUNCH=1 ;;
+      --with-ai) WITH_AI=1 ;;
+      --without-ai) WITH_AI=0 ;;
       --shortcuts-only) SHORTCUTS_ONLY=1; NO_LAUNCH=1 ;;   # (used by the tests) skip steps 1-4
       --ref) REF="${2:?--ref needs a value}"; shift ;;
       --python) PY_ARG="${2:?--python needs a value}"; shift ;;
@@ -39,6 +42,7 @@ main() {
     shift
   done
   [ -n "$CI" ] && NO_LAUNCH=1
+  [ -n "$WITH_AI" ] || WITH_AI="${POLONY_WITH_AI:-}"   # env POLONY_WITH_AI=1/0 for non-interactive installs
   # optional shared database URL: taken out of the environment right away so no other process inherits it
   DB_URL="${POLONY_DATABASE_URL:-}"; unset POLONY_DATABASE_URL
 
@@ -48,7 +52,7 @@ main() {
     *) echo "This installer supports macOS and Linux. On Windows use install.ps1." >&2; return 1 ;;
   esac
   APP="$PH/app"; VENV="$PH/venv"; VPY="$VENV/bin/python"
-  STEPS=7
+  STEPS=8
 
   say()  { printf '%s\n' "$*"; }
   step() { printf '\n[%s/%s] %s\n' "$1" "$STEPS" "$2"; }
@@ -231,8 +235,41 @@ main() {
     setup_database
   fi
 
+  # ---------------------------------------------------------------- 6. AI detector (optional)
+  setup_ai() {
+    local interactive=0 ans="" cuda="no" want="$WITH_AI"
+    if [ -z "$CI" ] && ( : </dev/tty ) 2>/dev/null; then interactive=1; fi
+    if [ -z "$want" ]; then
+      if [ "$interactive" = 0 ]; then say "  Skipped (Big-FISH detection works without it). Add it later: re-run this installer with --with-ai"; return 0; fi
+      "$VPY" "$APP/install/ai_extra.py" describe || true
+      printf '  Install the AI detector (Spotiflow + PyTorch, large download ~0.8-2.5 GB depending on platform)? [y/N] ' >/dev/tty
+      IFS= read -r ans </dev/tty || ans=""
+      case "$ans" in y|Y|yes|YES) want=1 ;; *) say "  Skipped (Big-FISH only). Add it later with --with-ai."; return 0 ;; esac
+    fi
+    [ "$want" = 0 ] && { say "  Skipped (--without-ai)."; return 0; }
+    if [ "${POLONY_AI_CUDA:-}" = 1 ]; then cuda=yes
+    elif have nvidia-smi && [ "$interactive" = 1 ]; then
+      printf '  An NVIDIA GPU was found. Use the CUDA build of PyTorch (about 2.5 GB instead of ~0.8 GB)? [y/N] ' >/dev/tty
+      IFS= read -r ans </dev/tty || ans=""
+      case "$ans" in y|Y|yes|YES) cuda=yes ;; esac
+    fi
+    say "  Downloading and installing PyTorch + Spotiflow (this can take a long time) ..."
+    POLONY_HOME="$PH" "$VPY" "$APP/install/ai_extra.py" install --cuda "$cuda" \
+      || warn "the AI detector could not be installed; Big-FISH detection still works"
+  }
+  step 6 "AI detector (optional)"
+  if [ "$DRY" = 1 ]; then
+    if [ "$WITH_AI" = 1 ]; then
+      plan "install the AI detector: matching torch+torchvision (CPU wheels from download.pytorch.org/whl/cpu on Linux, PyPI on macOS, CUDA only if asked), then spotiflow (install/extra-ai-requirements.txt), then import check; record ai_enabled in config.json"
+    else
+      plan "ask 'Install the AI detector (Spotiflow + PyTorch, ~0.8-2.5 GB)? [y/N]' (default no; skipped without a terminal/CI unless --with-ai or POLONY_WITH_AI=1)"
+    fi
+  elif [ "$SHORTCUTS_ONLY" = 0 ]; then
+    setup_ai
+  fi
+
   # ---------------------------------------------------------------- 5. helper commands
-  step 6 "Creating the 'Polony Review' icon"
+  step 7 "Creating the 'Polony Review' icon"
   ICONS="$APP/install/assets"
   APPS="$HOME/Applications"
   if [ "$OS" = linux ]; then
@@ -330,7 +367,7 @@ DESKTOP
   fi
 
   # ---------------------------------------------------------------- 6. done
-  step 7 "Done"
+  step 8 "Done"
   say "  Start it from the 'Polony Review' icon on your Desktop (first start takes up to a minute)."
   say "  Stop it:    $BINDIR/polony-review stop"
   say "  Shared database (optional): $BINDIR/polony-review set-database | clear-database"
