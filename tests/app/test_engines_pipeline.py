@@ -99,8 +99,14 @@ def test_bigfish_adapter_standalone_matches_pipeline_spots():
 def fake_points(drop=(), add=()):
     """Fake model: finds the bright blobs of the array it receives, drops those near `drop` (x, y) and adds
     `add` (x, y). The crop is the whole image here (counting region = full image => no offset)."""
+    n = {"call": 0}
+
     def fn(img):
+        first = n["call"] == 0          # the pipeline runs red (page 0) first, then green: edits apply to red only
+        n["call"] += 1
         pts, prob = local_max_points(img)
+        if not first:
+            return pts, prob
         keep = [i for i, (y, x) in enumerate(pts) if not any(abs(x - dx) < 3 and abs(y - dy) < 3 for dx, dy in drop)]
         pts, prob = pts[keep], prob[keep]
         if add:

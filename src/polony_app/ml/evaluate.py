@@ -163,10 +163,6 @@ def summarise_config(items: list[dict], tol: float, n_annotators: int) -> dict:
 
 
 # ====================================================================== gathering from the store
-def _moved(o) -> bool:
-    return any(" moved from " in h for h in (o.history or []))
-
-
 def _candidate_points(o, role: str) -> Optional[tuple[float, float]]:
     ev = o.red if role == "red" else o.green
     if ev.detected and ev.x is not None and ev.y is not None:
@@ -430,7 +426,6 @@ def evaluate_analyses(store, analysis_ids: Sequence[str], *, reference: str = "a
             raise MLError(f"analysis '{aid}' not found")
         gather_analysis(store, aid, g, reference=reference, tol=tolerance_px, numbering=numbering,
                         registry_ids=registry_ids, configs=configs)
-    n_ann = len({r for r in g.reviewers if not r.startswith("unknown:")} or ({"x"} if g.reviewers else set()))
     # unknown reviewers are one anonymous session each; several analyses by 'unknown' still cannot establish 2 annotators
     n_ann = len({r for r in g.reviewers if not r.startswith("unknown:")}) or (1 if g.reviewers else 0)
     report = {"generated_at": utc_now(), "reference": reference, "tolerance_px": tolerance_px, "numbering": numbering,
@@ -547,6 +542,9 @@ def evaluate_on_snapshot(data_dir: str | Path, version: str, predict: Predictor,
     why = preliminary_reasons(len(items), sum(len(i["ref"]) for i in items), 2 if n_groups > 1 else 1)
     why = [w for w in why if "annotator" not in w]
     met = metrics_of(items, tolerance_px)
-    return {"metrics": met, "per_page": _slice(items, "page", tolerance_px, 2, defaultdict(lambda: MIN_EVENTS_PER_PAGE)),
+    page_events: dict = defaultdict(int)
+    for it in items:
+        page_events[it["page"]] += len(it["ref"])
+    return {"metrics": met, "per_page": _slice(items, "page", tolerance_px, 2, page_events),
             "n_crops": len(items), "n_groups": n_groups, "tolerance_px": tolerance_px, "split": split,
             "label": "preliminary" if why else "ok", "preliminary_reasons": why}

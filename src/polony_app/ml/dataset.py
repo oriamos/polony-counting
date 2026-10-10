@@ -169,7 +169,8 @@ def classify_objects(a: Analysis, user_deleted, reviewed: list[Region], *, stric
             chans = _channels_for(o)
         for ch in chans:
             ev = evs.get(ch) if ch else None
-            if ev is not None and ev.detected and ev.x is not None and ev.y is not None:
+            moved = any(" moved from " in h for h in (o.history or []))
+            if ev is not None and ev.detected and ev.x is not None and ev.y is not None and not moved:
                 x, y = float(ev.x), float(ev.y)
             else:
                 x, y = float(o.x), float(o.y)
