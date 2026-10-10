@@ -4,6 +4,20 @@
 [![Testing](https://github.com/kirill-push/polony-counting/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/kirill-push/polony-counting/actions/workflows/test.yml)
 [![Documentation](https://github.com/kirill-push/polony-counting/actions/workflows/pages.yml/badge.svg)](https://github.com/kirill-push/polony-counting/actions/workflows/pages.yml)
 
+## Polony Review App (new)
+
+A local human-in-the-loop web app (FastAPI + React, Big-FISH spot detection, **no torch needed**) for reviewing and approving red / green / yellow polony counts with full provenance.
+
+```bash
+make app        # venv + dependencies + frontend build (if npm) + server on http://127.0.0.1:8000
+make app-test   # 192 tests
+```
+
+Docs: [docs/app/README.md](docs/app/README.md) (start here), [user guide](docs/app/USER_GUIDE.md), [parameters](docs/app/PARAMETERS.md),
+[open scientific questions](docs/app/SCIENTIFIC_OPEN_QUESTIONS.md), [legacy audit](docs/app/LEGACY_AUDIT.md).
+**Status:** validated only on one red-only test image; the research TIFFs of the task were not available; defaults and cut-offs are unvalidated; concentration output stays empty until the formula is confirmed.
+The sections below describe the **legacy** neural-network pipeline (`src/polony`), which has known defects listed in the audit and is left untouched.
+
 # Polony counting project
 
 ## Table of Contents
