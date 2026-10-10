@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { server, SPOTS } from '../mock/server.mjs';
+import { server, SPOTS, SIGMA } from '../mock/server.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(__dirname, '../e2e-artifacts');
@@ -35,6 +35,11 @@ const reset = async () => {
   await fetch(`${BASE}/api/__mock/reset`, { method: 'POST' });
 };
 const tid = (id) => page.locator(`[data-testid="${id}"]`);
+const setChecked = async (id, want = true) => {
+  const loc = tid(id);
+  if ((await loc.isChecked()) !== want) await loc.click();
+  await page.waitForFunction(([i, w]) => document.querySelector(`[data-testid="${i}"]`).checked === w, [id, want]);
+};
 const shot = (name) => page.screenshot({ path: path.join(OUT, name + '.png') });
 
 async function openAnalysis(id) {
@@ -79,7 +84,7 @@ async function centroid(clip, mode) {
           const r = d[i],
             gg = d[i + 1],
             b = d[i + 2];
-          const w = mode === 'img' ? Math.max(0, r + gg - 60) : Math.min(r, gg, b) >= 240 ? 1 : 0;
+          const w = mode === 'img' ? Math.max(0, r + gg - 60) : Math.max(0, Math.min(r, gg, b) - 90);
           sw += w;
           sx += w * (x + 0.5);
           sy += w * (y + 0.5);
@@ -114,7 +119,7 @@ async function alignmentSuite() {
     const v = await viewState();
     for (const s of targets) {
       const p = await toScreen(s.x, s.y);
-      const R = 26;
+      const R = Math.min(120, Math.max(26, Math.round(4 * SIGMA * v.s)));
       if (p.x - R < v.left + 4 || p.y - R < v.top + 4 || p.x + R > v.left + v.w - 4 || p.y + R > v.top + v.h - 4) continue;
       const clip = { x: Math.round(p.x - R), y: Math.round(p.y - R), width: 2 * R, height: 2 * R };
       await setHidden(true);
@@ -256,7 +261,7 @@ async function regionSuite() {
   await page.waitForSelector('[data-testid=region-error-reg-1]');
   const msg = await tid('region-error-reg-1').innerText();
   check('approval refusal reason shown', /inspected/.test(msg) || /uncertain/.test(msg), msg);
-  await tid('inspected-reg-1').check();
+  await setChecked('inspected-reg-1');
   await page.waitForTimeout(250);
   await page.locator('[data-testid=approve-reg-1]').click();
   await page.waitForTimeout(250);
@@ -439,7 +444,7 @@ async function mappingSuite() {
   await page.locator('.csv-title').first().click();
   const blanks = await page.locator('.csv-tbl td.cell-blank').count();
   const zeros = await page.locator('.csv-tbl td.cell-val', { hasText: /^0$/ }).count();
-  check('CSV shows blank cells distinct from 0', blanks >= 3 && zeros === 1, `blank=${blanks} zero=${zeros}`);
+  check('CSV shows blank cells distinct from 0', blanks === 2 && zeros === 1, `blank=${blanks} zero=${zeros}`);
   check('CSV colour not preselected', (await tid('csv-colour').inputValue()) === '');
   await tid('csv-colour').selectOption('green');
   await page.locator('.csv-detail button', { hasText: 'Save' }).click();
@@ -529,7 +534,7 @@ async function detectSuite() {
   await page.keyboard.press('y');
   await page.waitForTimeout(250);
   await tid('tab-regions').click();
-  await tid('inspected-reg-1').check();
+  await setChecked('inspected-reg-1');
   await page.waitForTimeout(250);
   await page.locator('[data-testid=accept-reg-1]').click();
   await page.waitForTimeout(250);

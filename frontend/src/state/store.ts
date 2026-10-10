@@ -401,7 +401,12 @@ export const useApp = create<AppState>((set, get) => ({
         job = await api.job(job.id);
         set({ job });
       }
-      const a = await api.getAnalysis(id);
+      let a = await api.getAnalysis(id);
+      for (let i = 0; i < 8 && a.status === 'detecting'; i++) {
+        // the server may flip the analysis status a moment after the job ends
+        await new Promise((r) => setTimeout(r, 400));
+        a = await api.getAnalysis(id);
+      }
       if (get().current?.id === id) get().setAnalysis(a);
       if (job.status === 'done') get().toast('success', 'Detection finished');
       else if (job.status === 'failed') get().toast('error', `Detection failed: ${job.error ?? 'unknown error'}`);

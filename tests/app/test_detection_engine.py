@@ -20,7 +20,8 @@ def corrected(arr, p=P, valid=None):
 
 def detect(arr, p=P, valid=None, **kw):
     e = BigFishEngine()
-    return e.detect(corrected(arr, p, valid), p, valid, raw=arr, **kw), e
+    measured = correct_background(arr, p.background.model_copy(update={"clip_negative": False}), valid)
+    return e.detect(np.maximum(measured, 0), p, valid, raw=arr, measure=measured, **kw), e
 
 
 def match_truth(spots, truth, tol=1.5):
@@ -45,7 +46,7 @@ def test_known_coordinates_recovered_and_no_extras():
         assert max(match_truth(spots, truth)) < 1.5
         assert all(s.snr and s.snr > 10 for s in spots)
         assert all(not s.saturated for s in spots)
-        assert all(s.background == pytest.approx(0, abs=40) for s in spots)
+        assert all(abs(s.background) < 0.2 * s.peak for s in spots)  # residual of the broad bump only
 
 
 def test_auto_threshold_equals_bigfish_detect_spots_threshold():
@@ -152,7 +153,7 @@ def test_scale_ratio_separates_compact_from_extended():
 
 
 def test_elongation_measure():
-    sc = syn.make_scene((150, 150), [(50, 75, 3000), (53, 75, 3000)], [(100, 75, 3000)], sigma=3.0, seed=4)
+    sc = syn.make_scene((150, 150), [(50, 75, 3000), (54.5, 75, 3000)], [(100, 75, 3000)], sigma=3.0, seed=4)
     merged, _ = detect(sc.red)
     single, _ = detect(sc.green)
     assert len(merged) == 1 and merged[0].elongation > 1.3

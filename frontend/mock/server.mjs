@@ -811,6 +811,11 @@ async function handle(req, res) {
         j.status = 'cancelled';
         j.message = 'cancelled by user';
         j.finished_at = now();
+        const a = store.analyses.get(j.analysis_id);
+        if (a) {
+          a.status = a.objects.length ? 'in_review' : 'ready';
+          refresh(a);
+        }
       }
     }
     return send(res, 200, j);

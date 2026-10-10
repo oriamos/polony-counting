@@ -515,8 +515,11 @@ export function Viewer() {
             data-testid="viewer-image"
             style={{
               position: 'absolute',
-              left: -0.5,
-              top: -0.5,
+              // NB: the half-pixel shift must be a transform, not left/top: Chrome pixel-snaps
+              // fractional layout offsets of replaced elements, which misaligns by 0.5 image px.
+              left: 0,
+              top: 0,
+              transform: 'translate(-0.5px, -0.5px)',
               width: W,
               height: H,
               maxWidth: 'none',

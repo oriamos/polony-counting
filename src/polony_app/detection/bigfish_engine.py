@@ -51,6 +51,7 @@ from .engine import RawSpot
 from .errors import DetectionCancelled
 
 _MAD_TO_SIGMA = 1.4826
+NOISE_K = 5.0
 
 
 class BigFishEngine:
@@ -107,6 +108,19 @@ class BigFishEngine:
         return None if thr is None else float(thr)
 
     @staticmethod
+    def noise_threshold(filled: np.ndarray, params: DetectionParams, valid: Optional[np.ndarray]) -> Optional[float]:
+        """Fallback when Big-FISH cannot pick a threshold: NOISE_K x robust sigma
+        (1.4826*MAD) of the SIGNED -LoG response over valid pixels."""
+        r = float(params.spot_radius_px)
+        resp = -ndi.gaussian_laplace(filled, sigma=r, mode="reflect")
+        vals = resp[valid] if valid is not None else resp.ravel()
+        if vals.size == 0:
+            return None
+        med = float(np.median(vals))
+        sig = _MAD_TO_SIGMA * float(np.median(np.abs(vals - med)))
+        return NOISE_K * sig if sig > 0 else None
+
+    @staticmethod
     def _detect_coords(image: np.ndarray, thr: float, params: DetectionParams) -> np.ndarray:
         from bigfish.detection import detect_spots
         r, d = float(params.spot_radius_px), float(params.minimum_distance_px)
@@ -147,12 +161,25 @@ class BigFishEngine:
             thr = float(params.threshold)
             info["notes"].append("manual threshold used as given (threshold_scale ignored)")
         else:
-            auto = self.auto_threshold(filled, params, valid)
+            auto = None
+            try:
+                auto = self.auto_threshold(filled, params, valid)
+            except ValueError as exc:  # bigfish get_breaking_point on a short/monotone curve
+                info["notes"].append(f"Big-FISH automatic threshold raised ({exc})")
             info["auto_threshold"] = auto
-            if auto is None:
-                info["notes"].append("automatic threshold failed (no usable spot-count curve); no spots reported")
-                return [], info
-            thr = auto * float(params.threshold_scale)
+            if auto is None or auto <= 0:
+                nt = self.noise_threshold(filled if measure is None else np.asarray(measure, np.float32), params, valid)
+                if nt is None:
+                    info["notes"].append("automatic threshold failed and no noise estimate possible; no spots reported")
+                    return [], info
+                info["notes"].append(
+                    f"WARNING automatic threshold unusable ({'none' if auto is None else auto}); fell back to "
+                    f"{NOISE_K:g} x robust noise sigma of the LoG response = {nt:.4g}. Set a threshold manually if unsure.")
+                info["fallback_threshold"] = True
+                auto = None
+                thr = nt * float(params.threshold_scale)
+            else:
+                thr = auto * float(params.threshold_scale)
         info["threshold"] = thr
         if cancelled():
             raise DetectionCancelled()
