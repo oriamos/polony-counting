@@ -1381,3 +1381,46 @@ input.num {
     grid-template-columns: 220px minmax(0, 1fr) 320px;
   }
 }
+
+.banner.notes {
+  display: block;
+  padding: 2px 12px;
+}
+.notes-toggle {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.notes-toggle:focus-visible {
+  outline: 2px solid var(--accent, #4da3ff);
+}
+.notes-preview {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.notes-list {
+  margin: 2px 0 4px;
+  padding-left: 18px;
+  max-height: 140px;
+  overflow: auto;
+  font-size: 12px;
+}
+.notes-list li.warn {
+  color: var(--text);
+  font-weight: 600;
+}
+.hint-strong {
+  border-left: 3px solid var(--warn);
+  background: var(--warn-bg);
+  padding: 6px 8px;
+  font-size: 12px;
+}

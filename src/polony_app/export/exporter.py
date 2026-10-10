@@ -7,6 +7,7 @@ import json
 import re
 import zipfile
 from importlib import metadata
+from pathlib import Path
 
 import polony_app
 from polony_app.review.counts import compute_counts, counted_objects
@@ -14,6 +15,7 @@ from polony_app.review.engine import (
     action_log_summary,
     counting_area_px2,
     mapping_confirmed,
+    compute_stale,
     now,
     region_area_px2,
 )
@@ -39,7 +41,18 @@ def export_filename(a: Analysis, kind: str) -> str:
     return f"{safe_stem(a.name)}_{kind}{suffix}.{ext}"
 
 
+# the detection pipeline reports import names; the exporter uses distribution names
+_CANON = {"bigfish": "big-fish", "skimage": "scikit-image", "PIL": "Pillow", "pil": "Pillow",
+          "polony-app": "polony_app"}
+
+
+def canonical_versions(v: dict[str, str] | None) -> dict[str, str]:
+    """Package versions under ONE set of key names (distribution names)."""
+    return {_CANON.get(k, k): str(x) for k, x in (v or {}).items()}
+
+
 def package_versions() -> dict[str, str]:
+    """Versions installed NOW (at export time)."""
     out = {"polony_app": polony_app.__version__}
     for p in _PKGS:
         try:
@@ -47,6 +60,18 @@ def package_versions() -> dict[str, str]:
         except metadata.PackageNotFoundError:
             pass
     return out
+
+
+def read_upload_manifest(originals_dir: str | Path | None) -> dict[str, str] | None:
+    """{stored_name: original_upload_name} from <originals_dir>/upload_manifest.json
+    (written by the API at upload). None when absent/unreadable."""
+    if originals_dir is None:
+        return None
+    try:
+        d = json.loads((Path(originals_dir) / "upload_manifest.json").read_text())
+        return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 def _csv(header: list[str], rows: list[list]) -> str:
@@ -202,18 +227,22 @@ def slide_csv(a: Analysis) -> str:
 
 
 # ------------------------------------------------------------------ provenance
-def provenance_dict(state: AnalysisState) -> dict:
+def provenance_dict(state: AnalysisState, originals_dir: str | Path | None = None) -> dict:
     a = state.analysis
     img = a.image
     image = None
+    manifest = read_upload_manifest(originals_dir)
     if img is not None:
         image = {
+            "original_upload_filenames": manifest,  # stored_name -> name as uploaded (null: no manifest)
+            "tiff_info_text": img.tiff_info_text,
             "kind": img.kind.value, "height": img.height, "width": img.width, "dtype": img.dtype,
             "bit_depth": img.bit_depth, "sha256": img.sha256, "pixel_size_um": img.pixel_size_um,
             "composite_only": img.composite_only, "warnings": img.warnings,
             "embedded_rois": [r.model_dump(mode="json") for r in img.embedded_rois],
             "channel_mapping": [
-                {"index": c.index, "source_file": c.source_file, "page": c.page,
+                {"index": c.index, "source_file": c.source_file,
+                 "original_upload_filename": (manifest or {}).get(c.source_file), "page": c.page,
                  "label_hint": c.label_hint, "role": c.role.value if c.role else None,
                  "role_confirmed": c.role_confirmed, "min": c.min, "max": c.max,
                  "saturated_fraction": c.saturated_fraction}
@@ -221,8 +250,6 @@ def provenance_dict(state: AnalysisState) -> dict:
             ],
         }
     prov = a.provenance.model_dump(mode="json")
-    versions = dict(package_versions())
-    versions.update(a.provenance.package_versions or {})
     counts = compute_counts(a)
     return {
         "status": status_label(a),
@@ -236,7 +263,11 @@ def provenance_dict(state: AnalysisState) -> dict:
         "provenance": prov,
         "detection_parameters": a.detection_request.model_dump(mode="json"),
         "detection_parameters_used": prov.get("detection_request"),
-        "package_versions": versions,
+        "detection_inputs_recorded": state.detection_sig,
+        "detection_is_stale": compute_stale(a, state.detection_sig, a.provenance.stale_detection),
+        # same key names in both: distribution names (see canonical_versions)
+        "package_versions_at_detection": canonical_versions(a.provenance.package_versions),
+        "package_versions_at_export": package_versions(),
         "image": image,
         "alignment_applied_to_green_px": state.alignment,
         "regions": [r.model_dump(mode="json") for r in a.regions],
@@ -244,12 +275,47 @@ def provenance_dict(state: AnalysisState) -> dict:
         "counts": {"regions": [c.model_dump(mode="json") for c in counts["regions"]],
                    "slide": counts["slide"].model_dump(mode="json")},
         "action_log_summary": action_log_summary(state),
+        "events": list(state.events),  # complete: mapping/alignment/settings/undo/redo/reopen, never truncated
+        "files_note": {
+            "actions.jsonl": "full review-action log (seq, ts, type, payload); the undo/redo "
+                             "'inverse' restore snapshots are omitted (large, redundant with the "
+                             "payloads + objects_history.csv)",
+            "objects_history.csv": "per-object history trail, including deleted objects",
+        },
         "coordinate_convention": "pixel coordinates, x=column, y=row, pixel (0,0) centre = (0.0, 0.0)",
     }
 
 
-def provenance_json(state: AnalysisState) -> str:
-    return json.dumps(provenance_dict(state), indent=2, sort_keys=False, default=str)
+def provenance_json(state: AnalysisState, originals_dir: str | Path | None = None) -> str:
+    return json.dumps(provenance_dict(state, originals_dir), indent=2, sort_keys=False, default=str)
+
+
+def actions_jsonl(state: AnalysisState) -> str:
+    """Full ReviewAction log, one JSON object per line. Inverse (undo/redo) snapshots omitted."""
+    lines = []
+    for act in state.log:
+        lines.append(json.dumps(
+            {"seq": act.seq, "ts": act.ts, "type": act.type.value, "payload": act.payload,
+             "inverse_omitted": True},
+            sort_keys=False, default=str))
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def events_jsonl(state: AnalysisState) -> str:
+    lines = [json.dumps(e, sort_keys=False, default=str) for e in state.events]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def objects_history_csv(a: Analysis) -> str:
+    """Every history entry of every object (deleted ones included, flagged)."""
+    rows = []
+    for o in a.objects:
+        for i, h in enumerate(o.history):
+            ts, _, msg = h.partition(" ")
+            if "T" not in ts:  # entry without a leading timestamp
+                ts, msg = "", h
+            rows.append([o.id, i + 1, ts, msg, _b(o.deleted), o.origin.value])
+    return _csv(["object_id", "step", "timestamp", "event", "object_deleted_now", "origin"], rows)
 
 
 # ------------------------------------------------------------------ bundle
@@ -269,8 +335,14 @@ FILES
   objects*.csv    one row per non-deleted object, with per-channel evidence
   regions*.csv    per-region counts, areas, approval status
   slide*.csv      slide totals and (only if inputs are complete) concentration
-  provenance.json parameters, image hash/shape/bit depth, channel mapping, regions,
-                  package versions, reporting mode, schema version, action-log summary
+  provenance.json parameters, image hash/shape/bit depth, TIFF info text, original upload
+                  file names, channel mapping, regions, package versions at detection and at
+                  export, recorded detection inputs, reporting mode, schema version,
+                  action-log summary and the complete event list
+  actions.jsonl   complete review-action log (seq, ts, type, payload). The undo/redo restore
+                  snapshots ("inverse") are omitted (marked inverse_omitted)
+  events.jsonl    non-undoable events (channel mapping, alignment, settings, undo, redo, reopen)
+  objects_history.csv  history trail of every object, deleted ones included
 
 CONVENTIONS
   * Coordinates are image pixels; x = column, y = row; pixel (0,0) centre is (0.0, 0.0).
@@ -312,7 +384,7 @@ STATUS
 """
 
 
-def bundle_zip(state: AnalysisState) -> bytes:
+def bundle_zip(state: AnalysisState, originals_dir: str | Path | None = None) -> bytes:
     a = state.analysis
     suffix = "" if a.finalized_at is not None else "_DRAFT"
     buf = io.BytesIO()
@@ -321,5 +393,8 @@ def bundle_zip(state: AnalysisState) -> bytes:
         z.writestr(f"objects{suffix}.csv", objects_csv(a))
         z.writestr(f"regions{suffix}.csv", regions_csv(a))
         z.writestr(f"slide{suffix}.csv", slide_csv(a))
-        z.writestr("provenance.json", provenance_json(state))
+        z.writestr("provenance.json", provenance_json(state, originals_dir))
+        z.writestr("actions.jsonl", actions_jsonl(state))
+        z.writestr("events.jsonl", events_jsonl(state))
+        z.writestr("objects_history.csv", objects_history_csv(a))
     return buf.getvalue()

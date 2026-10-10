@@ -100,7 +100,9 @@ class Store:
                     "UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?",
                     ("interrupted: the application was restarted while this job was running", now(), r["id"]),
                 )
-            stuck = self._exec("SELECT id FROM analyses WHERE status='detecting'").fetchall()
+            stuck = self._exec(
+                "SELECT id FROM analyses WHERE status='detecting' OR state LIKE '%\"job_active\": true%'"
+            ).fetchall()
         for r in stuck:
             with self.edit(r["id"]) as st:
                 refresh_status(st, job_running=False)

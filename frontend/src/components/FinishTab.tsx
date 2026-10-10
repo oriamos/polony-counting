@@ -110,7 +110,8 @@ function SlideForm() {
   useEffect(() => setM(a.slide), [a.id, a.slide]);
   const locked = a.status === 'finalized';
   const dirty = JSON.stringify(m) !== JSON.stringify(a.slide);
-  const complete = m.sample_volume_ul != null && m.concentration_factor != null && !!(m.pixel_size_um ?? a.image?.pixel_size_um);
+  const complete =
+    m.sample_volume_ul != null && m.concentration_factor != null && m.sample_total_area_px2 != null && !!m.concentration_formula_confirmed && !!(m.pixel_size_um ?? a.image?.pixel_size_um);
   const save = async () => {
     setBusy(true);
     try {
@@ -151,16 +152,43 @@ function SlideForm() {
           />
         </label>
         <label className="span2">
+          Total sample area <span className="unit">px², same units as counting area</span>
+          <NumInput value={m.sample_total_area_px2 ?? null} nullable min={0} disabled={locked} onChange={(v) => setM({ ...m, sample_total_area_px2: v })} testid="slide-total-area" />
+        </label>
+        <label className="span2">
           Sampled-area note
           <input className="input sm" value={m.sampled_area_note ?? ''} disabled={locked} onChange={(e) => setM({ ...m, sampled_area_note: e.target.value || null })} />
+        </label>
+      </div>
+      <div className="notice warn small" data-testid="formula-note">
+        <strong>PROPOSED / UNCONFIRMED formula:</strong>{' '}
+        <span className="mono">concentration = count / counting area × total sample area ÷ sample volume × concentration factor</span>. Concentration is computed only by the server, and only after you confirm the
+        formula and geometry below; this page never calculates it.
+        <label className="chk">
+          <input
+            type="checkbox"
+            checked={!!m.concentration_formula_confirmed}
+            disabled={locked}
+            onChange={(e) => setM({ ...m, concentration_formula_confirmed: e.target.checked })}
+            data-testid="formula-confirmed"
+          />{' '}
+          I confirm the concentration formula and geometry
         </label>
       </div>
       <div className="small mono muted">counting area (from regions): {m.counting_area_px2 != null ? `${Math.round(m.counting_area_px2).toLocaleString()} px²` : '–'}</div>
       <div className={`notice small ${complete ? '' : 'warn'}`}>
         {complete
-          ? 'All inputs for a concentration are present.'
-          : 'Concentration will not be computed: sample volume, concentration factor and a known pixel size are all required.'}
+          ? 'All inputs are present; the server decides whether a concentration is exported.'
+          : 'Concentration will not be computed: sample volume, concentration factor, total sample area, a known pixel size and the formula confirmation are all required.'}
       </div>
+      {(() => {
+        const st = (a.slide as unknown as Record<string, unknown>).concentration_status ?? (a as unknown as Record<string, unknown>).concentration_status;
+        return typeof st === 'string' && st ? (
+          <div className="notice small" data-testid="concentration-status">
+            Export status: {st}
+          </div>
+        ) : null;
+      })()}
       <button className="btn primary" disabled={!dirty || busy || locked} onClick={() => void save()} data-testid="slide-save">
         {busy ? 'Saving…' : 'Save slide metadata'}
       </button>

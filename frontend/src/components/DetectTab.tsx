@@ -199,6 +199,9 @@ export function DetectTab() {
         </div>
       )}
       <ParamTable req={req} set={setReq} disabled={locked} />
+      <div className="hint-strong" data-testid="radius-hint">
+        <strong>Count depends strongly on spot radius</strong> (real example: radius 5 → 108 objects, 3 → 207, 2 → 331). Choose it from the visible blob size using Preview, don't rely on the default.
+      </div>
       <div className="row wrap">
         <button className="btn sm" disabled={locked} onClick={() => setReq({ ...req, green: JSON.parse(JSON.stringify(req.red)) })} title="Copy red parameters to green">
           Copy red → green

@@ -214,7 +214,8 @@ def test_region_edit_invalidates_changed_and_overlapped():
     # object inside new exclusion loses its region
     assert st.analysis.objects[0].region_id == "c1"  # (10,10) is outside x1
     # removing the exclusion again also changes fingerprints of overlapped regions
-    st.analysis.provenance.stale_detection = False  # (as after a re-run)
+    st.detection_sig = engine.input_signature(st.analysis)  # (as after a re-run)
+    engine.recompute_stale(st)
     inspect_and_approve(st, "c1")
     engine.set_regions(st, [r for r in st.analysis.regions if r.id != "x1"])
     assert not {r.id: r for r in st.analysis.regions}["c1"].approved

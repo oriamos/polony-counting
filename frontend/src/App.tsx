@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from './api/client';
 import { liveObjects, useApp } from './state/store';
 import { LeftRail, StatusChip } from './components/LeftRail';
@@ -146,6 +146,12 @@ function Banners() {
   const job = useApp((s) => s.job);
   const img = a.image;
   const stale = a.provenance.stale_detection && liveObjects(a).length > 0;
+  const [open, setOpen] = useState(false);
+  const notes: { tone: 'warn' | 'ok' | 'info'; text: string }[] = [];
+  if (a.status === 'finalized') notes.push({ tone: 'ok', text: 'Finalized. Editing is locked; use Finish → Reopen to make changes.' });
+  if (a.status === 'detecting' && !job) notes.push({ tone: 'info', text: 'Detection is running…' });
+  if (stale) notes.push({ tone: 'warn', text: 'Detection is stale (regions, mapping or parameters changed). Re-run detection from the Detect tab.' });
+  for (const w of img?.warnings ?? []) notes.push({ tone: 'info', text: w });
   return (
     <div className="banners">
       {a.status === 'needs_channel_mapping' && (
@@ -161,26 +167,23 @@ function Banners() {
           <strong>Raw channels unavailable; counts are approximate.</strong> This image is a colour composite, so per-channel signal is derived from rendered colours.
         </div>
       )}
-      {a.status === 'finalized' && (
-        <div className="banner ok" role="status">
-          <strong>Finalized.</strong> Editing is locked; use Finish → Reopen to make changes.
+      {notes.length > 0 && (
+        <div className={`banner notes ${notes.some((n) => n.tone === 'warn') ? 'warn' : ''}`} data-testid="banner-notes">
+          <button className="notes-toggle" onClick={() => setOpen(!open)} aria-expanded={open} data-testid="notes-toggle">
+            <span aria-hidden>{open ? '▾' : '▸'}</span> <strong>Image notes ({notes.length})</strong>
+            {!open && <span className="notes-preview">{notes[0].text}</span>}
+          </button>
+          {open && (
+            <ul className="notes-list" data-testid="notes-list">
+              {notes.map((n, i) => (
+                <li key={i} className={n.tone}>
+                  {n.text}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
-      {a.status === 'detecting' && !job && (
-        <div className="banner" role="status">
-          <span className="spinner" /> Detection is running…
-        </div>
-      )}
-      {stale && (
-        <div className="banner warn" role="status">
-          Detection is stale (regions, mapping or parameters changed). Re-run detection from the Detect tab.
-        </div>
-      )}
-      {img?.warnings.map((w, i) => (
-        <div key={i} className="banner" role="status">
-          {w}
-        </div>
-      ))}
     </div>
   );
 }

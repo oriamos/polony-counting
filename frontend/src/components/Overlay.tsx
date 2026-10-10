@@ -28,6 +28,8 @@ interface GlyphProps {
   showReview?: boolean;
   faded?: boolean;
   preview?: boolean;
+  /** thinner strokes and smaller rings (zoomed out / many spots) */
+  compact?: boolean;
 }
 
 /**
@@ -35,9 +37,9 @@ interface GlyphProps {
  * `scale` so strokes stay constant on screen. Double outline (dark + light) + thin
  * class-coloured line keeps it legible over red, green and yellow signal.
  */
-export const Glyph = memo(function Glyph({ o, scale, selected, reviewed, showReview, faded, preview }: GlyphProps) {
+export const Glyph = memo(function Glyph({ o, scale, selected, reviewed, showReview, faded, preview, compact }: GlyphProps) {
   const g = glyphFor(o.cls);
-  const r = ringRadiusImage(scale);
+  const r = ringRadiusImage(scale, 4, compact);
   const k = 1 / scale;
   const dash = g.dashed ? `${3.2 * k} ${2.4 * k}` : undefined;
   const path = glyphPath(g.shape, o.x, o.y, g.shape === 'square' ? r * 0.86 : r * 1.12);
@@ -55,9 +57,9 @@ export const Glyph = memo(function Glyph({ o, scale, selected, reviewed, showRev
           <circle cx={o.x} cy={o.y} r={r + 5 * k} fill="none" stroke="#00e5ff" strokeWidth={2.4 * k} />
         </>
       )}
-      {shape(DARK, 4.6, dash)}
-      {shape(LIGHT, 2.6, dash)}
-      {shape(g.color, 1.1, dash)}
+      {shape(DARK, compact ? 2.6 : 4.6, dash)}
+      {shape(LIGHT, compact ? 1.3 : 2.6, dash)}
+      {shape(g.color, compact ? 0.8 : 1.1, dash)}
       {preview && <circle cx={o.x} cy={o.y} r={r + 3 * k} fill="none" stroke="#ffb020" strokeWidth={1.2 * k} strokeDasharray={`${1.5 * k} ${2 * k}`} />}
       {showReview &&
         (reviewed ? (
@@ -128,7 +130,8 @@ interface ObjectsProps {
 export const ObjectsLayer = memo(function ObjectsLayer({ objects, scale, selection, showLabels, showReview, preview, dragOverride }: ObjectsProps) {
   const sel = new Set(selection);
   const labels = showLabels === 'on' || (showLabels === 'auto' && scale >= 3 && objects.length < 1500);
-  const r = ringRadiusImage(scale);
+  const compact = scale < 1 || objects.length > 500;
+  const r = ringRadiusImage(scale, 4, compact);
   const k = 1 / scale;
   return (
     <g>
@@ -137,7 +140,7 @@ export const ObjectsLayer = memo(function ObjectsLayer({ objects, scale, selecti
         const selected = sel.has(o.id);
         return (
           <g key={o.id}>
-            <Glyph o={pos} scale={scale} selected={selected} reviewed={o.reviewed} showReview={showReview && !preview} preview={preview} />
+            <Glyph o={pos} scale={scale} compact={compact && !selected} selected={selected} reviewed={o.reviewed} showReview={showReview && !preview} preview={preview} />
             {(labels || selected) && <HaloText x={pos.x + r + 4 * k} y={pos.y + r + 9 * k} scale={scale} text={shortId(o.id)} />}
           </g>
         );
@@ -162,7 +165,6 @@ export const RegionsLayer = memo(function RegionsLayer({ regions, scale, selecte
         const st = regionStatus(r);
         const color = STATUS_COLOR[st];
         const pts = r.polygon.map((p) => p.join(',')).join(' ');
-        const b = polygonBounds(r.polygon);
         const sel = r.id === selectedId;
         const dash = r.kind === 'exclusion' ? `${7 * k} ${4 * k}` : undefined;
         return (
@@ -170,7 +172,6 @@ export const RegionsLayer = memo(function RegionsLayer({ regions, scale, selecte
             <polygon points={pts} fill={r.kind === 'exclusion' ? 'rgba(255,79,176,0.16)' : 'rgba(77,163,255,0.05)'} stroke="none" />
             <polygon points={pts} fill="none" stroke={DARK} strokeWidth={(sel ? 5.4 : 4) * k} strokeLinejoin="round" strokeDasharray={dash} />
             <polygon points={pts} fill="none" stroke={color} strokeWidth={(sel ? 2.8 : 1.8) * k} strokeLinejoin="round" strokeDasharray={dash} />
-            <HaloText x={b.x0 + 4 * k} y={b.y0 - 6 * k} scale={scale} size={12} fill={color} text={`${r.name} · ${st}`} />
             {sel &&
               r.polygon.map(([x, y], i) => (
                 <circle key={i} cx={x} cy={y} r={5 * k} fill="#fff" stroke={DARK} strokeWidth={1.6 * k} />
@@ -202,6 +203,35 @@ export const SuggestionsLayer = memo(function SuggestionsLayer({ rois, scale }: 
           <HaloText x={r.left + 4 * k} y={r.bottom + 14 * k} scale={scale} text={`suggested ROI${r.name ? ` "${r.name}"` : ` #${i + 1}`}`} />
         </g>
       ))}
+    </g>
+  );
+});
+
+/**
+ * Region names, drawn in a separate layer ABOVE the object rings: placed outside the polygon at its
+ * top-left corner (just above the bounding box) with halo text, so labels never sit on spot rings.
+ */
+export const RegionLabelsLayer = memo(function RegionLabelsLayer({ regions, scale, draft }: { regions: Region[]; scale: number; draft?: Region | null }) {
+  const k = 1 / scale;
+  return (
+    <g pointerEvents="none">
+      {regions.map((r0) => {
+        const r = draft && draft.id === r0.id ? draft : r0;
+        const st = regionStatus(r);
+        const b = polygonBounds(r.polygon);
+        const above = b.y0 - 8 * k > 0;
+        return (
+          <HaloText
+            key={r.id}
+            x={b.x0}
+            y={above ? b.y0 - 8 * k : b.y0 - 2 * k + 16 * k}
+            scale={scale}
+            size={11}
+            fill={STATUS_COLOR[st]}
+            text={r.kind === 'exclusion' ? `${r.name} (excluded)` : `${r.name} · ${st}`}
+          />
+        );
+      })}
     </g>
   );
 });

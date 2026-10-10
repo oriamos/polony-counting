@@ -10,6 +10,7 @@ export interface ChannelInfo {
   page: number;
   label_hint: string | null;
   role: ChannelRole | null;
+  suggested_role?: ChannelRole | null;
   role_confirmed: boolean;
   min: number;
   max: number;
@@ -107,7 +108,8 @@ export type ReviewReason =
   | 'saturated'
   | 'suspicious_shape'
   | 'near_edge'
-  | 'near_threshold';
+  | 'near_threshold'
+  | 'debris_like';
 
 export interface DetectedObject {
   id: string;
@@ -135,9 +137,13 @@ export type ActionType =
   | 'split'
   | 'confirm'
   | 'accept_region'
+  | 'region_edit'
   | 'region_inspected'
   | 'approve_region'
-  | 'unapprove_region';
+  | 'unapprove_region'
+  | 'rerun_detection'
+  | 'finalize'
+  | 'reopen';
 
 export type AnalysisStatus =
   | 'created'
@@ -166,6 +172,8 @@ export interface SlideMeta {
   concentration_factor: number | null;
   sampled_area_note: string | null;
   counting_area_px2: number | null;
+  sample_total_area_px2?: number | null;
+  concentration_formula_confirmed?: boolean;
   pixel_size_um: number | null;
   csv_color_mapping: Record<string, string> | null;
 }
@@ -197,6 +205,8 @@ export interface Analysis {
   finalized_at: string | null;
   undo_depth: number;
   redo_depth: number;
+  alignment_dy?: number;
+  alignment_dx?: number;
 }
 
 export interface Counts {

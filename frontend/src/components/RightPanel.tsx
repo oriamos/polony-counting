@@ -214,6 +214,9 @@ function ReviewTab() {
           </button>
         </div>
       </div>
+      <div className="notice small" data-testid="uncertain-note">
+        Uncertain objects (including dual-channel debris-like specks) are never counted in colour totals until you resolve them.
+      </div>
       <div className="muted small">Ordered by measured review concerns (not confidence). Enter confirms the selected spot and moves on.</div>
       {noDetection && <div className="empty">No detections yet. Run detection from the Detect tab, or add spots manually.</div>}
       {!noDetection && queue.length === 0 && <div className="empty ok">Nothing flagged for review. Still inspect each region for omissions before approving.</div>}

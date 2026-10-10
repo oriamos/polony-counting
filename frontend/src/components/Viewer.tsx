@@ -15,7 +15,7 @@ import {
 } from '../lib/geometry';
 import { ringRadiusImage } from '../lib/glyph';
 import { liveObjects, useApp } from '../state/store';
-import { HaloText, ObjectsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
+import { HaloText, ObjectsLayer, RegionLabelsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
 import { ScaleBar } from './ScaleBar';
 
 export const useCursor = create<{ pt: { x: number; y: number } | null; set: (p: { x: number; y: number } | null) => void }>((set) => ({
@@ -66,6 +66,9 @@ export function Viewer() {
   const [imgState, setImgState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [imgError, setImgError] = useState('');
   const aid = a?.id;
+  // Before the channel mapping is confirmed the backend refuses role-based views (409); show raw channel 0.
+  const unmapped = !!a?.image && !a.image.composite_only && a.image.channels.length > 0 && !a.image.channels.every((c) => c.role_confirmed);
+  const fetchView = unmapped ? `ch${a!.image!.channels[0].index}` : imageView;
   const imgVer = useMemo(() => {
     if (!a?.image) return '';
     const roles = a.image.channels.map((c) => `${c.index}:${c.role}`).join(',');
@@ -76,11 +79,11 @@ export function Viewer() {
   useEffect(() => {
     if (!aid) return;
     const ctl = new AbortController();
-    const key = `${aid}|${imageView}|${display.lo}|${display.hi}|${display.gamma}|${imgVer}`;
+    const key = `${aid}|${fetchView}|${display.lo}|${display.hi}|${display.gamma}|${imgVer}`;
     setImgState('loading');
     const t = setTimeout(async () => {
       try {
-        const res = await fetch(imageUrl(aid, imageView, display), { signal: ctl.signal });
+        const res = await fetch(imageUrl(aid, fetchView, display), { signal: ctl.signal });
         if (!res.ok) {
           let msg = `HTTP ${res.status}`;
           try {
@@ -111,7 +114,7 @@ export function Viewer() {
       clearTimeout(t);
       ctl.abort();
     };
-  }, [aid, imageView, display.lo, display.hi, display.gamma, imgVer, st]);
+  }, [aid, fetchView, display.lo, display.hi, display.gamma, imgVer, st]);
 
   // reset image when analysis changes
   useEffect(() => {
@@ -553,6 +556,7 @@ export function Viewer() {
               )}
             </g>
           )}
+          {showRegions && <RegionLabelsLayer regions={regions} scale={scale} draft={regionDraft} />}
           {preview && (
             <g>
               <rect
@@ -650,6 +654,7 @@ export function Viewer() {
         </div>
       )}
       {!img && imgState === 'loading' && <div className="viewer-empty">Loading image…</div>}
+      {unmapped && <div className="viewer-chip warn" style={{ bottom: 44, left: 10 }} data-testid="unmapped-chip">Channel mapping not confirmed: showing raw channel {a.image.channels[0].index} (grey)</div>}
       {hide && <div className="viewer-chip warn" style={{ top: 10, left: 10 }}>All overlays hidden (H) – check the raw signal for omissions</div>}
       {previewBusy && (
         <div className="viewer-chip" style={{ top: 10, left: '50%', transform: 'translateX(-50%)' }}>

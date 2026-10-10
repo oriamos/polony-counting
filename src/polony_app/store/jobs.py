@@ -19,6 +19,11 @@ class JobCancelled(Exception):
     pass
 
 
+# A job function reports "I stopped because of a cancel request, nothing was committed"
+# by returning this message (or by raising JobCancelled / DetectionCancelled).
+CANCELLED_MESSAGE = "cancelled"
+
+
 class JobRunner:
     def __init__(self, store: Store, max_workers: int = 2):
         self.store = store
@@ -71,7 +76,10 @@ class JobRunner:
             if job.status == JobStatus.running:
                 msg = fn(progress, ev.is_set)
                 with self._lock:
-                    if ev.is_set():
+                    # The job's outcome is decided by what fn did, not by a cancel flag that
+                    # may have been set after fn already committed: a result that was committed
+                    # is never reported as cancelled, a cancel-return commits nothing.
+                    if msg == CANCELLED_MESSAGE:
                         job.status = JobStatus.cancelled
                     else:
                         job.status = JobStatus.done

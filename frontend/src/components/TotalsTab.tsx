@@ -27,8 +27,10 @@ export function TotalsTab() {
   const counts = useApp((s) => s.counts);
   const setAnalysis = useApp((s) => s.setAnalysis);
   const toast = useApp((s) => s.toast);
+  const patch = useApp((s) => s.patch);
   const mode = a.reporting_mode;
   const final = a.status === 'finalized';
+  const nUnresolved = counts ? counts.slide.uncertain : a.objects.filter((o) => !o.deleted && o.cls === 'uncertain').length;
 
   const setMode = async (m: ReportingMode) => {
     if (m === mode) return;
@@ -69,6 +71,15 @@ export function TotalsTab() {
             <div className="empty small">No per-region counts yet (draw counting regions).</div>
           )}
         </>
+      )}
+      {nUnresolved > 0 && !final && (
+        <div className="notice warn small" role="status" data-testid="uncertain-block">
+          <strong>{nUnresolved} uncertain object{nUnresolved > 1 ? 's' : ''} unresolved.</strong> They are not included in any colour total, and while any remain the affected regions cannot be
+          approved (nor the analysis finalized). Resolve each one (reclassify, confirm or delete) in the Review tab.{' '}
+          <button className="btn sm" onClick={() => patch({ rightTab: 'review' })}>
+            Go to Review
+          </button>
+        </div>
       )}
       {final ? (
         <div className="notice ok small">These are final, approved counts.</div>
