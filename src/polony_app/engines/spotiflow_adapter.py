@@ -2,9 +2,12 @@
 
 * ``import polony_app.engines`` never imports spotiflow / torch; they are imported lazily when used.
 * The image is passed to the model in its ORIGINAL dtype and values (never an 8-bit conversion). Spotiflow
-  itself casts to float32 and (normalizer 'auto') percentile-normalises the array it is given (1 / 99.8 %);
-  that normalisation is therefore computed on the model INPUT (the full page, or the padded valid-area
-  bounding box when ``crop_to_valid``) and is recorded in ``EngineRunInfo.preprocessing``.
+  itself casts to float32. Normalizer modes: 'auto' = Spotiflow's own percentile normalisation of the model INPUT
+  (legacy; includes saturated / out-of-area pixels so p99.8 is often the dtype maximum), 'none', and
+  'valid_unsaturated' = lo/hi (p1 / p99.8) of the valid, unsaturated pixels of the whole page computed once before
+  crop/downscale. The statistics are recorded in ``EngineRunInfo.preprocessing``.
+* downscale d>1: block-mean (area) on an image-anchored block grid (crop origin multiple of d); coordinates map back
+  with x_full = x0 + i*d + (d-1)/2; peaks optionally refined by a quadratic fit on the heatmap.
 * Score = the model's heatmap value at the detected point (``details.prob``), a RAW model score
   ('spotiflow_prob_raw'), not a calibrated probability.
 """
@@ -33,6 +36,9 @@ SCORE_KIND = "spotiflow_prob_raw"
 DEFAULT_MODEL = "general"
 CROP_PAD_PX = 32
 SUPPORTED_DOWNSCALE = (1, 2, 4, 8)
+NORMALIZERS = ("auto", "none", "valid_unsaturated")
+NORM_PMIN, NORM_PMAX = 1.0, 99.8
+MIN_NORM_PIXELS = 1000
 _SIDECAR = ".polony_checksums.json"
 _WEIGHT_SUFFIXES = (".pt", ".pth", ".ckpt", ".safetensors")
 _PARAM_FIELDS = set(SpotiflowParams.model_fields)
@@ -290,6 +296,78 @@ def clear_model_cache() -> None:
         _MODEL_CACHE.clear()
 
 
+# ------------------------------------------------------------------ normalisation / peak refinement helpers
+def _saturation_level(dtype: np.dtype) -> Optional[float]:
+    """The clipping value of an integer dtype (65535 for uint16); None for floats (no defined saturation)."""
+    return float(np.iinfo(dtype).max) if np.dtype(dtype).kind in "ui" else None
+
+
+def _valid_unsaturated_range(image: np.ndarray, valid_mask: Optional[np.ndarray]) -> tuple[float, float, dict]:
+    """lo/hi = percentiles 1 / 99.8 of the pixels that are INSIDE the valid (counting-area) mask and NOT saturated
+    (raw < dtype maximum), computed once on the whole page (before any crop/zoom/downscale).
+
+    Rationale: the saturated rim / debris / out-of-area pixels otherwise set p99.8 to the dtype maximum on most
+    slides, which makes the model's sensitivity an uncontrolled per-slide variable. Percentiles (not min/max) keep
+    the scale robust to hot pixels. If fewer than MIN_NORM_PIXELS qualify, fall back to all valid pixels, then to
+    the whole page (recorded)."""
+    sat = _saturation_level(image.dtype)
+    valid = np.ones(image.shape, bool) if valid_mask is None else np.asarray(valid_mask, bool)
+    unsat = (image < sat) if sat is not None else np.ones(image.shape, bool)
+    info: dict = {"rule": f"percentile {NORM_PMIN:g} / {NORM_PMAX:g} of pixels inside the valid mask with raw < "
+                          f"{'dtype maximum ' + format(sat, 'g') if sat is not None else 'n/a (float image: no exclusion)'}, "
+                          "computed once per page before crop/downscale",
+                  "n_page": int(image.size), "n_valid": int(valid.sum()),
+                  "n_valid_saturated": int((valid & ~unsat).sum()), "saturation_level": sat}
+    sel = valid & unsat
+    info["n_used"] = int(sel.sum())
+    if sel.sum() < MIN_NORM_PIXELS:
+        sel2 = valid if valid.sum() >= MIN_NORM_PIXELS else np.ones(image.shape, bool)
+        info["fallback"] = (f"normalisation fallback: only {int(sel.sum())} valid unsaturated pixel(s); used "
+                            f"{'all valid pixels' if valid.sum() >= MIN_NORM_PIXELS else 'the whole page'} instead")
+        sel = sel2
+        info["n_used"] = int(sel.sum())
+    lo, hi = np.percentile(image[sel].astype(np.float64), [NORM_PMIN, NORM_PMAX])
+    info.update(lo=float(lo), hi=float(hi), pmin=NORM_PMIN, pmax=NORM_PMAX)
+    return float(lo), float(hi), info
+
+
+def _normalizer_text(mode: str, info: dict) -> str:
+    if mode == "none":
+        return "none (raw values to the model)"
+    if mode == "valid_unsaturated":
+        return (f"(x-lo)/(hi-lo) with lo={info['lo']:.6g}, hi={info['hi']:.6g} = percentiles {NORM_PMIN:g}/{NORM_PMAX:g} of "
+                f"{info['n_used']} valid, unsaturated page pixels ({info['n_valid_saturated']} saturated pixel(s) inside "
+                "the valid area excluded), computed once before crop/downscale and applied identically to the downscaled image")
+    return ("spotiflow.utils.normalize (legacy 'auto'): percentile 1 / 99.8 of the model input = the cropped (and, if "
+            "downscaled, block-mean) valid bounding box INCLUDING saturated and out-of-area pixels; p99.8 is the dtype "
+            "maximum on most slides, so sensitivity depends on the slide (use 'valid_unsaturated')")
+
+
+def _refine_peaks(pts: np.ndarray, heatmap) -> tuple[np.ndarray, int]:
+    """Sub-pixel peak position by a 1-D quadratic (parabola) fit through the 3 heatmap samples around each integer
+    peak, per axis, clipped to +/-0.5 px (downscaled frame). Peaks on the border or on a non-concave/flat neighbourhood
+    are left unchanged."""
+    if heatmap is None:
+        return pts, 0
+    hm = np.asarray(heatmap, dtype=np.float64)
+    if hm.ndim == 3:
+        hm = hm[..., 0] if hm.shape[-1] == 1 else hm[0]
+    if hm.ndim != 2:
+        return pts, 0
+    out = np.array(pts, dtype=float)
+    n = 0
+    for k, (r, c) in enumerate(np.rint(pts).astype(int)):
+        if r < 1 or c < 1 or r >= hm.shape[0] - 1 or c >= hm.shape[1] - 1:
+            continue
+        off = []
+        for a, b, cc in ((hm[r - 1, c], hm[r, c], hm[r + 1, c]), (hm[r, c - 1], hm[r, c], hm[r, c + 1])):
+            den = a - 2 * b + cc
+            off.append(float(np.clip(0.5 * (a - cc) / den, -0.5, 0.5)) if den < -1e-9 else 0.0)
+        out[k] = (r + off[0], c + off[1])
+        n += 1
+    return out, n
+
+
 # ------------------------------------------------------------------ engine
 class SpotiflowEngine:
     name = EngineName.spotiflow
@@ -327,9 +405,17 @@ class SpotiflowEngine:
                     point_validity: Optional[PointValidity] = None, run_id: Optional[str] = None) -> EngineResult:
         params = dict(params or {})
         extras = {"crop_to_valid": bool(params.pop("crop_to_valid", True)),
-                  "crop_pad_px": int(params.pop("crop_pad_px", CROP_PAD_PX))}
+                  "crop_pad_px": int(params.pop("crop_pad_px", CROP_PAD_PX)),
+                  "refine_peaks": bool(params.pop("refine_peaks", True))}
+        norm_mode = params.get("normalizer", "auto")
+        if norm_mode not in NORMALIZERS:
+            raise EngineError(f"unknown Spotiflow normalizer {norm_mode!r}; use one of {list(NORMALIZERS)}")
+        # the pydantic schema may not know 'valid_unsaturated' yet: validate the rest with a schema-known stand-in
+        p_for_schema = {k: v for k, v in params.items() if k in _PARAM_FIELDS}
+        if norm_mode == "valid_unsaturated":
+            p_for_schema["normalizer"] = "none"
         try:
-            sp = SpotiflowParams(**{k: v for k, v in params.items() if k in _PARAM_FIELDS})
+            sp = SpotiflowParams(**p_for_schema)
         except Exception as exc:
             raise EngineError(f"invalid Spotiflow parameters: {exc}") from exc
         d = int(sp.downscale)
@@ -381,33 +467,46 @@ class SpotiflowEngine:
             y0, y1 = max(0, int(rows[0]) - pad), min(h, int(rows[-1]) + 1 + pad)
         trimmed_px = {"right": 0, "bottom": 0}
         if d > 1:
-            # Spotiflow needs both sides divisible by d: drop the remainder at the bottom/right (never pad)
-            trimmed_px = {"right": (x1 - x0) % d, "bottom": (y1 - y0) % d}
-            x1 -= trimmed_px["right"]
-            y1 -= trimmed_px["bottom"]
+            # Anchor the crop to the image-wide block grid: origin = multiple of d (extended OUTWARD, still inside
+            # the image), far side = next multiple of d, capped at the last full block of the image. The block grid is
+            # then identical whatever the counting area is, so detections do not depend on where the area starts.
+            x0, y0 = (x0 // d) * d, (y0 // d) * d
+            x1, y1 = min(-(-x1 // d) * d, (w // d) * d), min(-(-y1 // d) * d, (h // d) * d)
+            trimmed_px = {"right": w % d if x1 == (w // d) * d else 0, "bottom": h % d if y1 == (h // d) * d else 0}
             if (x1 - x0) // d < 2 or (y1 - y0) // d < 2:
                 raise EngineError(f"image region {x1 - x0}x{y1 - y0} px is too small for downscale {d}")
         sub = np.ascontiguousarray(image[y0:y1, x0:x1])
         if sub.size == 0:
             raise EngineError("empty crop")
-        if d > 1:
-            if trimmed_px["right"] or trimmed_px["bottom"]:
-                notes.append(f"downscale {d}: trimmed {trimmed_px['right']} column(s) at the right and "
-                             f"{trimmed_px['bottom']} row(s) at the bottom so the sides are divisible by {d}")
+        if d > 1 and (trimmed_px["right"] or trimmed_px["bottom"]):
+            notes.append(f"downscale {d}: the image sides are not divisible by {d}; {trimmed_px['right']} column(s) at "
+                         f"the right and {trimmed_px['bottom']} row(s) at the bottom of the page lie outside the block grid")
 
-        normalizer = "auto" if sp.normalizer == "auto" else None
+        # ---- normalisation. 'valid_unsaturated': lo/hi from the VALID and UNSATURATED pixels of the whole page,
+        # computed once BEFORE crop/zoom (the saturated rim / outside-area pixels cannot set the scale).
+        norm_info: dict = {}
+        if norm_mode == "valid_unsaturated":
+            lo, hi, norm_info = _valid_unsaturated_range(image, valid_mask)
+            if not hi > lo:
+                raise EngineError(f"degenerate normalisation range lo={lo} hi={hi} (valid unsaturated pixels are constant)")
+            if norm_info.get("fallback"):
+                notes.append(norm_info["fallback"])
+
+            def normalizer(x, _lo=np.float32(lo), _hi=np.float32(hi)):
+                return ((np.asarray(x, dtype=np.float32) - _lo) / (_hi - _lo)).astype(np.float32)
+        else:
+            normalizer = "auto" if norm_mode == "auto" else None
         kw = dict(prob_thresh=sp.prob_thresh, n_tiles=sp.n_tiles, max_tile_size=sp.max_tile_size,
                   min_distance=sp.min_distance, exclude_border=sp.exclude_border, subpix=sp.subpix,
                   normalizer=normalizer, verbose=True)
         model_in = sub
         if d > 1:
-            # We downscale OURSELVES (exactly what Spotiflow 0.6.5 does for scale=1/d: float32 + scipy zoom order 1)
-            # instead of passing scale=: Spotiflow's own `scale` returns points in the ORIGINAL frame on its
-            # single-tile path (peaks found on the up-sampled heatmap) but in the DOWNSCALED frame on its tiled
-            # path, so the coordinate frame would depend on image size. Predicting on our array always yields
-            # downscaled-frame points, mapped back below.
-            from scipy.ndimage import zoom
-            model_in = zoom(sub.astype(np.float32), 1.0 / d, order=1)
+            # We downscale OURSELVES (block mean = area average, anti-aliased, origin on the image-wide block grid)
+            # instead of passing scale=: Spotiflow's own `scale` zooms with no anti-aliasing and returns points in the
+            # ORIGINAL frame on its single-tile path but in the DOWNSCALED frame on its tiled path. Predicting on our
+            # array always yields downscaled-frame points, mapped back below with x_full = x0 + i*d + (d-1)/2.
+            hh, ww = sub.shape
+            model_in = sub.reshape(hh // d, d, ww // d, d).astype(np.float32).mean(axis=(1, 3), dtype=np.float32)
             kw["subpix"] = False
 
         def wrapper(it, total=None, **_):
@@ -453,11 +552,12 @@ class SpotiflowEngine:
             raise EngineError(f"Spotiflow returned {len(pts)} points but "
                               f"{'no' if prob is None else len(prob)} per-point scores; refusing to guess")
         prob = np.asarray(prob, dtype=float).reshape(-1)
+        refined = 0
         if d > 1:
-            # scipy.ndimage.zoom (grid_mode=False) aligns the first/last pixel CENTRES: downscaled index i sits at
-            # i*(n-1)/(m-1) in the cropped full-resolution frame (n = crop side, m = n/d). NOT i*d+(d-1)/2.
-            sh, sw = sub.shape
-            pts = np.stack([pts[:, 0] * ((sh - 1) / (sh // d - 1)), pts[:, 1] * ((sw - 1) / (sw // d - 1))], 1)
+            if extras["refine_peaks"] and len(pts):
+                pts, refined = _refine_peaks(pts, getattr(details, "heatmap", None))
+            # block-mean downscaling: block i covers full-resolution pixels i*d .. i*d+d-1, centre i*d + (d-1)/2
+            pts = pts * d + (d - 1) / 2.0
         xs, ys = pts[:, 1] + x0, pts[:, 0] + y0          # crop -> full-resolution frame (exact integer offset)
         validity = point_validity or raster_point_validity(valid_mask, image.shape)
         dets = build_detections(EngineName.spotiflow, run_id, analysis_id, page, channel_role, xs, ys, prob,
@@ -478,14 +578,18 @@ class SpotiflowEngine:
         pre = {"input_dtype": str(image.dtype), "input_shape_hw": [h, w], "crop_to_valid": extras["crop_to_valid"],
                "crop_box_xyxy": [x0, y0, x1, y1],
                "crop_note": "half-open box [x0,x1) x [y0,y1) in full-resolution pixels; full = crop + (x0, y0)",
-               "normalizer": ("spotiflow.utils.normalize: percentile 1 / 99.8 of the model input, computed on the crop"
-                              if normalizer == "auto" else "none (raw values to the model)"),
+               "normalizer": _normalizer_text(norm_mode, norm_info),
+               "normalizer_mode": norm_mode, "normalizer_stats": norm_info,
                "cast": "float32 inside Spotiflow (lossless for 8/16-bit integers)", "eight_bit_conversion": False,
                "downscale": d, "trimmed_px": trimmed_px,
                "downscaled_shape_hw": list(model_in.shape),
                "downscale_note": ("none (native scale)" if d == 1 else
-                                  f"image divided by {d} in the adapter (float32, scipy zoom order 1, align-corners; no pixel invented, bottom/right remainder trimmed); points mapped back with "
-                                  f"x_full = x_s*(n-1)/(m-1) + crop offset; localisation accuracy ~ +/-{d / 2:g} px"),
+                                  f"block mean (area average) over {d}x{d} pixels on an image-anchored block grid "
+                                  f"(crop origin is a multiple of {d}); points mapped back with "
+                                  f"x_full = x0 + i*{d} + {(d - 1) / 2:g}; peaks refined by a quadratic fit on the "
+                                  f"heatmap: {extras['refine_peaks']} ({refined} refined); measured localisation "
+                                  f"error vs native scale: RMS 0.83/1.74/3.60 px, max 1.4/3.25/5.57 px at d=2/4/8 "
+                                  f"(before refinement)"),
                "page_to_channel": ("confirmed mapping" if channel_role else "unconfirmed (no colour assigned)")}
         run = EngineRunInfo(
             run_id=run_id, analysis_id=analysis_id, image_sha256=dict(image_sha256 or {}),
