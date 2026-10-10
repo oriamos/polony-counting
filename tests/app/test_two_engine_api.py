@@ -152,7 +152,8 @@ def test_audit_survives_reruns_and_actions_log_untouched(client, aid, hybrid):
     run_detect(client, aid, engine="hybrid")
     runs = client.get(f"/api/analyses/{aid}/engine-runs").json()
     assert [r["run_id"] for r in runs] == ["bf1", "sp1", "bf2", "sp2"]      # older runs never deleted
-    assert len(client.get(f"/api/analyses/{aid}/raw-detections").json()) == 6
+    assert len(client.get(f"/api/analyses/{aid}/raw-detections", params={"all_runs": "true"}).json()) == 6  # audit: all kept
+    assert len(client.get(f"/api/analyses/{aid}/raw-detections").json()) == 3                               # default: latest run only
     after = client.get(f"/api/analyses/{aid}/export?kind=actions").text
     assert after.startswith(before) and after.count("\n") == before.count("\n") + 1   # + rerun_detection only
     a = client.get(f"/api/analyses/{aid}").json()
@@ -287,3 +288,18 @@ def test_bigfish_only_flow_without_engine_data_unchanged(client, aid, detector):
     z = zipfile.ZipFile(io.BytesIO(client.get(f"/api/analyses/{aid}/export?kind=bundle").content))
     assert "raw_detections.csv" not in z.namelist()
     assert json.loads(z.read("provenance.json"))["engine_runs"] == []
+
+
+def test_raw_detections_default_to_latest_run_per_engine_page(client, aid, hybrid):
+    hybrid.objects = OBJS()
+    run_detect(client, aid, engine="hybrid")
+    run_detect(client, aid, engine="hybrid")           # a rerun: older runs stay stored for audit
+    base = f"/api/analyses/{aid}/raw-detections"
+    latest = client.get(base, params={"engine": "bigfish", "page": 0})
+    assert [d["run_id"] for d in latest.json()] == ["bf2", "bf2"] and latest.headers["X-Total-Count"] == "2"
+    every = client.get(base, params={"engine": "bigfish", "page": 0, "all_runs": "true"})
+    assert sorted({d["run_id"] for d in every.json()}) == ["bf1", "bf2"] and every.headers["X-Total-Count"] == "4"
+    old = client.get(base, params={"run_id": "bf1"})
+    assert {d["run_id"] for d in old.json()} == {"bf1"}
+    both = client.get(base).json()                       # no filters: latest run of every (engine, page)
+    assert {d["run_id"] for d in both} <= {"bf2", "sp2"}

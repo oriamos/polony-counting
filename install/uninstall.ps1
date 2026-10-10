@@ -47,7 +47,13 @@ function Uninstall-PolonyReview {
     if ($ph.TrimEnd('\', '/').Length -le 3) { throw "Refusing to remove '$ph'" }
     # do not stay inside the folder we delete (this script itself lives there)
     Set-Location $env:TEMP
-    Remove-Thing $ph
+    if (-not $purge -and (Test-Path (Join-Path $ph 'models'))) {
+        # keep the downloaded AI models (~90 MB each) unless -PurgeData; everything else goes
+        Get-ChildItem -LiteralPath $ph -Force | Where-Object { $_.Name -ne 'models' } | ForEach-Object { Remove-Thing $_.FullName }
+        Write-Host "  kept the downloaded AI models in $(Join-Path $ph 'models') (use -PurgeData to delete them too)"
+    } else {
+        Remove-Thing $ph
+    }
     if ($purge) {
         if ($data.TrimEnd('\', '/').Length -le 3) { throw "Refusing to remove '$data'" }
         Remove-Thing $data

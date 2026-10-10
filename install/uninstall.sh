@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Polony Review uninstaller (macOS/Linux). Removes the app, its Python environment and the shortcuts.
-# Your data folder (default ~/PolonyReviewData) is KEPT unless you pass --purge-data.
+# Your data folder (default ~/PolonyReviewData) and downloaded AI models (~/PolonyReview/models) are KEPT unless --purge-data.
 #   bash ~/PolonyReview/app/install/uninstall.sh [--purge-data] [--dry-run]
 set -euo pipefail
 
@@ -47,7 +47,17 @@ main() {
   rm_path "$LAPPS/polony-review.desktop"
   # the install folder (app, venv, downloaded Python, uv, logs, config)
   case "$PH" in ""|"/"|"$HOME") echo "Refusing to remove '$PH'" >&2; return 1 ;; esac
-  rm_path "$PH"
+  if [ "$PURGE" = 0 ] && [ -d "$PH/models" ]; then
+    # keep the downloaded AI models (~90 MB each) unless --purge-data; everything else goes
+    for e in "$PH"/* "$PH"/.[!.]*; do
+      [ -e "$e" ] || [ -L "$e" ] || continue
+      [ "$e" = "$PH/models" ] && continue
+      rm_path "$e"
+    done
+    echo "  kept the downloaded AI models in $PH/models (use --purge-data to delete them too)"
+  else
+    rm_path "$PH"
+  fi
   if [ "$PURGE" = 1 ]; then
     case "$DATA" in ""|"/"|"$HOME") echo "Refusing to remove '$DATA'" >&2; return 1 ;; esac
     rm_path "$DATA"

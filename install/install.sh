@@ -371,6 +371,7 @@ DESKTOP
   say "  Start it from the 'Polony Review' icon on your Desktop (first start takes up to a minute)."
   say "  Stop it:    $BINDIR/polony-review stop"
   say "  Shared database (optional): $BINDIR/polony-review set-database | clear-database"
+  say "  AI detector (optional): add with --with-ai; then '$BINDIR/polony-review prepare-model' downloads its model (~90 MB, once)"
   say "  Update:     run the same install command again."
   say "  Uninstall:  bash $APP/install/uninstall.sh      (add --purge-data to also delete $DATA)"
   say "  Your results are stored in: $DATA"

@@ -882,15 +882,29 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
     @api.get("/analyses/{aid}/raw-detections")
     def get_raw_detections(aid: str, engine: Optional[EngineName] = None, page: Optional[int] = None,
                            run_id: Optional[str] = None, valid: Optional[bool] = None,
-                           limit: int = 5000, offset: int = 0):
+                           all_runs: bool = False, limit: int = 5000, offset: int = 0):
+        """Raw engine detections. Without ``run_id`` and without ``all_runs=true`` only the LATEST run of each
+        (engine, page) is returned (older runs stay stored for audit and are reachable via ``run_id`` or
+        ``all_runs=true``), so a rerun never shows stale points on top of the current ones."""
         aid_ok(aid)
         if not store.exists(aid):
             raise NotFound("analysis", aid)
         if not 1 <= limit <= 200_000 or offset < 0:
             return err(422, "invalid_param", "limit must be in 1..200000 and offset >= 0")
-        rows = store.get_raw_detections(aid, engine=engine, page=page, run_id=run_id, valid=valid,
-                                        limit=limit, offset=offset)
-        total = store.count_raw_detections(aid, engine=engine, page=page, run_id=run_id, valid=valid)
+        if run_id is not None or all_runs:
+            rows = store.get_raw_detections(aid, engine=engine, page=page, run_id=run_id, valid=valid,
+                                            limit=limit, offset=offset)
+            total = store.count_raw_detections(aid, engine=engine, page=page, run_id=run_id, valid=valid)
+        else:
+            latest: dict = {}
+            for r in sorted(enumerate(store.get_engine_runs(aid)), key=lambda t: (t[1].started_at or "", t[0])):
+                if (engine is None or r[1].engine == engine) and (page is None or r[1].page == page):
+                    latest[(r[1].engine, r[1].page)] = r[1].run_id   # last one wins = latest
+            rows, total = [], 0
+            for rid in latest.values():
+                total += store.count_raw_detections(aid, engine=engine, page=page, run_id=rid, valid=valid)
+                rows += store.get_raw_detections(aid, engine=engine, page=page, run_id=rid, valid=valid)
+            rows = rows[offset:offset + limit]
         return Response("[" + ",".join(r.model_dump_json() for r in rows) + "]", media_type="application/json",
                         headers={"X-Total-Count": str(total)})
 

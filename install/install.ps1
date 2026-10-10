@@ -3,7 +3,7 @@
 #   irm https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.ps1 | iex
 #
 # Re-running it updates the installation. Options when run from a saved file:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-DryRun] [-NoLaunch] [-Ref NAME] [-Python PATH]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-DryRun] [-NoLaunch] [-WithAi|-WithoutAi] [-Ref NAME] [-Python PATH]
 # Environment: POLONY_HOME (default %LOCALAPPDATA%\PolonyReview), POLONY_DATA_DIR (default Documents\PolonyReviewData),
 #   POLONY_SOURCE (local checkout to copy instead of downloading), POLONY_REPO, POLONY_REF,
 #   POLONY_CI=1 (no browser, no prompts; used by the CI tests), POLONY_DRYRUN=1 (same as -DryRun).
@@ -27,11 +27,14 @@ function Install-PolonyReview {
     $ci = ($env:POLONY_CI -and $env:POLONY_CI -ne '0')
     $noLaunch = $false
     $shortcutsOnly = $false
+    $withAi = ''
     $pyArg = ''
     for ($i = 0; $i -lt $Argv.Count; $i++) {
         switch -Regex ($Argv[$i]) {
             '^-{1,2}DryRun$' { $dry = $true }
             '^-{1,2}NoLaunch$' { $noLaunch = $true }
+            '^-{1,2}WithAi$' { $withAi = '1' }
+            '^-{1,2}WithoutAi$' { $withAi = '0' }
             '^-{1,2}ShortcutsOnly$' { $shortcutsOnly = $true; $noLaunch = $true }
             '^-{1,2}Ref$' { $i++; $ref = $Argv[$i] }
             '^-{1,2}Python$' { $i++; $pyArg = $Argv[$i] }
@@ -39,6 +42,7 @@ function Install-PolonyReview {
         }
     }
     if ($ci) { $noLaunch = $true }
+    if (-not $withAi -and $env:POLONY_WITH_AI) { $withAi = $env:POLONY_WITH_AI }
     # optional shared database URL: taken out of the environment right away so no other process inherits it
     $dbUrl = $env:POLONY_DATABASE_URL
     Remove-Item Env:\POLONY_DATABASE_URL -ErrorAction SilentlyContinue
@@ -51,7 +55,7 @@ function Install-PolonyReview {
     $venv = Join-Path $ph 'venv'
     $vpy = Join-Path $venv 'Scripts\python.exe'
     $vpyw = Join-Path $venv 'Scripts\pythonw.exe'
-    $steps = 6
+    $steps = 7
 
     function Say($m) { Write-Host $m }
     function Step($n, $m) { Write-Host ''; Write-Host "[$n/$steps] $m" -ForegroundColor Cyan }
@@ -283,8 +287,41 @@ function Install-PolonyReview {
         Set-SharedDatabase
     }
 
+    # ---- 6. AI detector (optional) ---------------------------------------------------------------
+    Step 6 'AI detector (optional)'
+    function Install-AiDetector {
+        $script = Join-Path $app 'install\ai_extra.py'
+        $interactive = $false
+        try { $interactive = (-not $ci) -and [Environment]::UserInteractive -and (-not [Console]::IsInputRedirected) } catch { }
+        $want = $withAi
+        if (-not $want) {
+            if (-not $interactive) { Say '  Skipped (Big-FISH detection works without it). Add it later: re-run this installer with -WithAi'; return }
+            [void](Invoke-Show $vpy @($script, 'describe'))
+            $ans = Read-Host '  Install the AI detector (Spotiflow + PyTorch, large download ~0.8-2.5 GB depending on platform)? [y/N]'
+            if ($ans -notmatch '^(y|yes)$') { Say '  Skipped (Big-FISH only). Add it later with -WithAi.'; return }
+            $want = '1'
+        }
+        if ($want -eq '0') { Say '  Skipped (-WithoutAi).'; return }
+        $cuda = 'no'
+        if ($env:POLONY_AI_CUDA -eq '1') { $cuda = 'yes' }
+        elseif ((Has 'nvidia-smi') -and $interactive) {
+            $a2 = Read-Host '  An NVIDIA GPU was found. Use the CUDA build of PyTorch (about 2.5 GB instead of ~0.8 GB)? [y/N]'
+            if ($a2 -match '^(y|yes)$') { $cuda = 'yes' }
+        }
+        Say '  Downloading and installing PyTorch + Spotiflow (this can take a long time) ...'
+        $env:POLONY_HOME = $ph
+        $code = Invoke-Show $vpy @($script, 'install', '--cuda', $cuda)
+        if ($code -ne 0) { Warn 'the AI detector could not be installed; Big-FISH detection still works' }
+    }
+    if ($dry) {
+        if ($withAi -eq '1') { Plan 'install the AI detector: matching torch+torchvision (CPU wheels from download.pytorch.org/whl/cpu; CUDA only if asked), then spotiflow (install\extra-ai-requirements.txt), then import check; record ai_enabled in config.json' }
+        else { Plan "ask 'Install the AI detector (Spotiflow + PyTorch, ~0.8-2.5 GB)? [y/N]' (default no; skipped without a terminal/CI unless -WithAi or POLONY_WITH_AI=1)" }
+    } elseif (-not $shortcutsOnly) {
+        Install-AiDetector
+    }
+
     # ---- 5. shortcuts ---------------------------------------------------------------------------
-    Step 6 "Creating the 'Polony Review' icon"
+    Step 7 "Creating the 'Polony Review' icon"
     $ico = Join-Path $app 'install\assets\PolonyReview.ico'
     $desktop = [Environment]::GetFolderPath('Desktop')
     $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Polony Review'
