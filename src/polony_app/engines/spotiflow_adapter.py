@@ -411,10 +411,7 @@ class SpotiflowEngine:
         norm_mode = params.get("normalizer", "auto")
         if norm_mode not in NORMALIZERS:
             raise EngineError(f"unknown Spotiflow normalizer {norm_mode!r}; use one of {list(NORMALIZERS)}")
-        # the pydantic schema may not know 'valid_unsaturated' yet: validate the rest with a schema-known stand-in
         p_for_schema = {k: v for k, v in params.items() if k in _PARAM_FIELDS}
-        if norm_mode == "valid_unsaturated":
-            p_for_schema["normalizer"] = "none"
         try:
             sp = SpotiflowParams(**p_for_schema)
         except Exception as exc:

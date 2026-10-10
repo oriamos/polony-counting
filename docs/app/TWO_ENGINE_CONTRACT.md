@@ -54,7 +54,7 @@ def match_engines(bigfish: list[RawDetection], spotiflow: list[RawDetection], to
 - `POST /api/engines/spotiflow/prepare` `{model_name}` → Job (download/load with progress; cached; never re-downloads)
 - `GET /api/analyses/{id}/engine-runs` → `EngineRunInfo[]`; `GET /api/analyses/{id}/raw-detections?engine=&page=&run_id=&valid=&limit=` → `RawDetection[]`
 - `GET /api/analyses/{id}/consensus/summary` → `{pages:[ConsensusSummary], total:ConsensusSummary}` (per page/channel, never merged silently)
-- `POST /api/analyses/{id}/consensus/qc-sample` `{fraction, seed}` → `{marked:int}` (deterministic random sample of unreviewed agreement objects gets review reason `qc_sample`)
+- `POST /api/analyses/{id}/consensus/qc-sample` `{n=40, seed, fraction?}` → `{marked, newly_marked, eligible, n, n_requested, population_agreements, qc:{sample_size, reviewed, confirmed, rejected, error_rate, ci95, ...}, note}` (a fixed-size deterministic random sample of unreviewed agreement objects gets review reason `qc_sample`; `fraction` maps to `max(40, fraction*N)`); `GET /consensus/summary` also returns `qc`
 - detect with `engine:"hybrid"`: failure of Spotiflow ⇒ job still succeeds with Big-FISH result + failed EngineRunInfo(status failed, clear error) + warning; never an empty silent result.
 - Review mapping: reject candidate = existing `delete` (tombstone ⇒ derived status human_rejected), approve = existing `confirm`, add = existing `add` (consensus_status human_added on its channel evidence).
 - Review queue: engine disagreements (`bigfish_only`,`spotiflow_only`) rank above agreement; unflagged agreements not queued unless `qc_sample`.

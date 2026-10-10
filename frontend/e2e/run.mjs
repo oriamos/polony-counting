@@ -819,7 +819,7 @@ async function engineSuite() {
   await tid('spotiflow-model').waitFor();
   check('hybrid shows model select + consensus tolerance', (await tid('consensus-tol').inputValue()) === '4' && (await tid('spotiflow-model').inputValue()) === 'general');
   check('consensus tolerance help text', /paired one-to-one/.test(await tid('engine-section').innerText()));
-  check('downscale defaults to ÷1 with the exploratory note', (await tid('spotiflow-downscale').inputValue()) === '1' && /0\.14 to 0\.57/.test(await tid('spotiflow-downscale-note').innerText()));
+  check('downscale defaults to ÷1 with the exploratory note', (await tid('spotiflow-downscale').inputValue()) === '1' && /precision 0\.73 and recall 0\.77/.test(await tid('spotiflow-downscale-note').innerText()));
   await tid('spotiflow-preset-large').click();
   check('Large blobs preset sets ÷4', (await tid('spotiflow-downscale').inputValue()) === '4');
   await tid('spotiflow-downscale').selectOption('1');

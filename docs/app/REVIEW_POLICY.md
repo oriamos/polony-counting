@@ -85,15 +85,30 @@ nothing is ever auto-rejected or auto-deleted because one engine missed it.**
   rejections. Undoing the delete removes the derived rejection.
 * **Queue order** (`review/counts.py`, lower first): ambiguous_match 0, saturated 1,
   **bigfish_only / spotiflow_only 2**, weak_signal / near_threshold 3, debris_like 4, dense_cluster 5,
-  suspicious_shape 6, near_edge 7, **qc_sample 8**. Unflagged agreements are not queued.
-* **QC sample** `POST /consensus/qc-sample {fraction, seed}`: eligible = counted, non-deleted,
-  unreviewed objects with at least one detected channel whose every detected channel evidence is
-  `agreement`. An object is sampled iff `sha256("<seed>:<object id>")` (first 8 bytes / 2^64) is
-  `< fraction` - a pure function of (seed, id): independent of object order, process and RNG state.
-  It only ADDS `ReviewReason.qc_sample` (idempotent; the response reports `marked` = size of the
-  sample, `newly_marked`, `eligible`). One undoable action, logged as `region_edit` with
-  `payload.event == "qc_sample"` (no new ActionType).
-* **Summary** `GET /consensus/summary` -> `{pages:[ConsensusSummary per red/green page], total}`.
+  suspicious_shape 6, near_edge 7, **qc_sample 8**. Unflagged agreements are not queued. Exception: an object that
+  is both `bigfish_only` and `debris_like` is queued at priority 1 (with saturated): on 7 research slides 97 % of
+  these (333 of 345) had no researcher mark within 10 px, against 18 % of the other Big-FISH-only objects (size /
+  compactness separates specks from real dim spots better than disagreement alone). Never auto-removed.
+* **QC sample** `POST /consensus/qc-sample {n, seed, fraction?}`: a FIXED-SIZE sample, not a fraction. A 5 %
+  sample cannot bound the agreement error (pooled agreement false-positive rate 0.153; 5 % of 24-296 agreements
+  is 1-15 objects). Eligible = counted, non-deleted, unreviewed objects with at least one detected channel whose
+  every detected channel evidence is `agreement`. `n` defaults to 40 and is clamped to `[1, N_eligible]`; the
+  sample is the `n` eligible objects with the smallest `sha256("<seed>:<object id>")` (first 8 bytes / 2^64), a
+  pure function of (seed, id) (independent of object order, process and RNG state; a larger `n` with the same seed is
+  a superset). `fraction` is kept for compatibility and maps to `max(40, ceil(fraction * N_eligible))`; an explicit
+  `n` wins. It only ADDS `ReviewReason.qc_sample` (idempotent; the response reports `marked`, `newly_marked`,
+  `eligible`, `n`, `n_requested`, `population_agreements`, the `qc` status below, and a note). One undoable action,
+  logged as `region_edit` with `payload.event == "qc_sample"` (no new ActionType). Draw it once per slide with one
+  seed: the interval below is valid for a single random sample.
+* **QC result** (`qc` in the sample response, `GET /consensus/summary` and `provenance.json` `agreement_qc`): among
+  the sampled agreements, `confirmed` (reviewed, kept) vs `rejected` (deleted by the user), the error rate
+  `rejected / (confirmed + rejected)` and its exact **Clopper-Pearson 95 % interval** (null until something is
+  reviewed), the sample size, and the sample sizes needed for a margin of +/-0.05 on this slide's agreement
+  population N: `n = ceil(N n0 / (N + n0 - 1))`, `n0 = 1.96^2 p (1 - p) / 0.05^2`, with the measured p = 0.153
+  (N = 24, 49, 67, 203, 296 -> 22, 40, 51, 101, 120) and the conservative p = 0.5. The interval bounds the error
+  rate of the UNSAMPLED agreements only under random sampling and only for agreements present when it was drawn;
+  it says nothing about spots both engines missed. Agreement is not ground truth.
+* **Summary** `GET /consensus/summary` -> `{pages:[ConsensusSummary per red/green page], total, qc}`.
   Per channel: the four status counts are LIVE candidates; `human_rejected` = `rejected` = user-deleted
   candidates (their original engine status is not counted again); `confirmed` = live and reviewed
   (class not uncertain); `unresolved` = live and (unreviewed or uncertain). Candidates are channel

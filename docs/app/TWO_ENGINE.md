@@ -82,7 +82,7 @@ appears in the object history, it does not change classes.
 * **Agreement** = both algorithms put a spot within a few pixels of each other on this channel page. It is
   evidence that the spot is a well-defined local intensity peak. It is **not ground truth**: both detectors can
   fire on the same debris, speck, or saturated rim, and they share the same image. Agreement objects are
-  therefore not "confirmed"; a random QC sample of them is still sent to the reviewer (`qc_sample`).
+  therefore not "confirmed" and are NOT reviewed unless sampled: a fixed-size random QC sample of them (default 40 per slide, `qc_sample`) can be sent to the reviewer. Measured on 7 research slides, 15 % of agreements (pooled; 90 % of the debris_like ones) were not matched to a researcher mark. Disagreements are 24 % to 85 % of the candidates depending on the slide, so they are not a fixed share.
 * **bigfish_only / spotiflow_only** = the other engine found nothing within the tolerance. Reasons are many and
   mostly benign: a weak or crowded spot, different sensitivity at the chosen thresholds, a different centre
   convention, tiling/normalisation effects, a model trained on other imaging. These are the candidates a human
@@ -119,12 +119,20 @@ model is loaded. Large pages are tiled automatically by Spotiflow (`max_tile_siz
 
 * The Spotiflow score is the raw heatmap value at the detected point, not a calibrated probability. Do not
   threshold it as "x % confidence", do not compare it to the Big-FISH response, and do not average the two.
-* Normalisation is applied: with `normalizer='auto'` Spotiflow percentile-normalises (1 / 99.8 %) the array it
-  receives, so the same spot can score differently on a different crop. The adapter feeds the original dtype
-  array (never an 8-bit conversion); by default it crops to the bounding box of the counting area + 32 px
-  (`crop_to_valid`, recorded in `preprocessing.crop_box_xyxy`, coordinates are mapped back exactly) so that slide
-  rim / saturated areas outside the chamber do not dominate the percentiles. `normalizer='none'` passes raw
-  values and is only appropriate for models trained that way.
+* **Normalisation (`normalizer`).** `auto` (default, legacy) is Spotiflow's own percentile normalisation (1 / 99.8 %)
+  of the array it receives: the cropped (and, if downscaled, block-mean) valid bounding box. That box still contains
+  saturated and rim pixels, so p99.8 was the dtype maximum (65535) on 5 of 7 research slides and the model's
+  sensitivity became an uncontrolled per-slide variable (AS-B: 24 detections with `auto` vs 171 with the fixed
+  normaliser). **`valid_unsaturated`** (opt-in; explicit, recorded) computes lo/hi once per page, BEFORE any
+  crop/zoom, as the percentiles 1 / 99.8 of the pixels that are inside the valid (counting-area) mask AND not
+  saturated (raw < dtype maximum; floats: no exclusion), and passes `(x - lo) / (hi - lo)` to the model as a
+  callable normaliser, the same in the native and the downscaled path (the map is affine, so it commutes with the
+  block mean). If fewer than 1000 pixels qualify it falls back to all valid pixels, then to the page (noted).
+  `preprocessing.normalizer_stats` records lo, hi, the pixel counts (page, valid, valid-and-saturated, used) and the
+  rule. `none` passes raw values and is only appropriate for models trained that way. The adapter always feeds the original dtype (never an 8-bit conversion) and crops to the
+  bounding box of the counting area + 32 px (`crop_to_valid`, `preprocessing.crop_box_xyxy`; coordinates are mapped
+  back exactly). Which default to ship is the maintainers' decision; numbers per slide and threshold are in
+  [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md).
 * The pretrained `general` model was trained on other microscopy data (FISH/spots); its behaviour on these
   polonies is not validated. It is a second opinion, not a reference.
 * TIFF page -> colour is unconfirmed science: detection is per page index, colour roles only come from the
@@ -132,19 +140,34 @@ model is loaded. Large pages are tiled automatically by Spotiflow (`max_tile_siz
 * Spotiflow has its own prior on spot size/shape and ignores the app's `spot_radius_px`; Big-FISH needs it.
   Dense clusters and saturated plateaus are handled very differently by the two.
 * **Large blobs: `downscale` (÷1 default, 2, 4, 8).** The pretrained models expect small spots; polonies are ~25 px
-  blobs. With `downscale = d > 1` the adapter (after the valid-area crop + pad) trims the bottom/right remainder so both
-  sides are divisible by `d` (never pads; `preprocessing.trimmed_px`, `crop_box_xyxy`, `downscaled_shape_hw`
-  record it), downscales in float32 with `scipy.ndimage.zoom(order=1)` (exactly what Spotiflow 0.6.5 does for
-  `scale=1/d`), runs the model with `subpix=False`, and maps points back. We downscale ourselves rather than pass
-  `scale=` because Spotiflow's own `scale` returns points in the original frame on its single-tile path but in the
-  downscaled frame on its tiled path. **Mapping (verified):** `zoom` aligns first/last pixel centres, so
-  `x_full = x_s * (n-1)/(m-1)` (+ crop offset), `n` = trimmed crop side, `m = n/d`; NOT `x_s*d + (d-1)/2` (that is
-  off by up to ~0.75/1.7 px at d=4/8 near the middle and several px at the borders). Measured centre error on
-  synthetic 25 px Gaussian blobs with the real `general` model (subpix off): d=1 <= 0.2 px, d=2 <= 0.9 px,
-  d=4 <= 2.5 px. So with ÷4 localisation is about +/-2 px: fine for 25 px blobs and 4-10 px matching tolerances, not
-  for sub-pixel claims. `min_distance`/`exclude_border` act in the downscaled grid. Exploratory evidence (one slide,
-  tuned on that slide) in [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md): ÷4 raised recall 0.14 -> 0.57 at
-  precision 0.92. Not validated; default stays ÷1. Unsupported values and `subpix=true` with `downscale>1` are errors.
+  blobs. With `downscale = d > 1` the adapter downscales by a **block mean** (area average, anti-aliased) over
+  `d x d` pixels, runs the model with `subpix=False`, and maps points back. The crop is anchored to an
+  image-wide grid: its origin is a multiple of `16·d` full-resolution pixels (16 = the U-Net stride; extended
+  outward, still inside the image), its far side the next multiple (capped at the last full block; the remainder
+  of the page is `preprocessing.trimmed_px`), and the downscaled array is reflect-padded on the right/bottom to a
+  multiple of 16 by the adapter (`reflect_pad_hw`; peaks in the padding are dropped) so Spotiflow's own centred
+  padding is a no-op. Result: the block grid and the network's stride phase do not depend on where the counting
+  area starts. Measured on real slides (AI-A, AS-A, FS-A), shifting the counting area by 1-3 px in x and/or y
+  changed 0-1.5 % of the detections beyond 2 px (AS-A: up to 3 of 86); the previous zoom + free crop origin changed
+  4-7 % on AI-A. Tiled inference on very large crops (Spotiflow `max_tile_size`) still depends on the tile grid.
+  We downscale ourselves rather than pass `scale=` because Spotiflow's own `scale` zooms without anti-aliasing and
+  returns points in the original frame on its single-tile path but in the downscaled frame on its tiled path.
+  **Mapping:** a block `i` covers full-resolution pixels `i·d .. i·d+d-1`, so its centre is
+  `x_full = x0 + i·d + (d-1)/2` (unit-tested with sub-pixel Gaussians at d=2,4,8: unbiased < 0.02 px). The older
+  align-corners formula `x_s·(n-1)/(m-1)` belonged to the zoom resampler and no longer applies.
+  **Localisation error (measured, real `general` model):** RMS 0.83 / 1.74 / 3.60 px and maximum 1.4 / 3.25 /
+  5.57 px at d = 2 / 4 / 8 against the native-scale model (independent review). Against a model-free blob centre
+  (mean-shift of the smoothed image, 3 real slides, unrefined integer peaks) RMS is 1.25 / 1.83 / 3.31 px; with the
+  default **quadratic peak refinement** on `details.heatmap` (`refine_peaks`, a parabola through the 3 heatmap
+  samples per axis, clipped to ±0.5 downscaled px; recorded) it is 1.04 / 1.21 / 2.13 px (median 0.33 / 0.60 /
+  1.46 px). So ÷4 is good to about ±1 to 2 px: fine for 25 px blobs and 4-10 px matching tolerances, not for
+  sub-pixel claims, and not "±d/2". `min_distance`/`exclude_border` act in the downscaled grid. Exploratory evidence
+  in [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md); not validated; default stays ÷1. Unsupported values
+  and `subpix=true` with `downscale>1` are errors.
+* **Consensus tolerance and downscale.** `consensus_tolerance_px` keeps its schema default of 4. When the request
+  does not set it explicitly and the Spotiflow downscale `d` exceeds it, the pipeline uses `d` (so ÷8 pairs within
+  8 px); an explicit value is used as given. The effective value and the reason are in the run notes
+  ("consensus (tolerance 8 px, raised from the 4 px default to the Spotiflow downscale)").
 * Big-FISH default threshold is unchanged and not tuned to Spotiflow; the consensus tolerance is a starting
   point, not a validated cut-off.
 

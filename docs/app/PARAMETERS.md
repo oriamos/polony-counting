@@ -130,7 +130,11 @@ Within the same priority: by y, then x.
 
 ## Spotiflow `downscale` and `prob_thresh`
 
-`downscale` (1, 2, 4, 8; default **1** = native scale, unchanged behaviour) divides the image before the Spotiflow model sees it, for ~25 px blobs; the Detect tab has a "Large blobs (÷4)" preset. Localisation is coarser (about +/- downscale/2 px; ~+/-2 px at ÷4). `prob_thresh` empty = the model's own optimised threshold (recorded as `prob_thresh_used`). Details, coordinate mapping and the exploratory evidence: [TWO_ENGINE.md](TWO_ENGINE.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md).
+`downscale` (1, 2, 4, 8; default **1** = native scale, unchanged behaviour) divides the image (block mean over `d x d` pixels, on an image-anchored grid) before the Spotiflow model sees it, for ~25 px blobs; the Detect tab has a "Large blobs (÷4)" preset. Localisation: RMS about 1.0 / 1.2 / 2.1 px at ÷2 / ÷4 / ÷8 after the default quadratic peak refinement (1.25 / 1.8 / 3.3 px unrefined). `prob_thresh` empty = the model's own optimised threshold (0.5 for `general`, recorded as `prob_thresh_used`); on 8 research slides lower thresholds (0.05 to 0.3) trade precision for recall smoothly and no single value is best (curves in [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md)).
+
+`normalizer`: `auto` (default, legacy; Spotiflow's percentile normalisation of the cropped area, **saturation-sensitive**: p99.8 was 65535 on most slides), `valid_unsaturated` (p1 / p99.8 of the valid, unsaturated page pixels, computed once per page before crop/downscale, recorded in the run), `none`. Use `valid_unsaturated` with `downscale > 1`. `refine_peaks` (default true, adapter-level) refines ÷d peaks with a quadratic fit on the heatmap.
+
+`consensus_tolerance_px` (default 4): if you do not set it, it is raised to the Spotiflow downscale when that is larger (÷8 pairs within 8 px); a value you set is used as given. Details, coordinate mapping and the evidence: [TWO_ENGINE.md](TWO_ENGINE.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md).
 
 ## Re-run merge radius
 

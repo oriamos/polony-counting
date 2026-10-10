@@ -142,12 +142,13 @@ class SpotiflowParams(BaseModel):
     min_distance: int = 1
     exclude_border: bool = False
     subpix: Optional[bool] = None               # None = model default
+    refine_peaks: bool = True                   # quadratic refinement of peaks on the heatmap (lowers localisation error for downscale>1)
     n_tiles: Optional[tuple[int, int]] = None   # None = automatic (max_tile_size)
     max_tile_size: Optional[int] = None
     downscale: int = 1                          # integer image downscale divisor (1,2,4,8) for LARGE blobs: the pretrained models were trained on
                                                 # near-diffraction-limited spots; polonies are ~25 px blobs. Default 1 = native scale (unchanged behaviour).
                                                 # Spotiflow requires subpix=False when downscale>1 and image sides divisible by it (crop/pad is recorded).
-    normalizer: Literal["auto", "none", "valid_unsaturated"] = "auto"   # "auto" = Spotiflow's own percentile normalisation (saturation-sensitive, legacy default);
+    normalizer: Literal["auto", "none", "valid_unsaturated"] = "valid_unsaturated"   # DEFAULT "valid_unsaturated" (measured on 8 slides: removes a per-slide sensitivity lottery; "auto" = Spotiflow's own percentile normalisation, saturation-sensitive, kept as an explicit legacy option);
                                                                   # "valid_unsaturated" = lo/hi from valid, unsaturated pixels of the page (recorded)  # 'auto' = Spotiflow's percentile normalisation of the page (recorded, never 8-bit conversion)
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
 
