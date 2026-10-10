@@ -139,7 +139,7 @@ def test_full_round_trip_with_restart_and_export(data_dir, tiff, detector):
         assert "DRAFT" not in r.headers["content-disposition"] and r.text.splitlines()[1].endswith(",FINAL")
         z = zipfile.ZipFile(io.BytesIO(client2.get(f"/api/analyses/{aid}/export?kind=bundle").content))
         names = z.namelist()
-        assert {"README.txt", "objects.csv", "regions.csv", "slide.csv", "provenance.json",
+        assert {"README.txt", "objects_FINAL.csv", "regions_FINAL.csv", "slide_FINAL.csv", "provenance.json",
                 "actions.jsonl", "objects_history.csv"} == set(names)
         assert z.read("README.txt").decode().startswith("FINAL")
         prov = json.loads(z.read("provenance.json"))

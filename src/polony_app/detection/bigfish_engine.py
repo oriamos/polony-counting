@@ -11,14 +11,21 @@ Verified against the installed source (bigfish.detection.detect_spots):
   ``log_kernel_size=(r,r)``, ``minimum_distance=(d,d)`` so that
   ``DetectionParams.minimum_distance_px`` is honoured independently of r (when
   all four are given Big-FISH uses the kernel/min-distance pair).
-* ``threshold`` is in LoG-response units (of the float image we pass). With
+* Big-FISH's ``threshold`` is in LoG-response units (of the float image we pass). THIS APP
+  expresses every threshold in NOISE UNITS instead: LoG response / noise_sigma, with
+  noise_sigma = 1.4826*MAD of the signed LoG response over valid pixels (background-corrected
+  image). Reason: Big-FISH's elbow search uses an absolute candidate grid (integer steps up to the
+  99.9999th percentile), so on raw units the automatic threshold -- and the detections -- changed
+  with image brightness/exposure. ``DetectionParams.threshold`` (manual) is in the same noise
+  units; the absolute LoG threshold used internally is ``threshold * noise_sigma``. With
   ``threshold=None`` Big-FISH selects it automatically at the kink of the
-  spot-count-vs-threshold curve. We compute that value ourselves with
+  spot-count-vs-threshold curve of the noise-normalised response. We compute that value ourselves with
   ``stack.log_filter`` + ``local_maximum_detection`` + ``automated_threshold_setting``
   (what detect_spots does internally, but without building a Python list of
   every pixel -- unusable for big images), multiply by ``threshold_scale``, and pass
   the result as a *manual* threshold. A test checks equality with
-  ``detect_spots(..., threshold=None, return_threshold=True)``.
+  ``detect_spots(..., threshold=None, return_threshold=True)`` (``auto_threshold`` without
+  ``noise_sigma`` is exactly Big-FISH's raw-unit value; the app multiplies nothing by it).
 
 Masking (SCIENCE_NOTES 1.4): the LoG is computed on the REAL background-corrected image
 and its response is set to zero outside the valid mask; local maxima of the real response
@@ -141,13 +148,18 @@ class BigFishEngine:
         return filt, lm
 
     def auto_threshold(self, filled: np.ndarray, params: DetectionParams,
-                       valid: Optional[np.ndarray]) -> Optional[float]:
+                       valid: Optional[np.ndarray], noise_sigma: Optional[float] = None) -> Optional[float]:
         """Big-FISH automated threshold (before threshold_scale), from local maxima
-        INSIDE the mask of the real LoG response."""
+        INSIDE the mask of the real LoG response. With ``noise_sigma`` the response is divided
+        by it first, so the result is in NOISE UNITS (Big-FISH's candidate grid is absolute --
+        integer steps up to the 99.9999th percentile -- so on raw LoG units the elbow moved with
+        image brightness; in noise units it does not). Without it: raw LoG units (as Big-FISH)."""
         from bigfish.detection import automated_threshold_setting
         filt, lm = self._log_maxima(filled, valid, params)
         if not lm.any():
             return None
+        if noise_sigma is not None:
+            filt = (filt / np.float32(noise_sigma)).astype(np.float32)
         try:
             thr = automated_threshold_setting(filt, lm)
         except ValueError:  # curve without a kink (e.g. one candidate)
@@ -155,48 +167,72 @@ class BigFishEngine:
         return None if thr is None else float(thr)
 
     @staticmethod
-    def noise_threshold(filled: np.ndarray, params: DetectionParams, valid: Optional[np.ndarray]) -> Optional[float]:
-        """Fallback when Big-FISH cannot pick a threshold: NOISE_K x robust sigma
-        (1.4826*MAD) of the SIGNED -LoG response over valid pixels."""
+    def noise_sigma(filled: np.ndarray, params: DetectionParams, valid: Optional[np.ndarray]) -> Optional[float]:
+        """Robust noise sigma (1.4826*MAD) of the SIGNED -LoG response over valid pixels of the
+        (background-corrected) image: the unit of every threshold. None if undefined/zero."""
         r = float(params.spot_radius_px)
-        resp = -ndi.gaussian_laplace(filled, sigma=r, mode="reflect")
+        resp = -ndi.gaussian_laplace(np.asarray(filled, np.float32), sigma=r, mode="reflect")
         vals = resp[valid] if valid is not None else resp.ravel()
         if vals.size == 0:
             return None
         med = float(np.median(vals))
         sig = _MAD_TO_SIGMA * float(np.median(np.abs(vals - med)))
-        return NOISE_K * sig if sig > 0 else None
+        scale = float(np.max(np.abs(filled))) if np.size(filled) else 0.0
+        return sig if (math.isfinite(sig) and sig > 1e-9 * max(scale, 1e-30)) else None
 
-    def estimate_threshold(self, img, params: DetectionParams, valid_mask=None, raw=None, measure=None) -> dict:
-        """Automatic threshold of the WHOLE masked image (before ``threshold_scale``).
+    def estimate_threshold(self, img, params: DetectionParams, valid_mask=None, raw=None, measure=None,
+                           with_auto: bool = True) -> dict:
+        """Automatic threshold of the WHOLE masked image (before ``threshold_scale``), in NOISE
+        UNITS: Big-FISH's elbow on (LoG response / noise_sigma), noise_sigma = 1.4826*MAD of the
+        LoG response over valid pixels (computed on ``measure``, the unclipped corrected image,
+        when given). An absolute LoG threshold is ``threshold * noise_sigma``.
 
-        Returns {"auto": float|None, "base": float|None, "fallback": bool, "notes": [...]}
-        where ``base`` is the Big-FISH automatic value or, if unusable, the noise fallback.
-        The pipeline caches this and passes it back as ``threshold_info`` so that preview
-        windows and tiles use exactly the value of the full run."""
+        Returns {"auto": float|None, "base": float|None, "noise_sigma": float|None,
+        "fallback": bool, "notes": [...]} where ``base`` is the Big-FISH value or, if unusable,
+        NOISE_K. The pipeline caches this and passes it back as ``threshold_info`` so that
+        preview windows and tiles use exactly the value (and sigma) of the full run."""
         valid = None if valid_mask is None else np.asarray(valid_mask, bool)
-        out: dict = {"auto": None, "base": None, "fallback": False, "notes": []}
+        out: dict = {"auto": None, "base": None, "noise_sigma": None, "fallback": False, "noise_regime": False,
+                     "notes": []}
         if valid is not None and not valid.any():
             out["notes"].append("no valid pixels: nothing to detect")
             return out
-        filled = self._prepare(img, valid, raw, float(params.spot_radius_px))
+        r = float(params.spot_radius_px)
+        filled = self._prepare(img, valid, raw, r)
+        src = filled if measure is None else self._prepare(np.asarray(measure, np.float32), valid, raw, r)
+        sigma = self.noise_sigma(src, params, valid)
+        out["noise_sigma"] = sigma
+        if sigma is None:
+            out["notes"].append("LoG response has zero noise (flat image?): automatic threshold undefined; "
+                                "no spots reported")
+            return out
+        if not with_auto:  # manual threshold: only the noise unit is needed
+            return out
         auto = None
         try:
-            auto = self.auto_threshold(filled, params, valid)
+            auto = self.auto_threshold(filled, params, valid, noise_sigma=sigma)
         except ValueError as exc:  # bigfish get_breaking_point on a short/monotone curve
             out["notes"].append(f"Big-FISH automatic threshold raised ({exc})")
         out["auto"] = auto
-        if auto is None or auto <= 0:
-            nt = self.noise_threshold(filled if measure is None else np.asarray(measure, np.float32), params, valid)
-            if nt is None:
-                out["notes"].append("automatic threshold failed and no noise estimate possible; no spots reported")
-                return out
+        if auto is not None and 0 < auto < NOISE_K:
+            # the elbow of the spot-count curve lies where noise maxima still dominate (a local
+            # maximum of pure LoG noise rarely exceeds ~4 sigma): there is no separable population
+            # of real spots (empty/near-empty channel, or the curve has no kink)
+            out["noise_regime"] = True
+            out["notes"].append(
+                f"WARNING automatic threshold ({auto:.3g} noise units) is in the noise regime (< {NOISE_K:g}): "
+                "this channel may contain no (or very few) real spots; using "
+                f"{NOISE_K:g} noise units instead. Confirm the channel visually or set a threshold manually.")
+            out["fallback"] = True
+            out["base"] = NOISE_K
+        elif auto is None or auto <= 0:
             out["notes"].append(
                 f"WARNING automatic threshold unusable ({'none' if auto is None else auto}); fell back to "
-                f"{NOISE_K:g} x robust noise sigma of the LoG response = {nt:.4g}. Set a threshold manually if unsure.")
+                f"{NOISE_K:g} noise units (robust sigma of the LoG response = {sigma:.4g}). "
+                "Set a threshold manually if unsure.")
             out["fallback"] = True
             out["auto"] = None
-            out["base"] = nt
+            out["base"] = NOISE_K
         else:
             out["base"] = auto
         return out
@@ -240,20 +276,28 @@ class BigFishEngine:
         if cancelled():
             raise DetectionCancelled()
 
+        ti = threshold_info if threshold_info is not None else \
+            self.estimate_threshold(img, params, valid, raw, measure, with_auto=params.threshold is None)
+        info["threshold_info"] = ti
+        sigma = ti.get("noise_sigma")
+        info["noise_sigma"] = sigma
         if params.threshold is not None:
-            thr = float(params.threshold)
-            info["notes"].append("manual threshold used as given (threshold_scale ignored)")
+            thr = float(params.threshold)  # manual: noise units, same as the automatic value
+            info["notes"].append("manual threshold used as given, in noise units (threshold_scale ignored)")
+            if sigma is None:
+                info["notes"] += list(ti.get("notes", []))
+                return [], info
         else:
-            ti = threshold_info if threshold_info is not None else \
-                self.estimate_threshold(img, params, valid, raw, measure)
-            info["threshold_info"] = ti
             info["notes"] += list(ti.get("notes", []))
             info["auto_threshold"] = ti.get("auto")
             info["fallback_threshold"] = bool(ti.get("fallback"))
-            if ti.get("base") is None:
+            info["noise_regime"] = bool(ti.get("noise_regime"))
+            if ti.get("base") is None or sigma is None:
                 return [], info
             thr = float(ti["base"]) * float(params.threshold_scale)
-        info["threshold"] = thr
+        info["threshold"] = thr                       # noise units
+        thr_abs = thr * float(sigma)                  # LoG-response units (what the spots are compared with)
+        info["threshold_abs"] = thr_abs
         if cancelled():
             raise DetectionCancelled()
 
@@ -261,7 +305,7 @@ class BigFishEngine:
         ts = int(params.tile_size)
         if ts <= 0 or ts >= max(h, w):
             progress(0.2, "detecting")
-            coords = self._detect_coords(filled, thr, params, valid)
+            coords = self._detect_coords(filled, thr_abs, params, valid)
         else:
             support = int(math.ceil(4 * r)) + int(math.ceil(md)) + 2
             halo = max(int(params.tile_overlap_px), support)
@@ -284,7 +328,7 @@ class BigFishEngine:
                     py0, py1 = max(0, y0 - halo), min(h, y1 + halo)
                     px0, px1 = max(0, x0 - halo), min(w, x1 + halo)
                     vt = None if valid is None else valid[py0:py1, px0:px1]
-                    c = self._detect_coords(np.ascontiguousarray(filled[py0:py1, px0:px1]), thr, params, vt)
+                    c = self._detect_coords(np.ascontiguousarray(filled[py0:py1, px0:px1]), thr_abs, params, vt)
                     if c.size == 0:
                         continue
                     c = c + np.array([py0, px0])
@@ -335,7 +379,7 @@ class BigFishEngine:
                 info["notes"].append(f"dense decomposition failed ({type(exc).__name__}: {exc}); skipped")
 
         progress(0.85, "measuring")
-        spots = self._measure(filled, valid, coords, simulated, params, raw, thr, measure, overrides)
+        spots = self._measure(filled, valid, coords, simulated, params, raw, thr_abs, measure, overrides)
         spots = self._suppress(spots, params.remove_duplicate_radius_px)
         spots.sort(key=lambda s: (s.y, s.x))
         progress(1.0, "done")

@@ -24,7 +24,7 @@ def test_real_image_masked_run(tmp_path):
     b = run_detection(red, green, [reg], DetectionRequest(red=t, green=t), lambda f, m: None, lambda: False)
     assert len(a.objects) > 10
     valid = build_valid_mask(red.shape, [reg])
-    assert all(valid[int(round(o.y)), int(round(o.x))] and o.region_id == "c1" for o in a.objects)
+    assert all(valid[int(o.y), int(o.x)] and o.region_id == "c1" for o in a.objects)  # floor: half-open pixel cell of the centre
     # tiling does not change results on real data
     assert [(o.id, o.cls, round(o.x, 2), round(o.y, 2)) for o in a.objects] == \
            [(o.id, o.cls, round(o.x, 2), round(o.y, 2)) for o in b.objects]

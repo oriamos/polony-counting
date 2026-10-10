@@ -176,6 +176,9 @@ class Store:
             ).fetchall()
         log = [ReviewAction.model_validate_json(r["data"]) for r in acts]
         st = AnalysisState.from_json(json.loads(row["state"]), log)
+        from polony_app.review.engine import migrate_legacy_state
+
+        migrate_legacy_state(st)  # old persisted format without detection_sig
         self._cache[aid] = st
         self._saved_log_len[aid] = len(log)
         return st

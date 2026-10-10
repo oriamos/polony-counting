@@ -166,6 +166,24 @@ def recompute_stale(state: AnalysisState) -> bool:
     return a.provenance.stale_detection
 
 
+def migrate_legacy_state(state: AnalysisState) -> bool:
+    """States persisted before `detection_sig` existed carry only the stored stale flag, which
+    compute_stale would trust forever (an edit could never make them stale). On load:
+      * detection ran, stored flag False -> the CURRENT inputs are by definition the ones the
+        shown result was produced from: synthesise the signature from them (+ the recorded
+        request) so later edits are detected;
+      * stored flag True -> keep it (sticky) until detection is re-run, which records a real
+        signature.
+    Returns True if a signature was synthesised. See docs/app/RERUN_POLICY.md."""
+    a = state.analysis
+    if state.detection_sig is not None or a.provenance.detection_ran_at is None:
+        return False
+    if a.provenance.stale_detection:
+        return False
+    state.detection_sig = input_signature(a, a.provenance.detection_request)
+    return True
+
+
 def region_fingerprint(a: Analysis, region: Region) -> str:
     """Hash of (region polygon, overlapping exclusion polygons, non-deleted
     objects inside). Anything affecting the count inside the region changes it."""
@@ -484,6 +502,25 @@ def _h_add(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
     p["object_id"] = o.id  # recorded so redo/inverse is traceable
 
 
+def _merge_constituents(a: Analysis, o: DetectedObject, seen: set[str] | None = None) -> list[str]:
+    """Ids of all objects merged (transitively) into `o`, read from its 'merged from' history."""
+    seen = seen if seen is not None else {o.id}
+    by_id = {x.id: x for x in a.objects}
+    out: list[str] = []
+    for h in o.history:
+        _, sep, rest = h.partition(" merged from ")
+        if not sep:
+            continue
+        for cid in (c.strip() for c in rest.split(",")):
+            if cid and cid not in seen:
+                seen.add(cid)
+                out.append(cid)
+                c = by_id.get(cid)
+                if c is not None:
+                    out.extend(_merge_constituents(a, c, seen))
+    return out
+
+
 def _h_delete(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
     ids = _ids(p)
     objs = [tx.get_live(oid) for oid in ids]  # validate all before mutating
@@ -495,6 +532,11 @@ def _h_delete(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
         # explicit marker (snapshotted for undo/redo): this deletion was a user decision
         if o.id not in tx.state.user_deleted:
             tx.state.user_deleted.append(o.id)
+        # deleting a MERGED object is a decision about every spot it was made of: explicit
+        # tombstone anchors for all constituents (their positions and evidence positions)
+        for cid in _merge_constituents(a, o):
+            if cid not in tx.state.user_deleted and any(x.id == cid for x in a.objects):
+                tx.state.user_deleted.append(cid)
 
 
 def _h_move(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
@@ -917,6 +959,11 @@ def set_channel_mapping(state: AnalysisState, mapping: list[dict]) -> bool:
                         "was_confirmed": was_confirmed}
         if is_swap:
             detail["red_green_swapped"] = _swap_red_green_evidence(state, now())
+            # The alignment is "shift applied to GREEN to match RED". After a swap the physical
+            # channels trade roles, so the same correction is the inverse shift.
+            prev = {"dy": int(a.alignment_dy), "dx": int(a.alignment_dx)}
+            state.alignment = {"dy": -prev["dy"], "dx": -prev["dx"]}
+            detail["alignment_negated"] = {"previous": prev, "now": dict(state.alignment)}
         _invalidate_for_input_change(
             state, "channel_mapping_changed" if was_confirmed else "channel_mapping_confirmed", detail
         )

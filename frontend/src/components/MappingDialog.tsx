@@ -32,8 +32,14 @@ export function MappingDialog() {
   if (!allChosen) problems.push('Assign every channel (red, green or ignore).');
   if (nRed > 1) problems.push('More than one channel is set to red.');
   if (nGreen > 1) problems.push('More than one channel is set to green.');
-  if (allChosen && nRed === 0 && nGreen === 0) problems.push('At least one channel must be red or green.');
+  // same rule as the server: exactly one red and exactly one green
+  if (allChosen && (nRed !== 1 || nGreen !== 1)) problems.push('Exactly one channel must be red and exactly one green.');
   const hasDetection = a.objects.length > 0;
+  const prevRed = chans.find((c) => c.role_confirmed && c.role === 'red')?.index;
+  const prevGreen = chans.find((c) => c.role_confirmed && c.role === 'green')?.index;
+  const isSwap = prevRed !== undefined && prevGreen !== undefined && choice[prevRed] === 'green' && choice[prevGreen] === 'red';
+  const hasReviewWork =
+    a.objects.some((o) => !o.deleted) || a.regions.some((r) => r.approved || r.inspected) || a.undo_depth > 0;
 
   const confirm = async () => {
     setBusy(true);
@@ -84,7 +90,14 @@ export function MappingDialog() {
               </div>
               <dl className="kv">
                 <dt>Metadata hint</dt>
-                <dd className="mono">{c.label_hint ?? <span className="muted">none</span>}</dd>
+                <dd className="mono">
+                  {c.label_hint ?? <span className="muted">none</span>}
+                  {c.suggested_role && (
+                    <span className="tag draft" title="A hint only; nothing is applied until you confirm" data-testid={`suggested-${c.index}`}>
+                      suggested: {c.suggested_role}
+                    </span>
+                  )}
+                </dd>
                 <dt>Source</dt>
                 <dd className="mono small">
                   {c.source_file}
@@ -129,6 +142,13 @@ export function MappingDialog() {
         )}
         {hasDetection && (
           <div className="notice warn small">Changing the mapping after detection marks detection as stale and clears region approvals.</div>
+        )}
+        {isSwap && hasReviewWork && (
+          <div className="notice warn small" role="alert" data-testid="swap-warning">
+            <strong>Swapping red and green on an analysis that is already being reviewed</strong> mirrors the red/green classes of all
+            objects, swaps their evidence, negates the alignment shift, marks every object as <em>not reviewed</em>, clears all region
+            approvals and inspection marks, and discards the undo history. Detection becomes stale.
+          </div>
         )}
         {problems.length > 0 && allChosen && (
           <div className="notice err small" role="alert">

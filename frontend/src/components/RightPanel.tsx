@@ -201,6 +201,15 @@ function ReviewTab() {
   const zoom = useApp((s) => s.zoomToPoint);
   const objects = new Map(a.objects.map((o) => [o.id, o]));
   const noDetection = a.objects.length === 0;
+  const unreviewed = a.objects.filter((o) => !o.deleted && !o.reviewed);
+  const stepUnreviewed = (dir: 1 | -1) => {
+    if (!unreviewed.length) return;
+    const cur = selection.length === 1 ? unreviewed.findIndex((o) => o.id === selection[0]) : -1;
+    const n = unreviewed.length;
+    const o = unreviewed[cur < 0 ? (dir === 1 ? 0 : n - 1) : (cur + dir + n) % n];
+    patch({ selection: [o.id], tool: 'select' });
+    zoom(o.x, o.y, 10);
+  };
   return (
     <div className="review" data-testid="review-tab">
       <div className="row between">
@@ -219,7 +228,22 @@ function ReviewTab() {
       </div>
       <div className="muted small">Ordered by measured review concerns (not confidence). Enter confirms the selected spot and moves on.</div>
       {noDetection && <div className="empty">No detections yet. Run detection from the Detect tab, or add spots manually.</div>}
-      {!noDetection && queue.length === 0 && <div className="empty ok">Nothing flagged for review. Still inspect each region for omissions before approving.</div>}
+      {!noDetection && queue.length === 0 && unreviewed.length === 0 && (
+        <div className="empty ok">Nothing flagged for review. Still inspect each region for omissions before approving.</div>
+      )}
+      {!noDetection && queue.length === 0 && unreviewed.length > 0 && (
+        <div className="empty" data-testid="unreviewed-note">
+          {unreviewed.length} object{unreviewed.length > 1 ? 's' : ''} unreviewed (no automatic flags).
+          <div className="row">
+            <button className="btn sm" onClick={() => stepUnreviewed(-1)} data-testid="unreviewed-prev">
+              ↑ Prev unreviewed
+            </button>
+            <button className="btn sm" onClick={() => stepUnreviewed(1)} data-testid="unreviewed-next">
+              ↓ Next unreviewed
+            </button>
+          </div>
+        </div>
+      )}
       <ol className="queue">
         {queue.map((q, i) => {
           const o = objects.get(q.object_id);

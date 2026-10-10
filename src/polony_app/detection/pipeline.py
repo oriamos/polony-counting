@@ -72,10 +72,12 @@ def _digest(a: np.ndarray) -> str:
 def threshold_cache_key(raw: np.ndarray, valid: np.ndarray, params: DetectionParams) -> tuple:
     """Key of the cached automatic threshold: image content, effective valid mask (= regions,
     exclusions, alignment strip, automatic saturated exclusion) and every parameter that
-    changes the LoG response (radius, minimum distance, background). threshold_scale, a
-    manual threshold, tiling and dense decomposition do not change the automatic value."""
+    changes the LoG response (radius, minimum distance, background). The cached entry holds the
+    automatic threshold AND the noise sigma (the unit of every threshold, manual ones too), both
+    functions of the same inputs. threshold_scale, a manual threshold, tiling and dense
+    decomposition do not change them."""
     pj = params.model_dump_json(include={"spot_radius_px", "minimum_distance_px", "background"})
-    return (raw.shape, str(raw.dtype), _digest(raw), _digest(np.packbits(valid)), pj)
+    return ("noise-units-v1", raw.shape, str(raw.dtype), _digest(raw), _digest(np.packbits(valid)), pj)
 
 
 def _cache_get(key):
@@ -213,7 +215,7 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
         measured, corrected, valid = measured_full[sl], corrected_full[sl], valid_c[sl]
         tinfo = None
         key = None
-        if can_inject and params.threshold is None:
+        if can_inject:
             key = threshold_cache_key(arr, valid_c, params)
             tinfo = _cache_get(key)
             if tinfo is None and win is not None:
@@ -225,7 +227,8 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
                            cancelled=cancelled, measure=measured, **kw)
         info = getattr(engine, "last_info", {}) or {}
         infos[name] = info
-        if key is not None and tinfo is None and info.get("threshold_info") is not None:
+        if (key is not None and tinfo is None and info.get("threshold_info") is not None
+                and params.threshold is None):
             _cache_put(key, info["threshold_info"])  # full run: remember for later previews
         for s_ in sp:
             s_.x += ox
@@ -233,7 +236,7 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
         spots[name] = sp
         thr = info.get("threshold")
         notes.append(f"{name}: {len(sp)} spot(s); LoG threshold "
-                     f"{'n/a' if thr is None else f'{thr:.4g}'}"
+                     f"{'n/a' if thr is None else f'{thr:.4g}'} noise units"
                      f"{'' if info.get('auto_threshold') is None else f' (auto {info['auto_threshold']:.4g} x scale {params.threshold_scale:g})'}"
                      f"; tiles {info.get('n_tiles', 1)}")
         notes += [f"{name}: {n}" for n in info.get("notes", [])]

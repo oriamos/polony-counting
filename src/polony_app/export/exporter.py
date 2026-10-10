@@ -35,10 +35,18 @@ def safe_stem(name: str) -> str:
     return (s or "analysis")[:60]
 
 
+_EXT = {"objects": "csv", "regions": "csv", "slide": "csv", "history": "csv",
+        "provenance": "json", "actions": "jsonl", "bundle": "zip"}
+
+
 def export_filename(a: Analysis, kind: str) -> str:
-    ext = {"objects": "csv", "regions": "csv", "slide": "csv", "provenance": "json", "bundle": "zip"}[kind]
-    suffix = "" if a.finalized_at is not None else "_DRAFT"
-    return f"{safe_stem(a.name)}_{kind}{suffix}.{ext}"
+    """THE download naming rule (used by the API): <name>_<kind>_<DRAFT|FINAL>.<ext>."""
+    return f"{safe_stem(a.name)}_{kind}_{status_label(a)}.{_EXT[kind]}"
+
+
+def member_name(a: Analysis, kind: str) -> str:
+    """Name of a CSV inside the bundle: <kind>_<DRAFT|FINAL>.csv (same status rule, no stem)."""
+    return f"{kind}_{status_label(a)}.{_EXT[kind]}"
 
 
 # the detection pipeline reports import names; the exporter uses distribution names
@@ -293,10 +301,11 @@ def provenance_json(state: AnalysisState, originals_dir: str | Path | None = Non
 def actions_jsonl(state: AnalysisState) -> str:
     """Full ReviewAction log, one JSON object per line. Inverse (undo/redo) snapshots omitted."""
     lines = []
+    status = status_label(state.analysis)
     for act in state.log:
         lines.append(json.dumps(
             {"seq": act.seq, "ts": act.ts, "type": act.type.value, "payload": act.payload,
-             "inverse_omitted": True},
+             "inverse_omitted": True, "status": status},
             sort_keys=False, default=str))
     return "\n".join(lines) + ("\n" if lines else "")
 
@@ -304,13 +313,14 @@ def actions_jsonl(state: AnalysisState) -> str:
 def objects_history_csv(a: Analysis) -> str:
     """Every history entry of every object (deleted ones included, flagged)."""
     rows = []
+    status = status_label(a)
     for o in a.objects:
         for i, h in enumerate(o.history):
             ts, _, msg = h.partition(" ")
             if "T" not in ts:  # entry without a leading timestamp
                 ts, msg = "", h
-            rows.append([o.id, i + 1, ts, msg, _b(o.deleted), o.origin.value])
-    return _csv(["object_id", "step", "timestamp", "event", "object_deleted_now", "origin"], rows)
+            rows.append([o.id, i + 1, ts, msg, _b(o.deleted), o.origin.value, status])
+    return _csv(["object_id", "step", "timestamp", "event", "object_deleted_now", "origin", "status"], rows)
 
 
 # ------------------------------------------------------------------ bundle
@@ -327,9 +337,11 @@ Polony counting export for analysis "{a.name}" (id {a.id})
 Generated {now()} by polony_app {polony_app.__version__}.
 
 FILES
-  objects*.csv    one row per non-deleted object, with per-channel evidence
-  regions*.csv    per-region counts, areas, approval status
-  slide*.csv      slide totals and (only if inputs are complete) concentration
+  objects_<S>.csv one row per non-deleted object, with per-channel evidence
+  regions_<S>.csv per-region counts, areas, approval status
+  slide_<S>.csv   slide totals and (only if inputs are complete) concentration
+                  (<S> is DRAFT or FINAL, the same status rule as the downloaded file names
+                  <name>_<kind>_<DRAFT|FINAL>.<ext>)
   provenance.json parameters, image hash/shape/bit depth, TIFF info text, original upload
                   file names, channel mapping, regions, package versions at detection and at
                   export, recorded detection inputs, reporting mode, schema version,
@@ -374,19 +386,19 @@ UNCERTAINTY
   interval here accounts for missed detections, false detections, debris or area/volume errors.
 
 STATUS
-  Every CSV row carries status={status_label(a)}; file names carry _DRAFT until finalized.
+  Every CSV row, every actions.jsonl line and provenance.json carry status={status_label(a)};
+  the file names (downloads and the three CSVs in this bundle) carry _DRAFT or _FINAL.
 """
 
 
 def bundle_zip(state: AnalysisState, originals_dir: str | Path | None = None) -> bytes:
     a = state.analysis
-    suffix = "" if a.finalized_at is not None else "_DRAFT"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("README.txt", readme_text(a))
-        z.writestr(f"objects{suffix}.csv", objects_csv(a))
-        z.writestr(f"regions{suffix}.csv", regions_csv(a))
-        z.writestr(f"slide{suffix}.csv", slide_csv(a))
+        z.writestr(member_name(a, "objects"), objects_csv(a))
+        z.writestr(member_name(a, "regions"), regions_csv(a))
+        z.writestr(member_name(a, "slide"), slide_csv(a))
         z.writestr("provenance.json", provenance_json(state, originals_dir))
         z.writestr("actions.jsonl", actions_jsonl(state))
         z.writestr("objects_history.csv", objects_history_csv(a))

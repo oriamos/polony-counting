@@ -12,7 +12,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, FastAPI, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ValidationError
@@ -94,6 +94,35 @@ class CsvMapBody(BaseModel):
 # ------------------------------------------------------------------ helpers
 def err(status: int, code: str, message: str, detail: dict | None = None) -> JSONResponse:
     return JSONResponse({"code": code, "message": message, "detail": detail}, status_code=status)
+
+
+def unknown_keys(model: type[BaseModel], raw: Any, path: str = "") -> list[str]:
+    """Dotted names of keys in `raw` that the pydantic `model` (recursively) does not define.
+    schemas.py models ignore extras silently; the API layer refuses them instead (a typo in a
+    parameter name must not be accepted and then have no effect)."""
+    if not isinstance(raw, dict):
+        return []
+    out: list[str] = []
+    for k, v in raw.items():
+        f = model.model_fields.get(k)
+        if f is None:
+            out.append(f"{path}{k}")
+            continue
+        sub = f.annotation
+        # Optional[X] -> X
+        args = [t for t in getattr(sub, "__args__", ()) if t is not type(None)]
+        if len(args) == 1 and getattr(sub, "__origin__", None) is not None:
+            sub = args[0]
+        if isinstance(sub, type) and issubclass(sub, BaseModel):
+            out.extend(unknown_keys(sub, v, f"{path}{k}."))
+    return out
+
+
+async def _raw_body(request: Request) -> Any:
+    try:
+        return await request.json()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _json(model: Any) -> Response:
@@ -389,7 +418,13 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             return _respond(st)
 
     @api.put("/analyses/{aid}/settings")
-    def put_settings(aid: str, body: SettingsBody):
+    def put_settings(aid: str, body: SettingsBody, raw: Any = Depends(_raw_body)):
+        unk = unknown_keys(SettingsBody, raw)
+        if unk:
+            return err(422, "unknown_fields", "unknown field(s): " + ", ".join(unk), {"fields": unk})
+        if body.detection_request is not None and body.detection_request.preview_window is not None:
+            return err(422, "invalid_request",
+                       "detection_request.preview_window is not a stored setting (only /detect/preview takes it)")
         if body.slide is not None:
             s = body.slide
             for f in ("sample_volume_ul", "concentration_factor", "pixel_size_um"):
@@ -414,21 +449,13 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                               "confirm the red/green channel mapping before detecting", 409)
 
     @api.post("/analyses/{aid}/detect")
-    def post_detect(aid: str, body: DetectionRequest):
+    def post_detect(aid: str, body: DetectionRequest, raw: Any = Depends(_raw_body)):
         aid_ok(aid)
+        unk = unknown_keys(DetectionRequest, raw)
+        if unk:
+            return err(422, "unknown_fields", "unknown field(s): " + ", ".join(unk), {"fields": unk})
         if body.preview_window is not None:
             return err(422, "invalid_request", "preview_window is only valid for /detect/preview")
-        with store.edit(aid) as st:
-            engine.guard_editable(st)
-            _detection_inputs(st)
-            if runner.active_job(aid):
-                raise ReviewError("job_in_progress", "a detection job is already running", 409)
-            start_sig = _sig(st.analysis, st)
-            start_req = (st.analysis.detection_request.model_dump(mode="json")
-                         if st.analysis.detection_request is not None else None)
-            regions = [r.model_copy(deep=True) for r in st.analysis.regions]
-            align = (int(st.analysis.alignment_dy), int(st.analysis.alignment_dx))
-            engine.refresh_status(st, job_running=True)
 
         def work(progress, cancelled):
             try:
@@ -472,11 +499,25 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
 
-        try:
-            job = runner.submit(aid, work, finish)
-        except RuntimeError:
-            finish(None)
-            return err(409, "job_in_progress", "a detection job is already running")
+        # The active-job check, the 'detecting' flag and runner.submit happen under ONE hold of the
+        # analysis lock (the worker's own store access waits for it), so two concurrent requests
+        # cannot both pass the check and a refused request can never clear the flag of the
+        # accepted job.
+        with store.edit(aid) as st:
+            engine.guard_editable(st)
+            _detection_inputs(st)
+            if runner.active_job(aid):
+                raise ReviewError("job_in_progress", "a detection job is already running", 409)
+            start_sig = _sig(st.analysis, st)
+            start_req = (st.analysis.detection_request.model_dump(mode="json")
+                         if st.analysis.detection_request is not None else None)
+            regions = [r.model_copy(deep=True) for r in st.analysis.regions]
+            align = (int(st.analysis.alignment_dy), int(st.analysis.alignment_dx))
+            try:
+                job = runner.submit(aid, work, finish)
+            except RuntimeError:
+                raise ReviewError("job_in_progress", "a detection job is already running", 409)
+            engine.refresh_status(st, job_running=True)
         return _json(job)
 
     @api.post("/analyses/{aid}/detect/preview")
@@ -559,10 +600,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
     # ------------------------------------------------------------- export
     EXPORT_KINDS = (*exporter.KINDS, "actions", "history")
 
-    def _export_name(a, kind: str) -> str:
-        ext = {"objects": "csv", "regions": "csv", "slide": "csv", "history": "csv",
-               "provenance": "json", "actions": "jsonl", "bundle": "zip"}[kind]
-        return f"{exporter.safe_stem(a.name)}_{kind}_{exporter.status_label(a)}.{ext}"
+    _export_name = exporter.export_filename
 
     @api.get("/analyses/{aid}/export")
     def get_export(aid: str, kind: str = "bundle"):

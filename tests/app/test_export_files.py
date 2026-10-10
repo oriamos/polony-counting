@@ -88,7 +88,7 @@ def test_slide_csv_gates_concentration_and_never_hardcodes_volume():
 def test_final_vs_draft_labels_and_no_confidence_interval():
     st = state()
     a = st.analysis
-    assert exporter.export_filename(a, "objects").endswith("_DRAFT.csv")
+    assert exporter.export_filename(a, "objects") == "t_objects_DRAFT.csv"
     zdraft = zipfile.ZipFile(io.BytesIO(exporter.bundle_zip(st)))
     assert zdraft.read("README.txt").decode().startswith("DRAFT")
     assert "objects_DRAFT.csv" in zdraft.namelist()
@@ -99,7 +99,7 @@ def test_final_vs_draft_labels_and_no_confidence_interval():
     assert "No confidence interval is provided" in readme and "Poisson" in readme
     assert "UNCONFIRMED" in readme and "mean(fields)" in readme
     st.analysis.finalized_at = "2026-01-01T00:00:00Z"
-    assert exporter.export_filename(a, "objects") == "t_objects.csv"
+    assert exporter.export_filename(a, "objects") == "t_objects_FINAL.csv"
     assert rows(exporter.objects_csv(a))[0]["status"] == "FINAL"
     assert exporter.readme_text(a).startswith("FINAL")
 

@@ -112,8 +112,19 @@ function SlideForm() {
   useEffect(() => setM(a.slide), [a.id, a.slide]);
   const locked = a.status === 'finalized';
   const dirty = JSON.stringify(m) !== JSON.stringify(a.slide);
-  const complete =
-    m.sample_volume_ul != null && m.concentration_factor != null && m.sample_total_area_px2 != null && !!m.concentration_formula_confirmed && !!(m.pixel_size_um ?? a.image?.pixel_size_um);
+  const mapped = !!a.image && a.image.channels.length > 0 && a.image.channels.every((c) => c.role_confirmed);
+  const hasArea = (a.slide.counting_area_px2 ?? 0) > 0;
+  // Exactly the server's requirements (export/exporter.py concentration()); pixel size is NOT one of them.
+  const required: { ok: boolean; text: string }[] = [
+    { ok: !!m.concentration_formula_confirmed, text: 'formula confirmation' },
+    { ok: (m.sample_volume_ul ?? 0) > 0, text: 'sample volume' },
+    { ok: (m.concentration_factor ?? 0) > 0, text: 'concentration factor' },
+    { ok: hasArea, text: 'counting area (from the counting regions)' },
+    { ok: (m.sample_total_area_px2 ?? 0) > 0, text: 'total sample area' },
+    { ok: mapped, text: 'confirmed channel mapping' },
+  ];
+  const missing = required.filter((r) => !r.ok).map((r) => r.text);
+  const complete = missing.length === 0;
   const save = async () => {
     setBusy(true);
     try {
@@ -178,19 +189,17 @@ function SlideForm() {
         </label>
       </div>
       <div className="small mono muted">counting area (from regions): {m.counting_area_px2 != null ? `${Math.round(m.counting_area_px2).toLocaleString()} px²` : '–'}</div>
-      <div className={`notice small ${complete ? '' : 'warn'}`}>
+      <div className={`notice small ${complete ? '' : 'warn'}`} data-testid="conc-inputs">
         {complete
-          ? 'All inputs are present; the server decides whether a concentration is exported.'
-          : 'Concentration will not be computed: sample volume, concentration factor, total sample area, a known pixel size and the formula confirmation are all required.'}
+          ? 'All required inputs are present; the server decides whether a concentration is exported.'
+          : `Concentration will not be computed. Still missing: ${missing.join(', ')}.`}
+        <div className="muted">
+          Required: formula confirmation, sample volume, concentration factor, counting area (from regions), total sample area, confirmed channel mapping. Pixel size is not required (areas are in px²).
+        </div>
       </div>
-      {(() => {
-        const st = (a.slide as unknown as Record<string, unknown>).concentration_status ?? (a as unknown as Record<string, unknown>).concentration_status;
-        return typeof st === 'string' && st ? (
-          <div className="notice small" data-testid="concentration-status">
-            Export status: {st}
-          </div>
-        ) : null;
-      })()}
+      <div className="small muted" data-testid="concentration-status">
+        The exported slide CSV states in <span className="mono">concentration_status</span> whether the estimate was computed or which inputs were missing.
+      </div>
       <button className="btn primary" disabled={!dirty || busy || locked} onClick={() => void save()} data-testid="slide-save">
         {busy ? 'Saving…' : 'Save slide metadata'}
       </button>

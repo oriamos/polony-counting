@@ -11,7 +11,8 @@ What happens to existing objects when detection is run again
 | `origin=manual` (added by user), `origin=edited` (moved / reclassified / merged / split) | **preserved untouched** |
 | `origin=auto` and `reviewed=true` (confirmed / accepted by the user) | **preserved untouched** |
 | soft-deleted by the user (`delete` action), **any origin** (auto, reviewed, edited, manual) | kept as a *tombstone* (history) and **suppresses** new detections at its position and at the positions of its detected evidence (so a moved-then-deleted object still blocks the spot where it was detected) |
-| soft-deleted by merge/split | kept for history, no effect (not a tombstone) |
+| soft-deleted by merge/split | kept for history, no effect (not a tombstone) - unless the merged object is later deleted by the user, see next row |
+| a user-deleted **merged** object | the delete also records every (transitive) constituent of the merge ("merged from" history) as an explicit tombstone anchor in the analysis bookkeeping (`user_deleted`), so a rerun does not bring back ANY of the spots the merged object was made of (positions and evidence positions). Snapshotted with the delete action: undo/redo/restart safe |
 
 **How "deleted by the user" is recorded.** `DetectedObject` has no field for it and the
 schema is shared, so the engine keeps an explicit marker in its own bookkeeping:
@@ -55,6 +56,19 @@ New objects whose id collides with a preserved id are given a fresh id
   If regions, channel mapping or alignment change while a job runs, the result is
   discarded and the job fails with an explanatory message.
 
+## Analyses saved by an older version
+States persisted before the input signature was recorded have no `detection_sig`. On load:
+if detection had run and the stored stale flag is false, the signature is synthesised from the
+current inputs (request recorded in the provenance, regions, roles, alignment), so every later
+change makes the result stale as usual; if the stored flag is true it stays stale (sticky) until
+detection is re-run, which records a real signature. Tombstones of objects deleted before
+`user_deleted` existed are not known and do not suppress re-detected spots.
+
+## Concurrent detect requests
+Checking for a running job, setting the `detecting` status and submitting the job happen under one
+hold of the analysis lock: of two simultaneous `POST /detect` exactly one is accepted, the other
+gets 409 `job_in_progress` and never touches the status of the accepted job.
+
 ## Red/green role swap
 A confirmed swap of the red and green channels (`PUT /channels`: the channel that was red
 becomes green and vice versa) changes the meaning of every stored `red`/`green` evidence.
@@ -64,7 +78,11 @@ At the moment of the swap, for every non-deleted object (any origin):
 * the `red` and `green` evidence are exchanged;
 * `reviewed=false` (needs re-review), a history entry is added;
 * all approvals and inspection marks are cleared, the undo history is dropped, the detection
-  is stale, and the event (`channel_mapping_changed`, `red_green_swapped=<n objects>`) is logged.
+  is stale, and the event (`channel_mapping_changed`, `red_green_swapped=<n objects>`) is logged;
+* the green->red alignment shift (defined as "shift applied to GREEN to match RED") is **negated**
+  (dy, dx -> -dy, -dx), because the physical channel the shift applied to is now the red one. The
+  event carries `alignment_negated={previous:{dy,dx}, now:{dy,dx}}`. Detection and the image views
+  both read the corrected shift from the analysis. Swapping back restores the original shift.
 
 Deleted objects are left untouched. A re-run afterwards is consistent: unreviewed automatic
 objects are replaced by results made with the new mapping; manual/edited objects are preserved

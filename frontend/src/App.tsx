@@ -80,7 +80,7 @@ function Header() {
           <span className="aname" title={a.name}>{a.name}</span>
           <StatusChip status={a.status} />
           <DraftBadge final={a.status === 'finalized'} />
-          {a.provenance.stale_detection && a.objects.length > 0 && <span className="chip warn">detection stale</span>}
+          {a.provenance.stale_detection && (a.objects.length > 0 || !!a.provenance.detection_ran_at) && <span className="chip warn">detection stale</span>}
         </div>
       )}
       <div className="spacer" />
@@ -145,7 +145,7 @@ function Banners() {
   const patch = useApp((s) => s.patch);
   const job = useApp((s) => s.job);
   const img = a.image;
-  const stale = a.provenance.stale_detection && liveObjects(a).length > 0;
+  const stale = a.provenance.stale_detection && (liveObjects(a).length > 0 || !!a.provenance.detection_ran_at);
   const [open, setOpen] = useState(false);
   const notes: { tone: 'warn' | 'ok' | 'info'; text: string }[] = [];
   if (a.status === 'finalized') notes.push({ tone: 'ok', text: 'Finalized. Editing is locked; use Finish → Reopen to make changes.' });
