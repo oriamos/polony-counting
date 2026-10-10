@@ -82,6 +82,23 @@ bash ~/PolonyReview/app/install/uninstall.sh                                    
 This removes the program, the Python environment and the icons but **keeps your data folder**. Add `-PurgeData`
 (Windows) or `--purge-data` (macOS/Linux) to delete the data as well. `-DryRun` / `--dry-run` only lists what would be removed.
 
+## Optional: shared database (several people see the same analyses)
+
+During the install you are asked: *"Use a shared database? Paste the connection string (input is hidden) or press Enter for local-only."*
+Press Enter to stay local (default). The connection string (a `postgresql://...` URL that contains a password, handed to you by the
+project owner, see [SHARED_DATABASE.md](SHARED_DATABASE.md)) is typed without echo, never shown, never logged and never put on a command
+line; it is saved only in `config.json` in the install folder (file permissions: owner only; on Windows the access list is restricted to your user).
+
+* **Original TIFF files always stay on your computer.** Only analyses, counts, review history and the SHA-256 of each original are shared;
+  to open an analysis made elsewhere you attach the matching original file.
+* Unattended installs: set `POLONY_DATABASE_URL` before running the installer (it is saved the same way and removed from the environment).
+  No prompt is shown when there is no terminal or `POLONY_CI=1`.
+* Re-running the installer **keeps** an existing database setting; to replace it answer *n* at the prompt or set `POLONY_DATABASE_REPLACE=1`.
+* Change it later: `~/PolonyReview/bin/polony-review set-database` / `clear-database` (macOS/Linux), Windows: Start Menu > Polony Review >
+  *Set shared database* (or `...\venv\Scripts\python.exe -m polony_app.launcher set-database` / `clear-database`), then stop and start the app.
+  `... status` shows `Shared database: connected (postgresql://user:***@host/db)` or `Local only`.
+* Never copy `config.json` to another computer (it holds the password and this computer's id); run the installer there instead.
+
 ## Security note
 
 The app has **no login**. It listens on `127.0.0.1` (this computer only) and cannot be reached from the network, but anyone
