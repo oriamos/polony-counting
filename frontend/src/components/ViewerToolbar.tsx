@@ -88,7 +88,7 @@ export function ViewerToolbar() {
           title="Hide / show all overlays to check for omissions (H)"
           data-testid="hide-overlays"
         >
-          {s.hideOverlays ? 'Overlays hidden' : 'Hide overlays'} <kbd>H</kbd>
+          Hide overlays <kbd>H</kbd>
         </button>
         <select
           className="input sm"

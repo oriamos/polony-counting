@@ -156,8 +156,11 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
         notes.append("no valid pixels in the counting regions: nothing to detect")
     dy, dx = int(alignment[0]), int(alignment[1])
     valid_by = {"red": valid_full, "green": valid_full}
+    nodata = {"red": None, "green": None}
     if (dy, dx) != (0, 0):
-        valid_by["green"] = valid_full & shifted_valid_region((h, w), dy, dx)
+        data = shifted_valid_region((h, w), dy, dx)
+        nodata["green"] = ~data
+        valid_by["green"] = valid_full & data
         notes.append(f"green alignment shift (dy={dy}, dx={dx}): the uncovered green strip "
                      f"({int((valid_full & ~valid_by['green']).sum())} px of the counting area) is excluded from "
                      "green detection (no green data there); red-only objects in it cannot be matched")
@@ -198,6 +201,13 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
         bg_free = params.background.model_copy(update={"clip_negative": False})
         measured_full = correct_background(arr, bg_free, valid_c)
         corrected_full = np.maximum(measured_full, 0.0) if params.background.clip_negative else measured_full
+        if nodata[name] is not None and nodata[name].any():
+            # the zero-filled alignment strip is not data: neutralise it (it would otherwise
+            # leave a step edge whose LoG ring creates spots inside the valid area)
+            fillv = float(np.median(measured_full[valid_c])) if valid_c.any() else 0.0
+            measured_full = np.where(nodata[name], np.float32(fillv), measured_full)
+            corrected_full = np.where(nodata[name], np.float32(max(fillv, 0.0) if params.background.clip_negative else fillv),
+                                      corrected_full)
         check()
         raw = arr[sl]
         measured, corrected, valid = measured_full[sl], corrected_full[sl], valid_c[sl]

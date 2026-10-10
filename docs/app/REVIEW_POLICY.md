@@ -39,11 +39,13 @@
   stays None and unconfirmed until `PUT /channels`.
 * **Concentration** is gated first by `SlideMeta.concentration_formula_confirmed` (default
   false). Unless it is true AND `sample_volume_ul`, `concentration_factor`, a counting area
-  and a confirmed mapping are present, all concentration columns are empty and
-  `concentration_status` says "inputs incomplete: formula/geometry not confirmed by
-  researcher" (or lists the missing inputs). The built-in formula
-  `count / (sample_volume_ul/1000) * concentration_factor` (assumes the counted region
-  represents the whole sample volume) is only a PROPOSAL, flagged UNCONFIRMED in the export
-  README together with the legacy CSV convention
-  `abundance = mean(fields)*(field/grid)/volume_ul*1000` for the researcher to compare.
+  (net of exclusions and of overlaps between counting regions), `sample_total_area_px2` and a
+  confirmed mapping are all present, every concentration cell is empty and
+  `concentration_status` lists what is missing ("inputs incomplete: ..."). The built-in
+  formula is only a PROPOSAL, flagged UNCONFIRMED in the export README and the CSV:
+  `conc_per_ml = (n_counted / counting_area_px2) * sample_total_area_px2 /
+  (sample_volume_ul/1000) * concentration_factor` (assumes the counted area is representative
+  of the whole sample area; the same count in a 4x larger counting area gives 1/4 of the
+  concentration). The legacy convention
+  `abundance = mean(fields)*(field/grid)/volume_ul*1000` is quoted for the researcher to compare.
   No confidence interval is ever exported.

@@ -114,37 +114,62 @@ def regions_csv(a: Analysis) -> str:
 
 
 # ------------------------------------------------------------------ slide
+_CONC_KEYS = ["red_only", "green_only", "yellow", "total_objects_exclusive", "red_positive", "green_positive"]
+
+
 def concentration(a: Analysis, counts) -> tuple[dict[str, float | None], str, list[str]]:
-    """Return (estimates, status text, missing inputs). Never invents inputs."""
+    """Return (estimates, status text, missing inputs). Never invents inputs.
+
+    PROPOSED / UNCONFIRMED formula (area-scaled, count per ml of the sample):
+
+        conc_per_ml = (n_counted / counting_area_px2) * sample_total_area_px2
+                      / (sample_volume_ul / 1000) * concentration_factor
+
+    i.e. the counted density (objects per px^2 of the net counting area) is scaled to the
+    whole sample area and divided by the sample volume. ALL of the following are required,
+    otherwise every estimate cell is empty and the status lists what is missing:
+    concentration_formula_confirmed, sample_volume_ul, concentration_factor,
+    counting_area_px2 (union of counting regions net of exclusions and overlaps),
+    sample_total_area_px2 (same pixel units), confirmed channel mapping. No confidence
+    interval is computed; raw counts are always exported next to the estimates."""
     s = a.slide
     area = counting_area_px2(a)
     missing = []
     if not s.concentration_formula_confirmed:
-        keys0 = ["red_only", "green_only", "yellow", "total_objects_exclusive", "red_positive", "green_positive"]
-        return ({k: None for k in keys0},
-                "inputs incomplete: formula/geometry not confirmed by researcher", ["concentration_formula_confirmed"])
+        missing.append("concentration_formula_confirmed")
     if not s.sample_volume_ul or s.sample_volume_ul <= 0:
         missing.append("sample_volume_ul")
     if not s.concentration_factor or s.concentration_factor <= 0:
         missing.append("concentration_factor")
     if not area or area <= 0:
         missing.append("counting_area_px2")
+    if not s.sample_total_area_px2 or s.sample_total_area_px2 <= 0:
+        missing.append("sample_total_area_px2")
     if not mapping_confirmed(a):
         missing.append("confirmed_channel_mapping")
-    keys = ["red_only", "green_only", "yellow", "total_objects_exclusive", "red_positive", "green_positive"]
     if missing:
-        return {k: None for k in keys}, "inputs incomplete: " + ", ".join(missing), missing
+        if missing[0] == "concentration_formula_confirmed":
+            msg = "inputs incomplete: formula/geometry not confirmed by researcher"
+            if len(missing) > 1:
+                msg += "; also missing: " + ", ".join(missing[1:])
+        else:
+            msg = "inputs incomplete: " + ", ".join(missing)
+        return {k: None for k in _CONC_KEYS}, msg, missing
     vol_ml = s.sample_volume_ul / 1000.0
-    est = {k: getattr(counts, k) / vol_ml * s.concentration_factor for k in keys}
-    msg = "computed"
+    scale = s.sample_total_area_px2 / area / vol_ml * s.concentration_factor
+    est = {k: getattr(counts, k) * scale for k in _CONC_KEYS}
+    msg = "computed (PROPOSED area-scaled formula, UNCONFIRMED; no confidence interval)"
+    if area > s.sample_total_area_px2:
+        msg += "; WARNING counting_area_px2 exceeds sample_total_area_px2 (check units)"
     if counts.uncertain:
         msg += f"; {counts.uncertain} unresolved uncertain object(s) excluded"
     return est, msg, []
 
 
 CONC_FORMULA = (
-    "PROPOSED (UNCONFIRMED assumption): count / (sample_volume_ul / 1000) * concentration_factor, i.e. the counting region(s) are "
-    "taken to represent the whole sample volume (assumption; no chamber geometry is modelled)"
+    "PROPOSED (UNCONFIRMED): (n_counted / counting_area_px2) * sample_total_area_px2 / (sample_volume_ul / 1000) * "
+    "concentration_factor; assumes the counted area is representative of the whole sample area (no chamber geometry, "
+    "no edge/loss model, no confidence interval)"
 )
 
 
@@ -157,7 +182,7 @@ def slide_csv(a: Analysis) -> str:
         "slide_id", "analysis_id", "reporting_mode", "red_only", "green_only", "yellow", "uncertain",
         "red_positive_incl_yellow", "green_positive_incl_yellow", "yellow_overlap",
         "total_objects_exclusive", "n_counting_regions", "n_regions_approved", "counting_area_px2",
-        "pixel_size_um", "sample_volume_ul", "concentration_factor",
+        "pixel_size_um", "sample_volume_ul", "concentration_factor", "sample_total_area_px2",
         "est_conc_per_ml_red_only", "est_conc_per_ml_green_only", "est_conc_per_ml_yellow",
         "est_conc_per_ml_total_exclusive", "est_conc_per_ml_red_positive", "est_conc_per_ml_green_positive",
         "concentration_status", "concentration_formula", "channel_mapping_confirmed", "stale_detection",
@@ -167,10 +192,10 @@ def slide_csv(a: Analysis) -> str:
         a.slide.slide_id, a.id, a.reporting_mode.value, c.red_only, c.green_only, c.yellow, c.uncertain,
         c.red_positive, c.green_positive, c.yellow, c.total_objects_exclusive, len(regs),
         sum(1 for r in regs if r.approved), counting_area_px2(a), pix, a.slide.sample_volume_ul,
-        a.slide.concentration_factor,
+        a.slide.concentration_factor, a.slide.sample_total_area_px2,
         est["red_only"], est["green_only"], est["yellow"], est["total_objects_exclusive"],
         est["red_positive"], est["green_positive"], cstat,
-        CONC_FORMULA if not cstat.startswith("inputs incomplete") else "",
+        CONC_FORMULA if cstat.startswith("computed") else "",
         _b(mapping_confirmed(a)), _b(a.provenance.stale_detection), a.finalized_at, status_label(a),
     ]
     return _csv(header, [row])
@@ -249,8 +274,9 @@ FILES
 
 CONVENTIONS
   * Coordinates are image pixels; x = column, y = row; pixel (0,0) centre is (0.0, 0.0).
-  * Classes: red = red-only, green = green-only, yellow = dual-positive (matched red+green
-    evidence, each physical object counted once), uncertain = unresolved.
+  * Classes: red = red-only, green = green-only, yellow = dual-positive (a red and a green
+    spot associated one-to-one: each detected spot is used at most once in the one-to-one
+    association; objects may still be duplicates or splits that need review), uncertain = unresolved.
   * `uncertain` objects are NEVER included in any colour total; they are reported separately.
   * Both counting conventions are always given with unambiguous names:
       exclusive : red_only, green_only, yellow
@@ -261,21 +287,25 @@ CONVENTIONS
     an exclusion) have counted=false and are not in any count.
   * Channel colours come only from the user-confirmed channel mapping (see provenance.json).
 
-CONCENTRATION
-  Estimates are filled in ONLY when sample_volume_ul, concentration_factor and a counting
-  area are provided and the channel mapping is confirmed; otherwise the columns are empty and
-  concentration_status reads "inputs incomplete: <missing>". Raw counts are always present.
-  Concentration output is gated by SlideMeta.concentration_formula_confirmed (default false): until
-  the researcher confirms the formula and geometry the columns are empty with status
-  "inputs incomplete: formula/geometry not confirmed by researcher".
-  Proposed formula (UNCONFIRMED assumption: the counted region represents the whole sample
-  volume): count / (sample_volume_ul / 1000) * concentration_factor.
+CONCENTRATION  (PROPOSED formula - UNCONFIRMED, not validated)
+  Estimates are filled in ONLY when ALL of these are provided: concentration_formula_confirmed
+  (default false), sample_volume_ul, concentration_factor, a counting area (union of the
+  counting regions net of exclusions and of overlaps between regions), sample_total_area_px2
+  (the total area, in the same pixel units, that the sample volume spreads over) and a
+  confirmed channel mapping. Otherwise the estimate columns are empty and concentration_status
+  reads "inputs incomplete: <what is missing>". Raw counts are always present.
+  Proposed formula (an assumption that the counted area is representative of the whole sample
+  area; no chamber geometry, loss or edge model):
+      conc_per_ml = (n_counted / counting_area_px2) * sample_total_area_px2
+                    / (sample_volume_ul / 1000) * concentration_factor
+  The same count in a 4x larger counting area therefore gives 1/4 of the concentration.
   Please compare with the legacy CSV convention
   abundance = mean(fields) * (field/grid) / volume_ul * 1000.
 
 UNCERTAINTY
-  No confidence interval is provided. Only Poisson counting uncertainty could be given and it
-  is not provided yet; no interval here accounts for missed detections or false detections.
+  No confidence interval is provided (the estimates are point values of an unconfirmed
+  formula). Only Poisson counting uncertainty could be given and it is not provided yet; no
+  interval here accounts for missed detections, false detections, debris or area/volume errors.
 
 STATUS
   Every CSV row carries status={status_label(a)}; file names carry _DRAFT until finalized.

@@ -204,96 +204,121 @@ async function runDetection(id, timeoutMs = 600000) {
   throw new Error('detection timeout');
 }
 
-/** screenshot centroid + ring measurement, all computed from screenshot pixels in the browser. */
-async function measureAt(o, model) {
-  // o: {x,y}; returns ring centre & image centroid in screen px, plus dims
+/** Pixel measurements done inside the browser on SCREENSHOT pixels.
+ *  ring: overlay ON over a black display (display-only lo/hi pushed to max) -> bbox centre of the near-white outline.
+ *  blob: overlay OFF over the normal display -> intensity-weighted centroid inside a disc around the model position. */
+async function clipFor(o) {
   const p = await toScreen(o.x, o.y);
   const v = p.v;
   const R = Math.round(Math.min(7.5 * v.s, v.h / 2 - 6, v.w / 2 - 6, 130));
-  let x0 = Math.round(p.x - R), y0 = Math.round(p.y - R);
+  const x0 = Math.round(p.x - R), y0 = Math.round(p.y - R);
   const clip = { x: Math.max(v.left + 2, x0), y: Math.max(v.top + 2, y0), width: 2 * R, height: 2 * R };
   clip.width = Math.min(clip.width, v.left + v.w - 2 - clip.x);
   clip.height = Math.min(clip.height, v.top + v.h - 2 - clip.y);
-  await setHidden(true);
-  const A = await page.screenshot({ clip });
-  await setHidden(false);
-  const B = await page.screenshot({ clip });
-  return page.evaluate(
-    async ({ a64, b64, clip, px, py, R }) => {
-      const load = async (b) => {
-        const img = new Image();
-        img.src = 'data:image/png;base64,' + b;
-        await img.decode();
-        const c = document.createElement('canvas');
-        c.width = img.width;
-        c.height = img.height;
-        const g = c.getContext('2d');
-        g.drawImage(img, 0, 0);
-        return { d: g.getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height };
-      };
-      const A = await load(a64),
-        B = await load(b64);
-      // image-only centroid inside a disc (radius 6.5 image px ~ in screen px = R*0.85) around the model position
-      const cx = px - clip.x,
-        cy = py - clip.y;
-      const rad = R * 0.85;
-      const lum = (img, i) => (img.d[i] + img.d[i + 1] + img.d[i + 2]) / 3;
-      const vals = [];
-      for (let y = 0; y < A.h; y++)
-        for (let x = 0; x < A.w; x++) {
-          const dd = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
-          if (dd <= rad) vals.push(lum(A, (y * A.w + x) * 4));
+  return { p, R, clip };
+}
+const PIX = `
+  const load = async (b) => {
+    const img = new Image(); img.src = 'data:image/png;base64,' + b; await img.decode();
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+    return { d: g.getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height };
+  };`;
+async function ringAt(o) {
+  const { p, clip } = await clipFor(o);
+  const buf = await page.screenshot({ clip });
+  const r = await page.evaluate(
+    new Function('args', `return (async () => { ${PIX}
+      const I = await load(args.b64); const cx = args.px - args.clip.x, cy = args.py - args.clip.y;
+      // any non-black pixel is overlay (the image is black). The review tick/dot sits in the upper-right of the ring:
+      // take the horizontal extent from rows at/below the centre and the vertical extent from columns at/left of it.
+      let x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1, n = 0;
+      for (let y = 0; y < I.h; y++) for (let x = 0; x < I.w; x++) {
+        if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > 24) continue;
+        const i = (y * I.w + x) * 4;
+        if (Math.max(I.d[i], I.d[i + 1], I.d[i + 2]) >= 90) {
+          n++;
+          if (y + 0.5 >= cy - 2) { x0 = Math.min(x0, x); x1 = Math.max(x1, x + 1); }
+          if (x + 0.5 <= cx + 2) { y0 = Math.min(y0, y); y1 = Math.max(y1, y + 1); }
         }
-      vals.sort((m, n) => m - n);
-      const bg = vals[Math.floor(vals.length * 0.3)] ?? 0;
+      }
+      return n > 8 ? { x: args.clip.x + (x0 + x1) / 2, y: args.clip.y + (y0 + y1) / 2, n, w: x1 - x0 } : null; })()`),
+    { b64: buf.toString('base64'), clip, px: p.x, py: p.y },
+  );
+  return { ring: r, p };
+}
+async function blobAt(o) {
+  const { p, R, clip } = await clipFor(o);
+  const buf = await page.screenshot({ clip });
+  const r = await page.evaluate(
+    new Function('args', `return (async () => { ${PIX}
+      const I = await load(args.b64); const cx = args.px - args.clip.x, cy = args.py - args.clip.y; const rad = args.R * 0.85;
+      const lum = (i) => (I.d[i] + I.d[i + 1] + I.d[i + 2]) / 3; const vals = [];
+      for (let y = 0; y < I.h; y++) for (let x = 0; x < I.w; x++) if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= rad) vals.push(lum((y * I.w + x) * 4));
+      vals.sort((a, b) => a - b); const bg = vals[Math.floor(vals.length * 0.3)] ?? 0;
       let sw = 0, sx = 0, sy = 0;
-      for (let y = 0; y < A.h; y++)
-        for (let x = 0; x < A.w; x++) {
-          if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > rad) continue;
-          const w = Math.max(0, lum(A, (y * A.w + x) * 4) - bg);
-          sw += w; sx += w * (x + 0.5); sy += w * (y + 0.5);
-        }
-      // ring: pixels that differ between overlay-on and overlay-off (dark+white+colour outline), within 24px of the model position; bbox centre
-      let rx0 = 1e9, rx1 = -1, ry0 = 1e9, ry1 = -1, rn = 0;
-      for (let y = 0; y < B.h; y++)
-        for (let x = 0; x < B.w; x++) {
-          if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > 24) continue;
-          const i = (y * B.w + x) * 4;
-          const diff = Math.abs(B.d[i] - A.d[i]) + Math.abs(B.d[i + 1] - A.d[i + 1]) + Math.abs(B.d[i + 2] - A.d[i + 2]);
-          if (diff > 90) {
-            rn++; rx0 = Math.min(rx0, x); rx1 = Math.max(rx1, x + 1); ry0 = Math.min(ry0, y); ry1 = Math.max(ry1, y + 1);
-          }
-        }
-      return {
-        spot: sw > 0 ? { x: clip.x + sx / sw, y: clip.y + sy / sw, w: sw } : null,
-        ring: rn > 8 ? { x: clip.x + (rx0 + rx1) / 2, y: clip.y + (ry0 + ry1) / 2, n: rn, wpx: rx1 - rx0 } : null,
-      };
-    },
-    { a64: A.toString('base64'), b64: B.toString('base64'), clip, px: p.x, py: p.y, R },
-  ).then((r) => ({ ...r, p }));
+      for (let y = 0; y < I.h; y++) for (let x = 0; x < I.w; x++) { if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > rad) continue;
+        const w = Math.max(0, lum((y * I.w + x) * 4) - bg); sw += w; sx += w * (x + 0.5); sy += w * (y + 0.5); }
+      return sw > 0 ? { x: args.clip.x + sx / sw, y: args.clip.y + sy / sw, w: sw } : null; })()`),
+    { b64: buf.toString('base64'), clip, px: p.x, py: p.y, R },
+  );
+  return { spot: r, p };
+}
+async function viewerRect() {
+  return page.evaluate(() => { const r = document.querySelector('[data-testid=viewer]').getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map((v) => +v.toFixed(2)).join(','); });
 }
 
 async function alignmentRun(label, objs, scales, shotPrefix) {
-  const rows = [];
-  for (const sc of scales) {
+  const rows = new Map();
+  const key = (o, sc) => `${o.id}@${sc}`;
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('3');
+  await sleep(400);
+  await waitImg();
+  const rect0 = await viewerRect();
+  // pass 1: rings on a black display (display-only sliders at maximum)
+  await page.evaluate(() => window.__polony.getState().setDisplay({ lo: 65534, hi: 65535 }));
+  await sleep(500);
+  await waitImg();
+  await setHidden(false);
+  for (const sc of scales)
     for (const o of objs) {
-      await page.keyboard.press('Escape');
       await zoomTo(o.x, o.y, sc);
-      await sleep(150);
-      const m = await measureAt(o);
-      const s = m.p.v.s;
-      if (!m.spot || !m.ring) {
-        rows.push({ label, id: o.id, x: o.x, y: o.y, scale: s, err: null, note: `missing spot=${!!m.spot} ring=${!!m.ring}` });
-        continue;
-      }
-      const ringModel = { dx: (m.ring.x - m.p.x) / s, dy: (m.ring.y - m.p.y) / s }; // overlay vs its model coordinate (image px)
-      const ringImg = { dx: (m.ring.x - m.spot.x) / s, dy: (m.ring.y - m.spot.y) / s }; // overlay vs image blob centroid
-      const imgModel = { dx: (m.spot.x - m.p.x) / s, dy: (m.spot.y - m.p.y) / s }; // blob centroid vs model coordinate
-      rows.push({ label, id: o.id, cls: o.cls, x: o.x, y: o.y, scale: s, ringModel, ringImg, imgModel });
+      await sleep(120);
+      const m = await ringAt(o);
+      rows.set(key(o, sc), { label, id: o.id, cls: o.cls, x: o.x, y: o.y, scale: m.p.v.s, ring: m.ring, p: m.p });
     }
-    await shot(`${shotPrefix}-zoom${sc}`);
+  await shot(`${shotPrefix}-black-display`);
+  await page.evaluate(() => window.__polony.getState().resetDisplay());
+  await sleep(500);
+  await waitImg();
+  // pass 2: blob centroid with overlays hidden
+  await setHidden(true);
+  for (const sc of scales)
+    for (const o of objs) {
+      await zoomTo(o.x, o.y, sc);
+      await sleep(120);
+      const m = await blobAt(o);
+      const r = rows.get(key(o, sc));
+      r.spot = m.spot;
+      r.p2 = m.p;
+    }
+  await setHidden(false);
+  const out = [];
+  for (const r of rows.values()) {
+    const s = r.scale;
+    if (!r.spot || !r.ring) { out.push({ label, id: r.id, x: r.x, y: r.y, scale: s, note: `missing spot=${!!r.spot} ring=${!!r.ring}` }); continue; }
+    if (Math.abs(r.p.x - r.p2.x) > 0.01 || Math.abs(r.p.y - r.p2.y) > 0.01) { out.push({ label, id: r.id, x: r.x, y: r.y, scale: s, note: 'view moved between passes' }); continue; }
+    out.push({
+      label, id: r.id, cls: r.cls, x: r.x, y: r.y, scale: s,
+      ringModel: { dx: (r.ring.x - r.p.x) / s, dy: (r.ring.y - r.p.y) / s },
+      ringImg: { dx: (r.ring.x - r.spot.x) / s, dy: (r.ring.y - r.spot.y) / s },
+      imgModel: { dx: (r.spot.x - r.p.x) / s, dy: (r.spot.y - r.p.y) / s },
+    });
   }
-  return rows;
+  const rect1 = await viewerRect();
+  out.viewerRectStable = rect0 === rect1;
+  return out;
 }
 const rowErr = (r, k) => (r[k] ? Math.hypot(r[k].dx, r[k].dy) : NaN);
 
@@ -625,6 +650,7 @@ const pid = await uploadFiles(pairFiles, 'synthetic pair');
   await tid('labels-mode').selectOption('off');
   await page.keyboard.press('Escape');
   const rowsPair = await alignmentRun('pair', targets, [6, 12], 'align-pair');
+  check('layout stable: toggling overlays / display does not move the viewer', rowsPair.viewerRectStable, '');
   globalThis.ALIGN = { pair: rowsPair };
 }
 
@@ -754,16 +780,16 @@ const parseCsv = (txt) => {
     const ok = rows.filter((r) => r.ringModel);
     const miss = rows.filter((r) => !r.ringModel);
     const mx = (k) => Math.max(...ok.map((r) => rowErr(r, k)));
-    alignSummary[name] = { n: ok.length, missing: miss.length, scales: [...new Set(ok.map((r) => +r.scale.toFixed(1)))], maxRingVsModel: mx('ringModel'), maxRingVsImage: mx('ringImg'), maxImageVsModel: mx('imgModel') };
-    for (const r of ok) if (rowErr(r, 'ringModel') > 0.1) bad.push(`${name} ${r.id} ringModel ${rowErr(r, 'ringModel').toFixed(3)}`);
+    alignSummary[name] = { n: ok.length, missing: miss.length, scales: [...new Set(ok.map((r) => +r.scale.toFixed(1)))], maxRingVsModel: mx('ringModel'), maxRingVsModelScreenPx: Math.max(...ok.map((r) => rowErr(r, 'ringModel') * r.scale)), maxRingVsImage: mx('ringImg'), maxImageVsModel: mx('imgModel') };
+    for (const r of ok) if (rowErr(r, 'ringModel') * r.scale > 1) bad.push(`${name} ${r.id} ringModel ${rowErr(r, 'ringModel').toFixed(3)}`);
     fs.writeFileSync(path.join(OUT, `alignment-${name}.json`), JSON.stringify(rows, null, 1));
     console.log(`ALIGNMENT ${name}:`, JSON.stringify(alignSummary[name]));
     for (const r of rows) console.log(`   ${r.id} ${r.cls ?? ''} (${r.x?.toFixed?.(1)},${r.y?.toFixed?.(1)}) zoom ${r.scale?.toFixed?.(1)}: ` + (r.ringModel ? `ring-vs-model ${rowErr(r, 'ringModel').toFixed(3)} px, ring-vs-blob ${rowErr(r, 'ringImg').toFixed(3)} px, blob-vs-model ${rowErr(r, 'imgModel').toFixed(3)} px` : r.note));
   }
   const P = alignSummary.pair, R = alignSummary.real;
-  check('ALIGNMENT pair (corners/edges, 2 zooms): overlay ring centre vs its model coordinate <= 0.1 image px', P.n >= 16 && P.missing === 0 && P.maxRingVsModel <= 0.1, JSON.stringify(P));
-  check('ALIGNMENT pair: overlay ring centre vs bright-blob centroid under it <= 0.5 image px', P.maxRingVsImage <= 0.5, `max ${P.maxRingVsImage.toFixed(3)} px`);
-  check('ALIGNMENT real image: overlay ring centre vs its model coordinate <= 0.1 image px', R.n >= 8 && R.maxRingVsModel <= 0.1, JSON.stringify(R));
+  check('ALIGNMENT pair (corners/edges, zoom 6 and 12): overlay ring centre vs its model coordinate <= 1 screen px (measurement quantisation)', P.n >= 16 && P.missing === 0 && P.maxRingVsModelScreenPx <= 1.0, JSON.stringify(P));
+  check('ALIGNMENT pair: overlay ring centre vs bright-blob centroid under it <= 0.75 image px (includes detector sub-pixel centre error)', P.maxRingVsImage <= 0.75, `max ${P.maxRingVsImage.toFixed(3)} px`);
+  check('ALIGNMENT real image: overlay ring centre vs its model coordinate <= 1 screen px', R.n >= 8 && R.maxRingVsModelScreenPx <= 1.0, JSON.stringify(R));
   check('ALIGNMENT real image: ring centre vs blob centroid (informational; includes detector centre vs blob centroid)', R.n > 0 && Number.isFinite(R.maxRingVsImage), `max ${R.maxRingVsImage.toFixed(3)} px; blob-vs-model max ${R.maxImageVsModel.toFixed(3)} px`);
   fs.writeFileSync(path.join(OUT, 'alignment-summary.json'), JSON.stringify(alignSummary, null, 1));
 }

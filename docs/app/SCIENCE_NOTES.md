@@ -9,6 +9,52 @@ and open questions for the researcher. Experiments can be re-run with
 (`resources/dataset_files/test/test_img.tif`) scored against the researcher's own embedded manual marks; see
 "What is and is not validated" in §3.
 
+## Implementation deviations / status (after the scientific review, 2026-10-10)
+
+What the app implements, where it deviates from the recommendations below, and what is still open.
+
+1. **Debris and yellow.** `debris_like` (scale ratio >= 1) is queued for review (it has a review priority
+   between `saturated`/`weak_signal` and `dense_cluster`). A matched red+green pair that is debris-like in
+   BOTH channels is NOT auto-classed yellow: it becomes `uncertain` with `debris_like` and a history note
+   (on test_img: 22 yellow before -> 0 yellow / 21 uncertain after). One debris channel: stays yellow, queued;
+   single-channel objects keep their class (flag only). Compact debris is still not removed or moved to a
+   "rejected candidates" layer (deviation from §3 recommendation); the 0.3-scale recall/precision numbers of §2.4 are
+   not reproduced by the app.
+2. **Concentration** uses the PROPOSED area-scaled formula (UNCONFIRMED, no CI) and needs
+   `sample_total_area_px2`; see REVIEW_POLICY. Never validated against the researcher's own numbers.
+3. **Saturated plateaus** are merged into ONE spot at the plateau centroid (all spots within the connected
+   saturated component dilated by the spot radius); a plateau with equivalent diameter > 6 spot radii also gets
+   `suspicious_shape`. Plateau size is a lower bound of the true spot; its centroid is not a sub-pixel estimate of
+   the true centre. Several touching saturated polonies cannot be resolved.
+4. **Masking** follows §1.4: LoG on the real background-corrected image, response zeroed outside the mask, maxima
+   inside the mask (+1 px, the final decision uses the refined centre), automatic threshold from maxima strictly
+   inside the mask. Only pixels > 4 sigma from the mask and saturated pixels outside the mask are median-filled.
+   Synthetic border test: spots centred at x >= 100 outside a region [0,100) are not counted; inside positions
+   are exact to <= 0.05 px.
+5. **Preview == full run:** background correction on the full image, automatic threshold from the full masked
+   image, cached (small LRU keyed by image hash + mask + radius/min-distance/background). Tiling already shared
+   one global threshold. The LoG/measurement of a preview runs on a padded crop.
+6. **One geometry rule** (`detection/masks.py`, half-open pixel-centre rule) is used by detection, review
+   membership and areas (a 10x10 rectangle has area 100; a point on the low edge is inside, on the high edge
+   outside). `review/geometry.py` delegates. Polygon vertices are not snapped; areas are pixel-centre counts, not
+   polygon areas (a 316.23 px square counts 317 x 317 pixel centres).
+7. **Overlapping counting regions:** first listed region wins for membership AND area (area is net of earlier
+   regions), so region areas add up to the union area.
+8. **Alignment strip:** the part of the green channel uncovered by an applied integer shift (zeros) is excluded
+   from green detection and neutralised before the LoG (`run_detection(..., alignment=(dy, dx))`). Red-only
+   objects in that strip cannot be matched and are not flagged separately (a note gives the strip area).
+9. **Background:** saturated raw pixels get weight 0 in the gaussian background estimate (also without a mask).
+   `white_tophat` has no such rule. The `processed_*` image views are computed without the counting mask.
+10. **SNR** peak = background-corrected image interpolated at the refined centre (not the 3x3 maximum, which
+    gave SNR ~ +1.5 for pure noise). Synthetic check: true A/sigma = 0 -> median SNR ~0.1; A/sigma = 5 -> ~4.8.
+    SNR is still a single-pixel value vs per-pixel noise, not a matched-filter detection statistic.
+11. **Matching:** alternative partners are searched out to tolerance + max(1.5 px, 25 %): a 5.9 px pair with a 6.1 px
+    alternative is `ambiguous_match`. The assignment is one-to-one per spot; this does NOT prove that two spots
+    are different physical objects or that one object was not split into two spots.
+12. **Still open / not validated:** accuracy on any other slide; green and yellow performance on real green
+    polonies (the only image has none); the default review thresholds (weak_snr 5, elongation 1.8, debris ratio 1.0)
+    are starting points; concentration formula and chamber geometry await the researcher; no confidence intervals.
+
 ---
 
 ## 1. Verified Big-FISH API (big-fish 0.6.2, read from installed source + tested)

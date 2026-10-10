@@ -21,10 +21,11 @@ Verified against the installed source (bigfish.detection.detect_spots):
   ``detect_spots(..., threshold=None, return_threshold=True)``.
 
 Masking (SCIENCE_NOTES 1.4): the LoG is computed on the REAL background-corrected image
-and its response is set to zero outside the valid mask; local maxima, the automatic
-threshold and the reported spots are restricted to pixels inside the mask. So spots whose
-centre lies outside the mask are never produced, the threshold is derived from inside
-maxima only, and a spot next to the boundary keeps an undistorted position (no
+and its response is set to zero outside the valid mask; local maxima of the real response
+are restricted to the mask (+1 px: the final keep/drop decision is made by the pipeline on
+the refined centre with the single region rule) and the automatic threshold is derived from
+maxima strictly inside the mask only. A spot centred outside the mask is a maximum outside
+and is not produced, and a spot next to the boundary keeps an undistorted position (no
 median-fill step edge). Pixels are replaced by the median of the valid pixels only when
 they are farther than 4 sigma from the mask (cannot influence valid responses; saves
 nothing but is harmless) or when they are SATURATED and outside the mask (rim glare must
@@ -117,16 +118,26 @@ class BigFishEngine:
         return stack.log_filter(img, (sigma, sigma))
 
     @staticmethod
-    def _log_maxima(image: np.ndarray, valid: Optional[np.ndarray], params: DetectionParams):
-        """(LoG response with the outside of the mask zeroed, local maxima inside the mask)."""
+    def _log_maxima(image: np.ndarray, valid: Optional[np.ndarray], params: DetectionParams,
+                    extended: bool = False):
+        """(LoG response with the outside of the mask zeroed, local maxima inside the mask).
+
+        ``extended=True`` accepts maxima up to 1 px outside the mask: the integer maximum of
+        a spot centred at x=99.6 lies on pixel 100 (outside a region [0,100)) although its
+        refined centre is inside. The final keep/drop decision is made on the refined
+        centre by the pipeline (single region rule). The automatic threshold always uses
+        the strict (inside-only) maxima."""
         from bigfish.detection import local_maximum_detection
         r, d = float(params.spot_radius_px), float(params.minimum_distance_px)
         filt = BigFishEngine.log_filtered(image, r)
-        if valid is not None:
-            filt = np.where(valid, filt, np.zeros((), filt.dtype))
+        # local maxima of the REAL response (no artificial edge at the mask boundary: a spot
+        # centred just outside the mask is a maximum outside, not at the boundary pixel
+        # inside), then restricted to the mask; thresholds see the zeroed response.
         lm = local_maximum_detection(filt, (d, d))
         if valid is not None:
-            lm &= valid
+            keep = ndi.binary_dilation(valid, structure=np.ones((3, 3), bool)) if extended else valid
+            filt = np.where(keep, filt, np.zeros((), filt.dtype))
+            lm &= keep
         return filt, lm
 
     def auto_threshold(self, filled: np.ndarray, params: DetectionParams,
@@ -194,7 +205,7 @@ class BigFishEngine:
     def _detect_coords(image: np.ndarray, thr: float, params: DetectionParams,
                        valid: Optional[np.ndarray] = None) -> np.ndarray:
         from bigfish.detection import spots_thresholding
-        filt, lm = BigFishEngine._log_maxima(image, valid, params)
+        filt, lm = BigFishEngine._log_maxima(image, valid, params, extended=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)  # "No spots were detected"
             sp, _ = spots_thresholding(filt, lm, float(thr), remove_duplicate=True)
@@ -282,8 +293,9 @@ class BigFishEngine:
             coords = np.concatenate(parts) if parts else np.zeros((0, 2), np.int64)
         coords = coords[np.lexsort((coords[:, 1], coords[:, 0]))] if coords.size else coords
 
-        if valid is not None and coords.size:
-            coords = coords[valid[coords[:, 0], coords[:, 1]]]
+        if valid is not None and coords.size:  # (maxima already restricted to the mask +1 px)
+            keep = ndi.binary_dilation(valid, structure=np.ones((3, 3), bool))
+            coords = coords[keep[coords[:, 0], coords[:, 1]]]
         if cancelled():
             raise DetectionCancelled()
 

@@ -3,6 +3,8 @@ import io
 import json
 import zipfile
 
+import pytest
+
 from fakes import counting, exclusion, make_state, obj, rect
 from polony_app.export import exporter
 from polony_app.review import engine
@@ -59,7 +61,7 @@ def test_slide_csv_gates_concentration_and_never_hardcodes_volume():
         assert m in s["concentration_status"]
     assert all(s[k] == "" for k in s if k.startswith("est_conc"))
     assert s["red_only"] == "1" and s["uncertain"] == "1" and s["sample_volume_ul"] == ""
-    a.slide = SlideMeta(sample_volume_ul=2.5, concentration_factor=2.0)
+    a.slide = SlideMeta(sample_volume_ul=2.5, concentration_factor=2.0, sample_total_area_px2=1e6)
     engine.update_counting_area(a)
     s = rows(exporter.slide_csv(a))[0]  # all inputs present but formula NOT confirmed
     assert s["concentration_status"] == "inputs incomplete: formula/geometry not confirmed by researcher"
@@ -67,12 +69,14 @@ def test_slide_csv_gates_concentration_and_never_hardcodes_volume():
     a.slide.concentration_formula_confirmed = True
     s = rows(exporter.slide_csv(a))[0]
     assert s["concentration_status"].startswith("computed") and "uncertain" in s["concentration_status"]
-    assert float(s["est_conc_per_ml_red_only"]) == 1 / 0.0025 * 2.0
-    assert float(s["est_conc_per_ml_total_exclusive"]) == 3 / 0.0025 * 2.0
+    area = float(s["counting_area_px2"])
+    assert float(s["est_conc_per_ml_red_only"]) == pytest.approx(1 / area * 1e6 / 0.0025 * 2.0)
+    assert float(s["est_conc_per_ml_total_exclusive"]) == pytest.approx(3 / area * 1e6 / 0.0025 * 2.0)
     assert s["concentration_formula"]
     # same inputs but unconfirmed mapping => withheld
     st2 = make_state([obj("r", 10, 10)], [counting()], mapped=False)
-    st2.analysis.slide = SlideMeta(sample_volume_ul=5, concentration_factor=1, concentration_formula_confirmed=True)
+    st2.analysis.slide = SlideMeta(sample_volume_ul=5, concentration_factor=1, concentration_formula_confirmed=True,
+                                   sample_total_area_px2=1e6)
     s = rows(exporter.slide_csv(st2.analysis))[0]
     assert "confirmed_channel_mapping" in s["concentration_status"] and s["est_conc_per_ml_red_only"] == ""
     # missing counting region => area missing
@@ -113,3 +117,51 @@ def test_provenance_content():
     assert p["image"]["channel_mapping"][0]["role_confirmed"] is True
     assert p["action_log_summary"]["by_type"] == {"delete": 1}
     assert "numpy" in p["package_versions"]
+
+
+def _conc_state(objs_n=4, poly=None, total=1e6, **slide):
+    objs = [obj(f"r{i}", 10 + 5 * i, 12) for i in range(objs_n)]
+    st = make_state(objs, [counting(poly=poly)])
+    st.analysis.slide = SlideMeta(sample_volume_ul=2.0, concentration_factor=3.0, sample_total_area_px2=total,
+                                  concentration_formula_confirmed=True, **slide)
+    engine.update_counting_area(st.analysis)
+    return st.analysis
+
+
+def test_concentration_area_scaled_formula_and_area_sensitivity():
+    a = _conc_state(poly=rect(0, 0, 40, 40))
+    s = rows(exporter.slide_csv(a))[0]
+    assert float(s["counting_area_px2"]) == 1600
+    # (4 / 10000) * 1e6 / (2/1000) * 3
+    assert float(s["est_conc_per_ml_red_only"]) == pytest.approx(4 / 1600 * 1e6 / 0.002 * 3.0)
+    assert s["concentration_status"].startswith("computed") and "UNCONFIRMED" in s["concentration_status"]
+    assert "UNCONFIRMED" in s["concentration_formula"] and s["red_only"] == "4"  # raw counts always present
+    # same count in a 4x larger counting area => 1/4 of the concentration
+    b = _conc_state(poly=rect(0, 0, 80, 80))
+    s4 = rows(exporter.slide_csv(b))[0]
+    assert float(s4["counting_area_px2"]) == 6400 and s4["red_only"] == "4"
+    assert float(s4["est_conc_per_ml_red_only"]) == pytest.approx(float(s["est_conc_per_ml_red_only"]) / 4)
+    # doubling the total sample area doubles it
+    c = _conc_state(poly=rect(0, 0, 40, 40), total=2e6)
+    assert float(rows(exporter.slide_csv(c))[0]["est_conc_per_ml_red_only"]) == pytest.approx(
+        2 * float(s["est_conc_per_ml_red_only"]))
+
+
+def test_concentration_status_lists_every_missing_input_and_has_no_ci():
+    a = _conc_state(poly=rect(0, 0, 40, 40))
+    a.slide.sample_total_area_px2 = None
+    a.slide.concentration_factor = None
+    s = rows(exporter.slide_csv(a))[0]
+    assert s["concentration_status"] == "inputs incomplete: concentration_factor, sample_total_area_px2"
+    assert all(s[k] == "" for k in s if k.startswith("est_conc")) and s["red_only"] == "4"
+    a.slide.concentration_formula_confirmed = False
+    st = rows(exporter.slide_csv(a))[0]["concentration_status"]
+    assert st.startswith("inputs incomplete: formula/geometry not confirmed") and "sample_total_area_px2" in st
+    assert "sample_total_area_px2" in rows(exporter.slide_csv(a))[0]
+
+
+def test_readme_wording_no_overclaim():
+    text = " ".join(exporter.readme_text(state().analysis).split())
+    assert "each physical object counted once" not in text
+    assert "used at most once in the one-to-one association" in text and "need review" in text
+    assert "PROPOSED" in text and "UNCONFIRMED" in text and "sample_total_area_px2" in text
