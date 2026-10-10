@@ -291,3 +291,9 @@ checkpoints/polony_49_1.7496.pth
 checkpoints/polony_64_1.8386.pth
 
 .python-version
+
+# polony_app local data / frontend artefacts
+/data/
+frontend/node_modules/
+frontend/dist/
+frontend/e2e-artifacts/
