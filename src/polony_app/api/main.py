@@ -37,7 +37,7 @@ from polony_app.store.csv_import import parse_csv
 from polony_app.store.db import new_id
 from polony_app.store.jobs import JobRunner
 
-from .images import VIEWS, ImageService, role_index
+from .images import VIEWS, ImageService, is_view, role_index
 
 ID_RE = re.compile(r"^[0-9a-f]{12}$")
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -313,8 +313,8 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                   gamma: float = 1.0, x0: Optional[int] = None, y0: Optional[int] = None,
                   x1: Optional[int] = None, y1: Optional[int] = None,
                   max_dim: Optional[int] = None, colormap: Literal["gray", "red", "green"] = "gray"):
-        if view not in VIEWS:
-            return err(422, "invalid_view", f"view must be one of {', '.join(VIEWS)}")
+        if not is_view(view):
+            return err(422, "invalid_view", f"view must be one of {', '.join(VIEWS)} or ch<index>")
         if max_dim is not None and not 1 <= max_dim <= 8192:
             return err(422, "invalid_param", "max_dim must be in 1..8192")
         with store.view(aid_ok(aid)) as st:
@@ -405,6 +405,13 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             engine.refresh_status(st, job_running=True)
 
         def work(progress, cancelled):
+            try:
+                return work_inner(progress, cancelled)
+            except BaseException:
+                finish(None)  # leave 'detecting' before the job is reported as failed/cancelled
+                raise
+
+        def work_inner(progress, cancelled):
             from polony_app.detection import pipeline
 
             with store.view(aid) as st:
@@ -412,6 +419,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             progress(0.02, "images loaded")
             res = pipeline.run_detection(red, green, regions, body, progress, cancelled)
             if cancelled():
+                finish(None)
                 return "cancelled"
             with store.edit(aid) as st:
                 if _sig(st.analysis, st) != start_sig:

@@ -190,6 +190,14 @@ export function DetectTab() {
       {a.provenance.stale_detection && a.objects.length > 0 && (
         <div className="notice warn small">Detection is stale: regions, mapping or parameters changed since the last run.</div>
       )}
+      {mapped && (
+        <div className="row small">
+          <span className="muted">Channel mapping confirmed.</span>
+          <button className="btn sm ghost" disabled={locked} onClick={() => patch({ mappingOpen: true })} data-testid="edit-mapping">
+            Change channel mapping…
+          </button>
+        </div>
+      )}
       <ParamTable req={req} set={setReq} disabled={locked} />
       <div className="row wrap">
         <button className="btn sm" disabled={locked} onClick={() => setReq({ ...req, green: JSON.parse(JSON.stringify(req.red)) })} title="Copy red parameters to green">

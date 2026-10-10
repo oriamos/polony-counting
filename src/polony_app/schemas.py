@@ -141,7 +141,7 @@ class ChannelEvidence(BaseModel):
     y: Optional[float] = None
     peak_intensity: Optional[float] = None       # background-corrected peak
     local_background: Optional[float] = None
-    snr: Optional[float] = None                  # peak / local bg std (measured)
+    snr: Optional[float] = None                  # (peak - local bg) / local bg robust std (measured)
     saturated: bool = False
     spot_id: Optional[str] = None
 
@@ -244,7 +244,8 @@ class SlideMeta(BaseModel):
     sample_volume_ul: Optional[float] = None
     concentration_factor: Optional[float] = None   # dilution/concentration
     sampled_area_note: Optional[str] = None
-    counting_area_px2: Optional[float] = None      # computed from regions
+    counting_area_px2: Optional[float] = None      # computed from regions (net of overlaps)
+    sample_total_area_px2: Optional[float] = None  # researcher-supplied: total area (same px units) that the sample volume spreads over; needed for any concentration estimate
     pixel_size_um: Optional[float] = None
     concentration_formula_confirmed: bool = False  # researcher must confirm formula+geometry; gates ALL concentration output
     csv_color_mapping: Optional[dict[str, str]] = None  # e.g. {"T7A": "red"} ONLY if user set
