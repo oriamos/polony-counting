@@ -3,6 +3,8 @@ RGB-composite channel identity, chamber geometry. No detection.
 
 Usage: python -I stage1_facts.py <tiff_dir> <Counts.xlsx> <out_dir>
 Writes <out_dir>/stage1.json, overview PNGs and chamber masks (<out_dir>/chamber_<slide>.npz).
+NOTE: the Otsu chamber mask in this script FAILS on these slides (it selects the clipped outside);
+the chamber numbers in the doc come from chamber.py, which supersedes it.
 """
 import json
 import re

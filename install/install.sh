@@ -39,6 +39,8 @@ main() {
     shift
   done
   [ -n "$CI" ] && NO_LAUNCH=1
+  # optional shared database URL: taken out of the environment right away so no other process inherits it
+  DB_URL="${POLONY_DATABASE_URL:-}"; unset POLONY_DATABASE_URL
 
   case "${POLONY_FORCE_OS:-$(uname -s)}" in   # POLONY_FORCE_OS: test hook (mac|linux)
     Darwin|mac) OS=mac ;;
@@ -46,7 +48,7 @@ main() {
     *) echo "This installer supports macOS and Linux. On Windows use install.ps1." >&2; return 1 ;;
   esac
   APP="$PH/app"; VENV="$PH/venv"; VPY="$VENV/bin/python"
-  STEPS=6
+  STEPS=7
 
   say()  { printf '%s\n' "$*"; }
   step() { printf '\n[%s/%s] %s\n' "$1" "$STEPS" "$2"; }
@@ -191,9 +193,46 @@ main() {
   }
   [ "$SHORTCUTS_ONLY" = 1 ] || install_everything
 
-  # ---------------------------------------------------------------- 5. helper commands
-  step 5 "Creating the 'Polony Review' icon"
+  # ---------------------------------------------------------------- 5. shared database (optional)
+  setup_database() {
+    local url="$DB_URL" replace="" cur="" ans="" interactive=0
+    if [ -z "$CI" ] && ( : </dev/tty ) 2>/dev/null; then interactive=1; fi
+    if cur="$(POLONY_HOME="$PH" "$VPY" "$APP/install/set_database.py" status 2>/dev/null)"; then
+      if [ -n "$url" ]; then
+        if [ -n "${POLONY_DATABASE_REPLACE:-}" ]; then replace="--replace"
+        else say "  A shared database is already configured ($cur): kept it (set POLONY_DATABASE_REPLACE=1 to replace it)."; return 0; fi
+      elif [ "$interactive" = 1 ]; then
+        printf '  A shared database is already configured (%s). Keep it? [Y/n] ' "$cur" >/dev/tty
+        IFS= read -r ans </dev/tty || ans=""
+        case "$ans" in n|N|no|NO) replace="--replace" ;; *) say "  kept the existing shared database"; return 0 ;; esac
+      else
+        say "  Shared database: already configured ($cur), unchanged."; return 0
+      fi
+    fi
+    if [ -z "$url" ]; then
+      if [ "$interactive" = 0 ]; then
+        say "  Local only (no prompt in non-interactive mode). To use a shared database later: $BINDIR/polony-review set-database"
+        return 0
+      fi
+      printf '  Use a shared database? Paste the connection string (input is hidden) or press Enter for local-only: ' >/dev/tty
+      IFS= read -rs url </dev/tty || url=""
+      printf '\n' >/dev/tty
+      if [ -z "$url" ]; then say "  Local only. You can add a shared database later: $BINDIR/polony-review set-database"; return 0; fi
+    fi
+    # the URL travels through a pipe (printf is a shell builtin), never through arguments or the environment
+    printf '%s\n' "$url" | POLONY_HOME="$PH" "$VPY" "$APP/install/set_database.py" set $replace || warn "the connection string was not saved (see above)"
+    url=""
+  }
+  step 5 "Shared database (optional)"
   BINDIR="$PH/bin"
+  if [ "$DRY" = 1 ]; then
+    plan "ask (hidden input) for an optional shared-database connection string, or use POLONY_DATABASE_URL; saved only in $PH/config.json (mode 600); an existing one is kept"
+  elif [ "$SHORTCUTS_ONLY" = 0 ]; then
+    setup_database
+  fi
+
+  # ---------------------------------------------------------------- 5. helper commands
+  step 6 "Creating the 'Polony Review' icon"
   ICONS="$APP/install/assets"
   APPS="$HOME/Applications"
   if [ "$OS" = linux ]; then
@@ -291,9 +330,10 @@ DESKTOP
   fi
 
   # ---------------------------------------------------------------- 6. done
-  step 6 "Done"
+  step 7 "Done"
   say "  Start it from the 'Polony Review' icon on your Desktop (first start takes up to a minute)."
   say "  Stop it:    $BINDIR/polony-review stop"
+  say "  Shared database (optional): $BINDIR/polony-review set-database | clear-database"
   say "  Update:     run the same install command again."
   say "  Uninstall:  bash $APP/install/uninstall.sh      (add --purge-data to also delete $DATA)"
   say "  Your results are stored in: $DATA"

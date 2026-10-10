@@ -39,6 +39,9 @@ function Install-PolonyReview {
         }
     }
     if ($ci) { $noLaunch = $true }
+    # optional shared database URL: taken out of the environment right away so no other process inherits it
+    $dbUrl = $env:POLONY_DATABASE_URL
+    Remove-Item Env:\POLONY_DATABASE_URL -ErrorAction SilentlyContinue
 
     $ph = if ($env:POLONY_HOME) { $env:POLONY_HOME } else { Join-Path $env:LOCALAPPDATA 'PolonyReview' }
     $docs = [Environment]::GetFolderPath('MyDocuments')
@@ -48,7 +51,7 @@ function Install-PolonyReview {
     $venv = Join-Path $ph 'venv'
     $vpy = Join-Path $venv 'Scripts\python.exe'
     $vpyw = Join-Path $venv 'Scripts\pythonw.exe'
-    $steps = 5
+    $steps = 6
 
     function Say($m) { Write-Host $m }
     function Step($n, $m) { Write-Host ''; Write-Host "[$n/$steps] $m" -ForegroundColor Cyan }
@@ -238,8 +241,50 @@ function Install-PolonyReview {
         }
     }
 
+    # ---- 5. shared database (optional) ----------------------------------------------------------
+    Step 5 'Shared database (optional)'
+    function Set-SharedDatabase {
+        $script = Join-Path $app 'install\set_database.py'
+        $env:POLONY_HOME = $ph
+        $url = $dbUrl
+        $replace = @()
+        $interactive = $false
+        try { $interactive = (-not $ci) -and [Environment]::UserInteractive -and (-not [Console]::IsInputRedirected) } catch { }
+        $cur = Invoke-Quiet $vpy @($script, 'status')
+        if ($cur.Code -eq 0) {
+            if ($url) {
+                if ($env:POLONY_DATABASE_REPLACE) { $replace = @('--replace') }
+                else { Say "  A shared database is already configured ($($cur.Out)): kept it (set POLONY_DATABASE_REPLACE=1 to replace it)."; return }
+            } elseif ($interactive) {
+                $ans = Read-Host "  A shared database is already configured ($($cur.Out)). Keep it? [Y/n]"
+                if ($ans -notmatch '^(n|no)$') { Say '  kept the existing shared database'; return }
+                $replace = @('--replace')
+            } else { Say "  Shared database: already configured ($($cur.Out)), unchanged."; return }
+        }
+        if (-not $url) {
+            if (-not $interactive) {
+                Say '  Local only (no prompt in non-interactive mode). Later: Start Menu > Polony Review > Set shared database'
+                return
+            }
+            $sec = Read-Host '  Use a shared database? Paste the connection string (input is hidden) or press Enter for local-only' -AsSecureString
+            if ($sec.Length -eq 0) { Say '  Local only. You can add a shared database later (Start Menu > Polony Review > Set shared database).'; return }
+            $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+            try { $url = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        }
+        # the URL goes to python through stdin only (not an argument, not the environment)
+        $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $url | & $vpy $script 'set' @replace 2>&1 | ForEach-Object { Write-Host "    $_" }; $c = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
+        $url = $null
+        if ($c -ne 0 -and $c -ne 3) { Warn 'the connection string was not saved (see above)' }
+    }
+    if ($dry) {
+        Plan "ask (hidden input) for an optional shared-database connection string, or use POLONY_DATABASE_URL; saved only in $ph\config.json (current user only); an existing one is kept"
+    } elseif (-not $shortcutsOnly) {
+        Set-SharedDatabase
+    }
+
     # ---- 5. shortcuts ---------------------------------------------------------------------------
-    Step 5 "Creating the 'Polony Review' icon"
+    Step 6 "Creating the 'Polony Review' icon"
     $ico = Join-Path $app 'install\assets\PolonyReview.ico'
     $desktop = [Environment]::GetFolderPath('Desktop')
     $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Polony Review'
@@ -265,6 +310,15 @@ function Install-PolonyReview {
         New-Shortcut $lnkDesktop '-m polony_app.launcher' 'Review and approve polony counts (runs locally in your browser)'
         New-Shortcut $lnkStart '-m polony_app.launcher' 'Review and approve polony counts (runs locally in your browser)'
         New-Shortcut $lnkStop '-m polony_app.launcher stop' 'Stop the Polony Review background server'
+        $lnkDb = Join-Path $startMenu 'Set shared database.lnk'
+        $ws = New-Object -ComObject WScript.Shell
+        $sc = $ws.CreateShortcut($lnkDb)
+        $sc.TargetPath = $vpy                       # needs a console window for the hidden prompt
+        $sc.Arguments = '-m polony_app.launcher set-database'
+        $sc.WorkingDirectory = $ph
+        $sc.IconLocation = "$ico,0"
+        $sc.Description = 'Connect Polony Review to a shared database (paste the connection string)'
+        $sc.Save()
         Say "  created $lnkDesktop and Start Menu entries"
     }
 

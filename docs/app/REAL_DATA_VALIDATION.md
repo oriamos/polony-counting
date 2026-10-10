@@ -197,3 +197,114 @@ Hypotheses:
   fields) is not derivable from the data (17–22 fields, 60–402 polonies).
 * Systematic undercount by the app at defaults (slope 0.67–0.82) is driven by dim polonies, not by
   saturation or merging.
+
+---
+
+## Stage 4 (2026-10-10): AS-A, AS-B, FS-A, FS-B_D
+
+Same setup as stage 2 (rim 50 px; r4, r5, r5 with threshold x0.5).
+
+| slide | setting | runtime s | objects | red-only | green-only | yellow | uncertain | flagged | researcher pts | red-pos recall / precision |
+|---|---|---|---|---|---|---|---|---|---|---|
+| AS-A | r4 | 10.1 | 95 | 52 | 21 | 1 | 21 | 70 | 82/77 | 0.56 / 0.91 |
+| AS-A | r5 | 9.8 | 103 | 71 | 11 | 0 | 21 | 54 | 82/77 | 0.70 / 0.87 |
+| AS-A | r5 thr x0.5 | 11.1 | 157 | 95 | 22 | 0 | 40 | 104 | 82/77 | 0.83 / 0.84 |
+| AS-B | r4 | 11.2 | 94 | 42 | 24 | 0 | 28 | 78 | 60/59 | 0.39 / 0.68 |
+| AS-B | r5 | 9.6 | 93 | 47 | 18 | 0 | 28 | 65 | 60/59 | 0.51 / 0.77 |
+| AS-B | r5 thr x0.5 | 10.8 | 143 | 66 | 34 | 0 | 43 | 104 | 60/59 | 0.73 / 0.80 |
+| FS-A | r4 | 11.3 | 746 | 635 | 50 | 4 | 57 | 643 | 182/182 | 0.80 / (n/a) |
+| FS-A | r5 | 13.2 | 658 | 581 | 38 | 2 | 37 | 457 | 182/182 | 0.80 / (n/a) |
+| FS-A | r5 thr x0.5 | 13.8 | 813 | 689 | 57 | 6 | 61 | 583 | 182/182 | 0.86 / (n/a) |
+| FS-B_D | r5 | 11.3 | 466 | 427 | 13 | 1 | 25 | 282 | 151/151 | 0.86 / (n/a) |
+| FS-B_D | r5 thr x0.5 | 12.4 | 582 | 514 | 29 | 1 | 38 | 371 | 151/151 | 0.91 / (n/a) |
+
+FS recall is against all red-positive detections (the FS fields are not the stored grid cells, so the
+cell-restricted precision of stages 2–3 is not meaningful; `analyze.py`'s cell-restricted numbers for
+FS-B_D, 0.52 / 0.71, are an artefact of that).
+
+Per-field (embedded mapping, Clade B): AS-A red_positive r5 r = 0.83, k = 0.73, MAE 1.3 (82 → 62);
+thr x0.5 r = 0.88, k = 0.90, MAE 1.0 (82 → 76). AS-B r5 r = 0.77, k = 0.67, MAE 1.2 (60 → 39);
+thr x0.5 r = 0.92, k = 0.94, MAE 0.6 (60 → 54). green_positive vs Clade B r = −0.35 … −0.02.
+Clade A: AS-A sheet 3 (no slice-2 points stored), app green_positive 9–20; AS-B sheet 1, its one slice-2
+point is matched by a green detection (1/1), app green_positive 12–20. Best fixed ordering hits only
+5/22 (AS-A) and 2/18 (AS-B) fields — confirms stage 3.
+
+FS slides:
+* **FS are not the Controls rows.** Controls sheet: FS A = 0, FS B = 1 (one field each, slides dated
+  13-05-2026). The FS TIFFs (scanned 2026-09-30) hold ~580–690 red-positive objects in the chamber and
+  ~26 researcher points per field (FS-A 7 fields = 182; FS-B_D 6 fields = 151 + 1 slice-2 point in field 5).
+  They match no sheet/CSV row; their counts are only in the TIFFs. Whatever FS is, it is strongly
+  positive in the 635 channel, not a negative control on this date.
+* **FS-B_D was counted on a different grid**: the counters are 100 % single-cell for a 316.23-px grid at
+  offset ≈ (0, 124) px (x lines ≈ 316/632/948/1264, y lines ≈ 440/756/1072/1388/1704), i.e. shifted by
+  ≈ (−158, −34) from the stored overlay; each field's points span ≈ 260–308 px. The saved Overlays
+  therefore do not always describe the fields that were counted.
+* **Saturation / density**: FS were scanned brighter (PMT 500, laser 3.30 vs 550 / 1.97); page-0 median
+  in the counting region 1.6k vs 0.5k; page 0 is clipped over 64–67 % of the outside (vs 6–7 %), and the
+  rim carries a band of saturated debris (stage 1). Inside the counting region saturation is still small
+  (0.03 % of pixels, 50–56 clipped blobs; AI/AS 0.00–0.002 %) but 16–23 spots/slide are saturated
+  plateaus merged by the app, and polonies are bigger (missed points: half-max radius 9–10 px vs 5–6 in
+  AI/AS) and denser (touching pairs; `suspicious_shape` on 123–269 objects). Red debris "worms"
+  (fibre-like streaks, top half of FS-A) produce many elongated detections — flagged
+  `suspicious_shape`, not removed.
+* The AS slides are sparse (60–82 researcher polonies) and have the same failure modes as AI/AM
+  (dim polonies missed at default threshold; specks as false positives, mostly `debris_like`;
+  red-channel debris warning on AS-B: 51–56 % of red spots debris-like).
+
+## Stage 5 (2026-10-10): conclusions
+
+### What the app must change for these images (ordered by importance)
+
+1. **Read the embedded researcher annotations as fields.** The ImageJ multi-point ROI is the lab's
+   ground truth: one counter per field, `counter_positions` = slice (1 = page 0 = Clade B, 2 = page 1 =
+   Clade A), points inside one grid cell. The app currently only lists embedded ROIs as metadata.
+   Import them as (a) reference points for an agreement view and (b) the field → cell mapping (counter k →
+   Field-(k+1); warn when the ordinal and index readings disagree, as in AI-A; infer zero-count fields by
+   elimination and ask). No fixed field ordering works (best 2/18 … 19/21 correct).
+2. **Grid-field export design.** Import the Overlays grid (4 x 7, 316.23 px, origin 158,158) as
+   candidate counting regions with `field_index`, but let the user shift it (FS-B_D was counted on a grid
+   offset by ≈ (−158, −34)) and choose which cells are fields. Export per-field counts in the sheet's layout
+   (Field-1..24, blank = not counted, 0 = counted empty) with polonies/slide = mean·29 and
+   polonies/ml = ·1000/volume·dilution, per channel (Clade B = red, Clade A = green) — never by grid order.
+3. **Channel handling.** For 2-page ImageJ stacks from GenePix/ImageIO with `Info: 635 [W1]`, suggest
+   page 0 = red/635 and page 1 = green/532 (evidence: R↔page 0 / G↔page 1 Spearman ≥ 0.995, zero shift,
+   and the researcher's slice-1/slice-2 points), still requiring confirmation. Count types to offer:
+   red-positive and green-positive per channel; yellow is unused on these slides. When an RGB composite
+   is uploaded, say explicitly that it is a √-scaled export clipped at raw ≈ 9–16k (R² 0.998 for
+   2.76·√raw) and prefer the raw stack.
+4. **Detection defaults for these slides.** spot_radius 5 px (half-max radius of polonies 6–8 px; r3 is
+   clearly worse). The automatic threshold is too high for the dim polonies the researcher counts:
+   threshold_scale 0.5 raises recall from 0.51–0.80 to 0.73–0.91 at precision 0.77–0.94 and brings
+   per-field slopes from 0.67–0.82 to 0.80–0.94 (r 0.79–0.92). Expose a per-channel sensitivity preset
+   and show the threshold relative to the faint population; validate on more slides before changing the
+   global default.
+5. **Debris.** False positives are ≈ 1-px specks (peak 8–13k) and green fibres; 70–90 % already get
+   `debris_like`. Offer a count "red-positive excluding debris_like" (or a one-click "reject all
+   debris-like in this region") rather than auto-removal; the per-channel "mostly debris-like / channel may
+   be empty" warning fired correctly on every green channel.
+6. **Chamber mask.** A one-click counting region from page-1 clipping (stage 1.4) works on all 8 slides
+   (81.5–81.8 % of the frame, all 1 330 points inside). Rim: the researcher counts to 24 px from the edge;
+   a 50-px rim drops 1–9 points/slide but removes the bright gasket ring and FS rim debris — make the rim
+   width a visible parameter (default 30–50 px) and show what it removes. The dark bubble (rows 5–6)
+   needs an exclusion region or a "not counted" field state.
+7. **Saturation/brighter scans (FS).** Merged saturated plateaus (16–23/slide) and touching big polonies
+   need their own review queue; spot radius may need 7–9 px on such scans (not tested here).
+
+### Questions for the researcher
+* What decides how many fields are counted (17–22 here) and which cells are skipped (rows 5–6, r4c0/r4c1
+  in AM-A)? Is the dark region at the bottom a bubble/dry area?
+* Do you count only the 635 (red) channel for Clade B and 532 (green) for Clade A? Are dual-colour
+  polonies counted in both, either or neither?
+* What are the FS slides (they are not the 13-05-2026 Controls rows), what is `_D`, and why was FS-B_D
+  counted on a shifted grid?
+* AI-A/AM-A/AS-A: the Clade A counts (4/4/3) are not in the TIFF — were they counted on another file?
+* Are the faintest marked spots (≈ +50–300 counts over background) polonies you want counted?
+
+### Honest limits
+8 slides from one scan session, one annotator, no repeat counts (no inter-annotator variability to
+compare against). Clade A has 0–14 events per slide, too few for any per-field statistic. The channel and
+field mappings are inferences from correlations and point identity (strong, but not stated by the lab).
+The 15-px matching and the "counted cells" restriction are analysis choices. Only radii 3/4/5 and
+threshold_scale 0.5 were tested (CPU budget); r ≥ 6 and other background settings are untested.
+Stage-1 summary numbers were obtained with `stage1_facts.py`; all detection results are cached
+in the scratchpad (`val/det/*.json`), not in the repository.
