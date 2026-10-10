@@ -204,9 +204,17 @@ def test_e2e_tiny_finetune_on_cpu(tmp_path, capsys):
                         say=print)
     dt = time.time() - t0
     assert e["status"] == "candidate" and len(e["weights_sha256"]) == 64
+    assert e["metrics"]["training"]["best_val_loss"] is not None and e["hardware"]["cuda_available"] in (True, False)
     ref = resolve_model(e["id"], d)
-    assert (ref.path / "best.pt").is_file() and (ref.path / "config.yaml").is_file()
+    assert (ref.path / "best.pt").is_file() and (ref.path / "config.yaml").is_file() and (ref.path / "thresholds.yaml").is_file()
     pred = ev.make_spotiflow_predictor(e["id"], d, device="cpu")
     res = ev.evaluate_on_snapshot(d, r.version, pred, split="test")
     assert res["n_crops"] > 0 and "f1" in res["metrics"]
+    # CLI: evaluate the candidate on the locked test set, then promotion is refused (the default model was not evaluated)
+    code, out, err = run(capsys, "--data-dir", str(d), "eval-model", "--model", e["id"])
+    assert code == 0, err
+    assert Registry(d).get(e["id"])["evaluations"][0]["metrics"]["n_fields"] == res["metrics"]["n_fields"]
+    code, out, err = run(capsys, "--data-dir", str(d), "promote", e["id"])
+    assert code == 2 and "nothing to compare against" in err
+    assert Registry(d).active_id() is None
     print(f"E2E fine-tune OK in {dt:.1f}s; test metrics {res['metrics']['precision']}, {res['metrics']['recall']}")

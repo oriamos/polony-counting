@@ -59,3 +59,12 @@ mapping), `composite` (composite-only).
   If the backend lacks it the card shows "preview unavailable".
 * "Reopen" calls `POST /api/analyses/{id}/reopen`; on 404/405 it falls back to `unapprove_region` per region.
 * `window.__polony` exposes the zustand store for debugging/e2e.
+
+## Two-engine UI (docs/app/TWO_ENGINE_CONTRACT.md)
+
+* Detect tab: engine selector (Big-FISH default / Spotiflow / Both), model prepare job, consensus tolerance, engine-runs table.
+* Viewer toolbar "Engine layers": consensus rings (solid = both, long dash = Big-FISH only, dots = Spotiflow only, double = human added),
+  raw Big-FISH (hollow circle) / Spotiflow (hollow triangle) layers fetched lazily per page (cap 5000, valid only unless "show excluded"),
+  "Show rejected" (deleted objects). Wording: "model score" / "LoG response (noise units)", never a percentage.
+* Review: engine-status filter, summary card per page, QC sample of agreements (POST consensus/qc-sample), Approve/Reject = confirm/delete.
+* Mock extras: `analysis hybrid`, `POST /api/__mock/spotiflow {available}`, model `smfish_3d` makes the Spotiflow run fail.

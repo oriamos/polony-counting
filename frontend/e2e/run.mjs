@@ -953,7 +953,34 @@ async function engineSuite() {
   await reset();
 }
 
-const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite, referenceSuite, engineSuite];
+// ============================================================= 9. right-panel layout + low-zoom region labels
+async function layoutSuite() {
+  await reset();
+  for (const [w, h] of [[1280, 800], [1600, 1000], [1920, 1080]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await openAnalysis('hybrid');
+    for (const t of ['totals', 'regions', 'review', 'detect', 'finish']) {
+      await tid(`tab-${t}`).click();
+      const o = await page.evaluate(() => {
+        const r = document.querySelector('aside.right').getBoundingClientRect();
+        const f = document.querySelector('[data-testid=tab-finish]').getBoundingClientRect();
+        return { right: r.right, vw: innerWidth, finishRight: f.right, docOverflow: document.documentElement.scrollWidth > innerWidth };
+      });
+      check(`right panel fits at ${w}px, ${t} tab`, o.right <= o.vw + 0.5 && o.finishRight <= o.vw + 0.5 && !o.docOverflow, JSON.stringify(o));
+    }
+  }
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await openAnalysis('hybrid');
+  await page.mouse.move(700, 450);
+  for (let i = 0; i < 6; i++) await page.mouse.wheel(0, 400);
+  await page.waitForTimeout(200);
+  const vs = await viewState();
+  const lbl = await page.evaluate(() => [...document.querySelectorAll('[data-testid=overlay-svg] text')].map((t) => t.textContent).filter((t) => /Region|unreviewed|^\d+$/.test(t)));
+  check('low zoom: region label is just the number', vs.s < 0.4 ? lbl.every((t) => !/unreviewed/.test(t)) : true, `scale=${vs.s.toFixed(2)} labels=${lbl.join('|')}`);
+  await reset();
+}
+
+const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite, referenceSuite, engineSuite, layoutSuite];
 for (const s of suites) {
   try {
     await s();

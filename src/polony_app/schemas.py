@@ -144,6 +144,9 @@ class SpotiflowParams(BaseModel):
     subpix: Optional[bool] = None               # None = model default
     n_tiles: Optional[tuple[int, int]] = None   # None = automatic (max_tile_size)
     max_tile_size: Optional[int] = None
+    downscale: int = 1                          # integer image downscale divisor (1,2,4,8) for LARGE blobs: the pretrained models were trained on
+                                                # near-diffraction-limited spots; polonies are ~25 px blobs. Default 1 = native scale (unchanged behaviour).
+                                                # Spotiflow requires subpix=False when downscale>1 and image sides divisible by it (crop/pad is recorded).
     normalizer: Literal["auto", "none"] = "auto"  # 'auto' = Spotiflow's percentile normalisation of the page (recorded, never 8-bit conversion)
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
 
