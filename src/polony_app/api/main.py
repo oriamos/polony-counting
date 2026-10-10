@@ -718,6 +718,8 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
     dist = Path(os.environ.get("POLONY_FRONTEND_DIST") or Path(polony_app.__file__).resolve().parents[2] / "frontend" / "dist")
     if not dist.is_absolute():
         dist = dist.resolve()
+    if not (dist / "index.html").exists():  # prebuilt UI shipped with the package (see Makefile `web`)
+        dist = Path(polony_app.__file__).resolve().parent / "webdist"
     if (dist / "index.html").exists():
         from fastapi.staticfiles import StaticFiles
 
