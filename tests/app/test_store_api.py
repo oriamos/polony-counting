@@ -18,7 +18,21 @@ def _upload(c, tiff, name="slide A"):
     with open(tiff, "rb") as f:
         r = c.post("/api/analyses", files=[("files", (tiff.name, f, "image/tiff"))], data={"name": name})
     assert r.status_code == 200, r.text
-    return r.json()
+    aid = r.json()["id"]
+    r2 = c.put(f"/api/analyses/{aid}/channels", json={"mapping": [{"index": 0, "role": "red"}, {"index": 1, "role": "green"}]})
+    assert r2.status_code == 200, r2.text
+    return r2.json()
+
+
+@pytest.fixture
+def data_dir(tmp_path):
+    return tmp_path / "data"
+
+
+@pytest.fixture
+def client(data_dir):
+    with TestClient(create_app(data_dir)) as c:
+        yield c
 
 
 @pytest.fixture
@@ -66,6 +80,7 @@ def test_original_missing_then_attach_and_sha_mismatch(client, data_dir, tiff, t
 
 @pytest.mark.parametrize("backend", ["postgres"], indirect=True)
 def test_two_computers_share_one_database(tmp_path, tiff, backend, monkeypatch):
+    monkeypatch.setenv("POLONY_PG_VIEW_TTL", "0")
     schema = os.environ["POLONY_DATABASE_SCHEMA"]
     sa = Settings(database_url=URL, database_schema=schema, machine_id=uuid.uuid4().hex)
     sb = Settings(database_url=URL, database_schema=schema, machine_id=uuid.uuid4().hex)
@@ -77,7 +92,8 @@ def test_two_computers_share_one_database(tmp_path, tiff, backend, monkeypatch):
         assert r.status_code == 409 and r.json()["code"] == "original_missing"
         assert ca.get("/api/storage").json()["machine_id"] != cb.get("/api/storage").json()["machine_id"]
         assert _attach(cb, aid, tiff).status_code == 200
-        assert cb.get(f"/api/analyses/{aid}/image/composite").status_code == 200
+        r = cb.get(f"/api/analyses/{aid}/image/composite")
+        assert r.status_code == 200, r.text
         # an edit on A is the state B reads next, and vice versa
         r = ca.put(f"/api/analyses/{aid}/regions", json={"regions": [{
             "id": "c1", "kind": "counting", "name": "c1", "polygon": [[5, 5], [155, 5], [155, 115], [5, 115]]}]})

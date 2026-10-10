@@ -104,7 +104,7 @@ class PgStore:
     supports_heartbeat = True
 
     def __init__(self, data_dir: str | Path, settings: Settings, *, stale_seconds: float = JOB_STALE_SECONDS,
-                 pool_size: int = 10, recover: bool = True, view_ttl: float = VIEW_TTL):
+                 pool_size: int = 10, recover: bool = True, view_ttl: Optional[float] = None):
         if not settings.database_url:
             raise ValueError("PgStore needs settings.database_url")
         self.data_dir = Path(data_dir).resolve()
@@ -114,7 +114,7 @@ class PgStore:
         self.schema = _valid_schema(settings.database_schema or DEFAULT_SCHEMA)
         self.machine_id = settings.machine_id
         self.stale_seconds = float(stale_seconds)
-        self.view_ttl = float(view_ttl)
+        self.view_ttl = float(os.environ.get("POLONY_PG_VIEW_TTL", VIEW_TTL) if view_ttl is None else view_ttl)
         self._pipeline = os.environ.get("POLONY_PG_PIPELINE", "1") != "0"
         s = self.schema
         self._A, self._X, self._J, self._C, self._M, self._V = (
