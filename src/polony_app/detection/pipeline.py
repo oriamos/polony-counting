@@ -1,0 +1,158 @@
+"""End-to-end detection: background correction -> Big-FISH -> association -> review reasons."""
+from __future__ import annotations
+
+import importlib.metadata as md
+import math
+import platform
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+import numpy as np
+
+from ..imaging.preprocess import correct_background
+from ..imaging.registration import check_compatible
+from ..schemas import DetectedObject, DetectionParams, DetectionRequest, Region
+from .bigfish_engine import BigFishEngine
+from .engine import SpotEngine
+from .errors import DetectionCancelled
+from .masks import build_valid_mask, points_regions
+from .matching import associate, sort_spots
+from .review_reasons import ReviewConfig, apply_review_reasons
+
+__all__ = ["run_detection", "DetectionResult", "DetectionCancelled", "package_versions"]
+
+
+@dataclass
+class DetectionResult:
+    objects: list[DetectedObject]
+    package_versions: dict[str, str]
+    notes: list[str] = field(default_factory=list)
+
+
+def package_versions() -> dict[str, str]:
+    import bigfish, numpy, scipy, skimage, tifffile
+    return {"bigfish": bigfish.__version__, "numpy": numpy.__version__, "scipy": scipy.__version__,
+            "skimage": skimage.__version__, "tifffile": tifffile.__version__,
+            "python": platform.python_version()}
+
+
+def _margin(p: DetectionParams) -> int:
+    bg = p.background
+    m = 0
+    if bg.method == "gaussian_subtract":
+        m = int(4 * bg.sigma_px) + 1
+    elif bg.method == "white_tophat":
+        m = int(bg.radius_px) + 1
+    return m + int(math.ceil(4 * p.spot_radius_px + p.minimum_distance_px)) + 8
+
+
+def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], request: DetectionRequest,
+                  progress: Callable[[float, str], None] = lambda f, m: None,
+                  cancelled: Callable[[], bool] = lambda: False,
+                  window: Optional[tuple[int, int, int, int]] = None,
+                  engine: Optional[SpotEngine] = None,
+                  review: Optional[ReviewConfig] = None) -> DetectionResult:
+    """Detect spots in both channels and associate them.
+
+    ``red``/``green`` are raw original-dtype 2-D arrays in the same (registered)
+    space as ``regions``. ``window`` = (x0, y0, x1, y1) restricts the result to
+    objects whose centre is inside it (preview). For speed the window is processed
+    on a padded crop (padding = background filter + LoG support), so background
+    estimation matches the full run up to far-field content; the AUTOMATIC
+    threshold, however, is computed from the crop only and may differ from a
+    full-image run (stated in the notes). Raises DetectionCancelled.
+    """
+    def check() -> None:
+        if cancelled():
+            raise DetectionCancelled()
+
+    engine = engine or BigFishEngine()
+    notes: list[str] = []
+    progress(0.0, "checking inputs")
+    notes += check_compatible(red, green)  # IngestError on shape mismatch
+    h, w = red.shape
+    valid_full = build_valid_mask((h, w), regions)
+    if not valid_full.any():
+        notes.append("no valid pixels in the counting regions: nothing to detect")
+
+    ox = oy = 0
+    sl = (slice(0, h), slice(0, w))
+    win = None
+    if window is not None:
+        x0, y0, x1, y1 = (int(v) for v in window)
+        x0, x1 = max(0, min(x0, w)), max(0, min(x1, w))
+        y0, y1 = max(0, min(y0, h)), max(0, min(y1, h))
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError(f"preview window {window} is empty for an image of {w} x {h} (W x H)")
+        win = (x0, y0, x1, y1)
+        m = max(_margin(request.red), _margin(request.green))
+        cy0, cy1, cx0, cx1 = max(0, y0 - m), min(h, y1 + m), max(0, x0 - m), min(w, x1 + m)
+        sl = (slice(cy0, cy1), slice(cx0, cx1))
+        oy, ox = cy0, cx0
+        notes.append(f"preview window {win}: processed on a padded crop; automatic thresholds are computed "
+                     "from the crop and can differ from a full-image run")
+    valid = valid_full[sl]
+    check()
+
+    spots = {}
+    infos = {}
+    for k, (name, arr, params) in enumerate((("red", red, request.red), ("green", green, request.green))):
+        base = 0.05 + 0.4 * k
+
+        def sub(f, msg, base=base, name=name):
+            progress(base + 0.4 * f, f"{name}: {msg}")
+
+        check()
+        raw = arr[sl]
+        sub(0.0, "background correction")
+        # Unclipped corrected image: used for noise/SNR statistics (clipping at 0 would
+        # zero the robust std). The detection image is clipped if the user asked for it.
+        bg_free = params.background.model_copy(update={"clip_negative": False})
+        measured = correct_background(raw, bg_free, valid)
+        corrected = np.maximum(measured, 0.0) if params.background.clip_negative else measured
+        check()
+        sp = engine.detect(corrected, params, valid, raw=raw, progress=lambda f, m, s=sub: s(0.1 + 0.9 * f, m),
+                           cancelled=cancelled, measure=measured)
+        info = getattr(engine, "last_info", {}) or {}
+        infos[name] = info
+        for s in sp:
+            s.x += ox
+            s.y += oy
+        spots[name] = sp
+        thr = info.get("threshold")
+        notes.append(f"{name}: {len(sp)} spot(s); LoG threshold "
+                     f"{'n/a' if thr is None else f'{thr:.4g}'}"
+                     f"{'' if info.get('auto_threshold') is None else f' (auto {info['auto_threshold']:.4g} x scale {params.threshold_scale:g})'}"
+                     f"; tiles {info.get('n_tiles', 1)}")
+        notes += [f"{name}: {n}" for n in info.get("notes", [])]
+        if params.background.method == "none":
+            notes.append(f"{name}: no background correction applied")
+
+    check()
+    progress(0.88, "associating channels")
+    red_s, green_s = sort_spots(spots["red"]), sort_spots(spots["green"])
+    objects = associate(red_s, green_s, request.match_tolerance_px)
+    check()
+    progress(0.93, "review reasons")
+    apply_review_reasons(objects, red_s, green_s, request.red, request.green, valid_full, (h, w), review)
+
+    # drop out-of-mask / out-of-window objects, assign regions
+    kept = []
+    dropped_mask = 0
+    for o in objects:
+        yi, xi = int(round(o.y)), int(round(o.x))
+        if not (0 <= yi < h and 0 <= xi < w) or not valid_full[yi, xi]:
+            dropped_mask += 1
+            continue
+        if win is not None and not (win[0] <= o.x < win[2] and win[1] <= o.y < win[3]):
+            continue
+        kept.append(o)
+    if dropped_mask:
+        notes.append(f"{dropped_mask} object(s) fell outside the valid mask and were dropped")
+    rids = points_regions([o.x for o in kept], [o.y for o in kept], regions)
+    for o, rid in zip(kept, rids):
+        o.region_id = rid
+    progress(1.0, "done")
+    notes.append(f"{len(kept)} object(s): " + ", ".join(
+        f"{c}={sum(1 for o in kept if o.cls.value == c)}" for c in ("red", "green", "yellow", "uncertain")))
+    return DetectionResult(objects=kept, package_versions=package_versions(), notes=notes)

@@ -1,0 +1,271 @@
+// Hand-mirrored from src/polony_app/schemas.py (orchestrator-owned).
+// Coordinates: image pixels, float, pixel (0,0) has its CENTRE at (0,0). x = column, y = row.
+
+export type ChannelRole = 'red' | 'green' | 'ignore';
+export type ImageKind = 'raw_two_channel' | 'raw_separate_files' | 'rgb_composite';
+
+export interface ChannelInfo {
+  index: number;
+  source_file: string;
+  page: number;
+  label_hint: string | null;
+  role: ChannelRole | null;
+  role_confirmed: boolean;
+  min: number;
+  max: number;
+  saturated_fraction: number;
+}
+
+export interface EmbeddedRoi {
+  source: 'ROI' | 'Overlays';
+  roi_type: string;
+  name: string | null;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  n_points: number | null;
+  c_position: number;
+  z_position: number;
+  t_position: number;
+}
+
+export interface ImageMeta {
+  kind: ImageKind;
+  height: number;
+  width: number;
+  dtype: string;
+  bit_depth: number;
+  sha256: Record<string, string>;
+  channels: ChannelInfo[];
+  pixel_size_um: number | null;
+  tiff_info_text: string | null;
+  embedded_rois: EmbeddedRoi[];
+  warnings: string[];
+  composite_only: boolean;
+}
+
+export type RegionKind = 'counting' | 'exclusion';
+
+export interface Region {
+  id: string;
+  kind: RegionKind;
+  name: string;
+  polygon: [number, number][];
+  approved: boolean;
+  approved_at: string | null;
+  approval_fingerprint: string | null;
+  inspected: boolean;
+}
+
+export interface BackgroundParams {
+  method: 'none' | 'gaussian_subtract' | 'white_tophat';
+  sigma_px: number;
+  radius_px: number;
+  clip_negative: boolean;
+}
+
+export interface DetectionParams {
+  spot_radius_px: number;
+  minimum_distance_px: number;
+  threshold: number | null;
+  threshold_scale: number;
+  background: BackgroundParams;
+  dense_decomposition: boolean;
+  remove_duplicate_radius_px: number;
+  tile_size: number;
+  tile_overlap_px: number;
+}
+
+export interface DetectionRequest {
+  red: DetectionParams;
+  green: DetectionParams;
+  preview_window: [number, number, number, number] | null;
+  match_tolerance_px: number;
+}
+
+export type ReportingMode = 'exclusive' | 'channel_inclusive';
+export type ObjectClass = 'red' | 'green' | 'yellow' | 'uncertain';
+
+export interface ChannelEvidence {
+  detected: boolean;
+  x: number | null;
+  y: number | null;
+  peak_intensity: number | null;
+  local_background: number | null;
+  snr: number | null;
+  saturated: boolean;
+  spot_id: string | null;
+}
+
+export type Origin = 'auto' | 'manual' | 'edited';
+
+export type ReviewReason =
+  | 'weak_signal'
+  | 'ambiguous_match'
+  | 'dense_cluster'
+  | 'saturated'
+  | 'suspicious_shape'
+  | 'near_edge'
+  | 'near_threshold';
+
+export interface DetectedObject {
+  id: string;
+  x: number;
+  y: number;
+  cls: ObjectClass;
+  origin: Origin;
+  red: ChannelEvidence;
+  green: ChannelEvidence;
+  association_distance_px: number | null;
+  review_reasons: ReviewReason[];
+  ambiguous_with: string[];
+  reviewed: boolean;
+  deleted: boolean;
+  region_id: string | null;
+  history: string[];
+}
+
+export type ActionType =
+  | 'add'
+  | 'delete'
+  | 'move'
+  | 'reclassify'
+  | 'merge'
+  | 'split'
+  | 'confirm'
+  | 'accept_region'
+  | 'region_inspected'
+  | 'approve_region'
+  | 'unapprove_region';
+
+export type AnalysisStatus =
+  | 'created'
+  | 'needs_channel_mapping'
+  | 'ready'
+  | 'detecting'
+  | 'in_review'
+  | 'finalized';
+
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface Job {
+  id: string;
+  analysis_id: string;
+  status: JobStatus;
+  progress: number;
+  message: string;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface SlideMeta {
+  slide_id: string | null;
+  sample_volume_ul: number | null;
+  concentration_factor: number | null;
+  sampled_area_note: string | null;
+  counting_area_px2: number | null;
+  pixel_size_um: number | null;
+  csv_color_mapping: Record<string, string> | null;
+}
+
+export interface Provenance {
+  schema_version: number;
+  app_version: string;
+  engine: string;
+  package_versions: Record<string, string>;
+  detection_request: DetectionRequest | null;
+  detection_ran_at: string | null;
+  reporting_mode: ReportingMode;
+  stale_detection: boolean;
+}
+
+export interface Analysis {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  status: AnalysisStatus;
+  image: ImageMeta | null;
+  regions: Region[];
+  objects: DetectedObject[];
+  reporting_mode: ReportingMode;
+  detection_request: DetectionRequest;
+  provenance: Provenance;
+  slide: SlideMeta;
+  finalized_at: string | null;
+  undo_depth: number;
+  redo_depth: number;
+}
+
+export interface Counts {
+  scope: string;
+  red_only: number;
+  green_only: number;
+  yellow: number;
+  uncertain: number;
+  red_positive: number;
+  green_positive: number;
+  total_objects_exclusive: number;
+  reporting_mode: ReportingMode;
+  is_final: boolean;
+}
+
+export interface AnalysisSummary {
+  id: string;
+  name: string;
+  status: AnalysisStatus;
+  updated_at: string;
+  finalized_at: string | null;
+  counts?: Counts | null;
+}
+
+export interface CountsResponse {
+  regions: Counts[];
+  slide: Counts;
+}
+
+export interface ReviewQueueItem {
+  object_id: string;
+  reasons: ReviewReason[];
+  priority: number;
+  x: number;
+  y: number;
+}
+
+export interface CsvRow {
+  slide_id: string;
+  meta: Record<string, string>;
+  fields: (number | null)[];
+  raw_fields: string[];
+}
+
+export interface CsvImport {
+  id: string;
+  filename: string;
+  sha256: string;
+  header: string[];
+  rows: CsvRow[];
+  color_mapping: string | null;
+  notes: string[];
+}
+
+export interface ApiErrorBody {
+  code: string;
+  message: string;
+  detail?: Record<string, unknown> | null;
+}
+
+export type ImageView = 'red' | 'green' | 'composite' | 'processed_red' | 'processed_green';
+
+export interface PreviewResponse {
+  objects: DetectedObject[];
+  notes: string[];
+}
+
+export interface HealthResponse {
+  ok: boolean;
+  version: string;
+  bigfish_version: string;
+}

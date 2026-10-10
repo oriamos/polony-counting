@@ -101,8 +101,8 @@ class BackgroundParams(BaseModel):
 
 class DetectionParams(BaseModel):
     """Per-channel Big-FISH settings; pixel units (no fabricated calibration)."""
-    spot_radius_px: float = 4.0          # expected spot radius, pixels
-    minimum_distance_px: float = 6.0     # min separation between spots
+    spot_radius_px: float = 5.0          # expected spot radius, pixels
+    minimum_distance_px: float = 5.0     # min separation between spots
     threshold: Optional[float] = None    # None => Big-FISH automated threshold
     threshold_scale: float = 1.0         # multiply the auto threshold (manual tune)
     background: BackgroundParams = BackgroundParams()
@@ -118,7 +118,7 @@ class DetectionRequest(BaseModel):
     # optional restriction to a preview window [x0,y0,x1,y1]; None = all
     # counting regions of the analysis.
     preview_window: Optional[tuple[int, int, int, int]] = None
-    match_tolerance_px: float = 5.0      # cross-channel association distance
+    match_tolerance_px: float = 6.0      # cross-channel association distance
 
 
 class ReportingMode(str, Enum):
@@ -159,6 +159,7 @@ class ReviewReason(str, Enum):
     suspicious_shape = "suspicious_shape"
     near_edge = "near_edge"
     near_threshold = "near_threshold"
+    debris_like = "debris_like"   # compact/bright in both scales (scale-ratio filter); flagged, never auto-removed
 
 
 class DetectedObject(BaseModel):
