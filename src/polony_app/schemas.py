@@ -114,6 +114,40 @@ class DetectionParams(BaseModel):
     tile_overlap_px: int = 64
 
 
+class EngineName(str, Enum):
+    bigfish = "bigfish"
+    spotiflow = "spotiflow"
+    human = "human"
+
+
+class EngineChoice(str, Enum):
+    bigfish = "bigfish"      # default: current behaviour, Spotiflow never loaded
+    spotiflow = "spotiflow"  # Spotiflow only (no consensus)
+    hybrid = "hybrid"        # both engines independently + consensus candidates
+
+
+class ConsensusStatus(str, Enum):
+    """Spatial relation of the two engines' detections on one channel page.
+    NOT a truth label: agreement is not ground truth."""
+    agreement = "agreement"
+    bigfish_only = "bigfish_only"
+    spotiflow_only = "spotiflow_only"
+    human_added = "human_added"
+    human_rejected = "human_rejected"   # derived: candidate explicitly rejected (soft-deleted by a user)
+
+
+class SpotiflowParams(BaseModel):
+    model_name: str = "general"                 # official pretrained name or a registered fine-tuned model id
+    prob_thresh: Optional[float] = None         # None = the model's own optimised threshold (recorded)
+    min_distance: int = 1
+    exclude_border: bool = False
+    subpix: Optional[bool] = None               # None = model default
+    n_tiles: Optional[tuple[int, int]] = None   # None = automatic (max_tile_size)
+    max_tile_size: Optional[int] = None
+    normalizer: Literal["auto", "none"] = "auto"  # 'auto' = Spotiflow's percentile normalisation of the page (recorded, never 8-bit conversion)
+    device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
+
+
 class DetectionRequest(BaseModel):
     red: DetectionParams = DetectionParams()
     green: DetectionParams = DetectionParams()
@@ -121,11 +155,75 @@ class DetectionRequest(BaseModel):
     # counting regions of the analysis.
     preview_window: Optional[tuple[int, int, int, int]] = None
     match_tolerance_px: float = 6.0      # cross-channel association distance
+    engine: EngineChoice = EngineChoice.bigfish   # default keeps the existing Big-FISH-only behaviour
+    spotiflow: SpotiflowParams = SpotiflowParams()
+    consensus_tolerance_px: float = 4.0  # same-channel Big-FISH <-> Spotiflow matching tolerance (pixels)
 
 
 class ReportingMode(str, Enum):
     exclusive = "exclusive"                  # red_only / green_only / yellow
     channel_inclusive = "channel_inclusive"  # red_pos / green_pos incl. dual; yellow = overlap
+
+
+
+# ---------------------------------------------------------------- detection engines (two-engine architecture)
+class EngineRunInfo(BaseModel):
+    """One engine execution on one TIFF page. Raw detections reference run_id. Never mutated afterwards."""
+    run_id: str
+    analysis_id: str
+    image_sha256: dict[str, str] = {}
+    engine: EngineName
+    engine_version: str = ""
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    model_checksum: Optional[str] = None        # sha256 of the weights artifact when available
+    page: int
+    channel_role: Optional[str] = None          # "red"/"green" ONLY from the user-confirmed mapping, else None
+    params: dict = {}
+    preprocessing: dict = {}                    # every normalisation / transformation applied (documented, reversible)
+    started_at: str = ""
+    finished_at: Optional[str] = None
+    device: Optional[str] = None
+    duration_s: Optional[float] = None
+    status: Literal["ok", "failed", "skipped"] = "ok"
+    error: Optional[str] = None                 # clear failure text; a failed run never silently yields an empty result
+    n_raw: int = 0
+    n_valid: int = 0                            # inside the valid counting area (not excluded)
+    notes: list[str] = []
+
+
+class RawDetection(BaseModel):
+    """Engine-specific raw output, preserved forever (auditable), in full-resolution canonical pixel coordinates
+    (x = column, y = row, pixel centre at integer coordinates)."""
+    id: str
+    run_id: str
+    analysis_id: str
+    engine: EngineName
+    page: int
+    channel_role: Optional[str] = None
+    x: float
+    y: float
+    z: Optional[float] = None
+    radius_px: Optional[float] = None
+    score: Optional[float] = None               # RAW engine score. NOT a calibrated probability / confidence %.
+    score_kind: Optional[str] = None            # e.g. "bigfish_log_response_noise_units", "spotiflow_prob_raw"
+    valid: bool = True                          # inside the valid counting area
+    region_id: Optional[str] = None
+    excluded_reason: Optional[str] = None
+
+
+class ConsensusSummary(BaseModel):
+    """Counts for the review summary. Per channel page; sparse channels must not be merged silently."""
+    page: Optional[int] = None
+    channel_role: Optional[str] = None
+    agreement: int = 0
+    bigfish_only: int = 0
+    spotiflow_only: int = 0
+    human_added: int = 0
+    human_rejected: int = 0
+    confirmed: int = 0
+    rejected: int = 0
+    unresolved: int = 0
 
 
 # ---------------------------------------------------------------- objects
@@ -145,6 +243,17 @@ class ChannelEvidence(BaseModel):
     snr: Optional[float] = None                  # (peak - local bg) / local bg robust std (measured)
     saturated: bool = False
     spot_id: Optional[str] = None
+    # two-engine provenance (all optional; absent for Big-FISH-only runs)
+    consensus_status: Optional[ConsensusStatus] = None
+    bigfish_raw_id: Optional[str] = None
+    bigfish_x: Optional[float] = None
+    bigfish_y: Optional[float] = None
+    bigfish_score: Optional[float] = None       # raw LoG response in noise units (not a probability)
+    spotiflow_raw_id: Optional[str] = None
+    spotiflow_x: Optional[float] = None
+    spotiflow_y: Optional[float] = None
+    spotiflow_score: Optional[float] = None     # RAW Spotiflow "model score" (heatmap probability); not calibrated
+    match_distance_px: Optional[float] = None   # distance between the two engines' points when matched
 
 
 class Origin(str, Enum):
@@ -161,6 +270,9 @@ class ReviewReason(str, Enum):
     suspicious_shape = "suspicious_shape"
     near_edge = "near_edge"
     near_threshold = "near_threshold"
+    bigfish_only = "bigfish_only"       # engine disagreement: reviewed before agreements
+    spotiflow_only = "spotiflow_only"
+    qc_sample = "qc_sample"             # random QC sample of agreement candidates (deterministic seed)
     debris_like = "debris_like"   # compact/bright in both scales (scale-ratio filter); flagged, never auto-removed
 
 
