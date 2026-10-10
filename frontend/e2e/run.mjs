@@ -77,18 +77,32 @@ async function centroid(clip, mode) {
       const d = g.getImageData(0, 0, c.width, c.height).data;
       let sw = 0,
         sx = 0,
-        sy = 0;
+        sy = 0,
+        x0 = 1e9,
+        x1 = -1,
+        y0 = 1e9,
+        y1 = -1;
       for (let y = 0; y < c.height; y++)
         for (let x = 0; x < c.width; x++) {
           const i = (y * c.width + x) * 4;
           const r = d[i],
             gg = d[i + 1],
             b = d[i + 2];
-          const w = mode === 'img' ? Math.max(0, r + gg - 60) : Math.max(0, Math.min(r, gg, b) - 90);
-          sw += w;
-          sx += w * (x + 0.5);
-          sy += w * (y + 0.5);
+          if (mode === 'img') {
+            const w = Math.max(0, r + gg - 60);
+            sw += w;
+            sx += w * (x + 0.5);
+            sy += w * (y + 0.5);
+          } else if (Math.min(r, gg, b) >= 150) {
+            // ring: bounding-box centre of the white outline (robust to the review marker on the ring)
+            sw += 1;
+            x0 = Math.min(x0, x);
+            x1 = Math.max(x1, x + 1);
+            y0 = Math.min(y0, y);
+            y1 = Math.max(y1, y + 1);
+          }
         }
+      if (mode === 'ring') return sw ? { x: clip.x + (x0 + x1) / 2, y: clip.y + (y0 + y1) / 2, n: sw } : null;
       return sw ? { x: clip.x + sx / sw, y: clip.y + sy / sw, n: sw } : null;
     },
     { b64: buf.toString('base64'), mode, clip },
