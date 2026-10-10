@@ -90,19 +90,30 @@ next-changelog: ## returns the next changelog
 publish-noop: ## publish command (no-operation mode)
 	@semantic-release publish --noop
 
-##@ Polony counting app (src/polony_app)
+##@ Polony counting app (src/polony_app; needs NO torch, see docs/app/README.md)
 
-APP_PY ?= python
+# The app lives in its own virtualenv (.venv, git-ignored). Use your own interpreter with
+# `make app APP_PY=python` (then dependencies are installed into that interpreter).
+APP_VENV ?= .venv
+APP_PY ?= $(APP_VENV)/bin/python
 APP_DATA_DIR ?= ./data
+PORT ?= 8000
 
 .PHONY: app-install
-app-install: ## install the app's Python dependencies (requirements-app.txt)
-	@$(APP_PY) -m pip install -r requirements-app.txt
+app-install: ## create .venv (if APP_PY is the default) and install requirements-app.txt
+	@if [ "$(APP_PY)" = "$(APP_VENV)/bin/python" ] && [ ! -x "$(APP_PY)" ]; then python3 -m venv $(APP_VENV); fi
+	@$(APP_PY) -m pip install --quiet -r requirements-app.txt
+	@echo "app dependencies installed for $(APP_PY)"
 
 .PHONY: app-run
-app-run: ## build frontend (if node is present) and run the app on http://127.0.0.1:8000
-	@APP_PY=$(APP_PY) POLONY_DATA_DIR=$(APP_DATA_DIR) ./scripts/run_app.sh
+app-run: ## build frontend (if npm is present) and run the app on http://127.0.0.1:$(PORT)
+	@test -x "$$(command -v $(APP_PY))" || { echo "$(APP_PY) not found: run 'make app-install' first"; exit 1; }
+	@APP_PY=$(APP_PY) POLONY_DATA_DIR=$(APP_DATA_DIR) PORT=$(PORT) ./scripts/run_app.sh
 
 .PHONY: app-test
-app-test: ## run the app test-suite
+app-test: ## run the app test-suite (tests/app)
+	@test -x "$$(command -v $(APP_PY))" || { echo "$(APP_PY) not found: run 'make app-install' first"; exit 1; }
 	@PYTHONPATH=src $(APP_PY) -m pytest tests/app -q
+
+.PHONY: app
+app: app-install app-run ## ONE command: install (venv) + build frontend (if npm) + run

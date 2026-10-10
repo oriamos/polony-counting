@@ -34,7 +34,7 @@ pandas = "^2.1.4"
 optional = true
 
 [tool.poetry.group.app.dependencies]
-python = ">=3.10"
+# (the app needs Python >= 3.10; torch is NOT required)
 fastapi = ">=0.110"
 uvicorn = ">=0.29"
 python-multipart = ">=0.0.9"
