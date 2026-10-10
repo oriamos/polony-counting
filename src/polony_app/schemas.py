@@ -316,6 +316,8 @@ class Counts(BaseModel):
     red_positive: int = 0            # = red_only + yellow
     green_positive: int = 0          # = green_only + yellow
     total_objects_exclusive: int = 0  # red_only+green_only+yellow
+    red_positive_excl_debris: int = 0    # red_positive minus objects carrying review reason debris_like (not a removal: a convenience count)
+    green_positive_excl_debris: int = 0
     reporting_mode: ReportingMode
     is_final: bool = False
 
