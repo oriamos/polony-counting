@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { DetectionParams } from '../api/types';
+import type { DetectionParams, DetectionRequest } from '../api/types';
 import { useApp } from '../state/store';
 
 export function NumInput({
@@ -52,73 +52,102 @@ export function NumInput({
   );
 }
 
-function ParamForm({ ch, p, set, disabled }: { ch: 'red' | 'green'; p: DetectionParams; set: (p: DetectionParams) => void; disabled: boolean }) {
-  const auto = p.threshold == null;
-  const u = (patch: Partial<DetectionParams>) => set({ ...p, ...patch });
+type Ch = 'red' | 'green';
+
+/** Red and green parameters side by side: one row per parameter, one column per channel. */
+function ParamTable({ req, set, disabled }: { req: DetectionRequest; set: (r: DetectionRequest) => void; disabled: boolean }) {
+  const u = (ch: Ch, patch: Partial<DetectionParams>) => set({ ...req, [ch]: { ...req[ch], ...patch } });
+  const chs: Ch[] = ['red', 'green'];
+  const Row = ({ label, unit, hint, children }: { label: string; unit?: string; hint?: string; children: (ch: Ch, p: DetectionParams) => React.ReactNode }) => (
+    <tr>
+      <th scope="row">
+        {label} {unit && <span className="unit">{unit}</span>}
+        {hint && <div className="hint">{hint}</div>}
+      </th>
+      {chs.map((ch) => (
+        <td key={ch}>{children(ch, req[ch])}</td>
+      ))}
+    </tr>
+  );
   return (
-    <fieldset className={`params ch-${ch}`} disabled={disabled}>
-      <legend>
-        <span className={`dot ${ch}`} /> {ch} channel
-      </legend>
-      <label>
-        Spot radius <span className="unit">px</span>
-        <NumInput value={p.spot_radius_px} min={0.5} step={0.5} onChange={(v) => u({ spot_radius_px: v ?? p.spot_radius_px })} testid={`${ch}-radius`} />
-      </label>
-      <label>
-        Min. distance <span className="unit">px</span>
-        <NumInput value={p.minimum_distance_px} min={1} step={0.5} onChange={(v) => u({ minimum_distance_px: v ?? p.minimum_distance_px })} />
-      </label>
-      <div className="span2">
-        <div className="seg sm" role="group" aria-label={`${ch} threshold mode`}>
-          <button type="button" className={auto ? 'on' : ''} onClick={() => u({ threshold: null })}>
-            Auto threshold
-          </button>
-          <button type="button" className={!auto ? 'on' : ''} onClick={() => u({ threshold: p.threshold ?? 100 })}>
-            Manual
-          </button>
-        </div>
-      </div>
-      {auto ? (
-        <label className="span2">
-          Auto-threshold scale <span className="unit">×</span>
-          <NumInput value={p.threshold_scale} min={0.05} step={0.05} onChange={(v) => u({ threshold_scale: v ?? 1 })} />
-          <span className="hint">multiplies the Big-FISH automatic threshold (1.0 = unchanged)</span>
-        </label>
-      ) : (
-        <label className="span2">
-          Manual threshold <span className="unit">intensity</span>
-          <NumInput value={p.threshold} min={0} onChange={(v) => u({ threshold: v ?? 0 })} />
-        </label>
-      )}
-      <label>
-        Background
-        <select className="input sm" value={p.background.method} onChange={(e) => u({ background: { ...p.background, method: e.target.value as DetectionParams['background']['method'] } })}>
-          <option value="none">none</option>
-          <option value="gaussian_subtract">Gaussian subtract</option>
-          <option value="white_tophat">white top-hat</option>
-        </select>
-      </label>
-      {p.background.method === 'gaussian_subtract' && (
-        <label>
-          σ <span className="unit">px</span>
-          <NumInput value={p.background.sigma_px} min={1} onChange={(v) => u({ background: { ...p.background, sigma_px: v ?? 50 } })} />
-        </label>
-      )}
-      {p.background.method === 'white_tophat' && (
-        <label>
-          Radius <span className="unit">px</span>
-          <NumInput value={p.background.radius_px} min={1} step={1} onChange={(v) => u({ background: { ...p.background, radius_px: Math.round(v ?? 25) } })} />
-        </label>
-      )}
-      <label>
-        Tile size <span className="unit">px (0 = whole)</span>
-        <NumInput value={p.tile_size} min={0} step={64} onChange={(v) => u({ tile_size: Math.round(v ?? 0) })} />
-      </label>
-      <label className="chk span2">
-        <input type="checkbox" checked={p.dense_decomposition} onChange={(e) => u({ dense_decomposition: e.target.checked })} /> Dense-region decomposition
-      </label>
-      {p.dense_decomposition && (
-        <div className="notice warn small span2">
+    <fieldset className="params" disabled={disabled}>
+      <table className="ptable">
+        <thead>
+          <tr>
+            <th></th>
+            <th>
+              <span className="dot red" /> red
+            </th>
+            <th>
+              <span className="dot green" /> green
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <Row label="Spot radius" unit="px">
+            {(ch, p) => <NumInput value={p.spot_radius_px} min={0.5} step={0.5} onChange={(v) => u(ch, { spot_radius_px: v ?? p.spot_radius_px })} testid={`${ch}-radius`} />}
+          </Row>
+          <Row label="Min. distance" unit="px">
+            {(ch, p) => <NumInput value={p.minimum_distance_px} min={1} step={0.5} onChange={(v) => u(ch, { minimum_distance_px: v ?? p.minimum_distance_px })} />}
+          </Row>
+          <Row label="Threshold">
+            {(ch, p) => (
+              <div className="seg sm" role="group" aria-label={`${ch} threshold mode`}>
+                <button type="button" className={p.threshold == null ? 'on' : ''} onClick={() => u(ch, { threshold: null })}>
+                  Auto
+                </button>
+                <button type="button" className={p.threshold != null ? 'on' : ''} onClick={() => u(ch, { threshold: p.threshold ?? 100 })}>
+                  Manual
+                </button>
+              </div>
+            )}
+          </Row>
+          <Row label="Auto scale" unit="×">
+            {(ch, p) => <NumInput value={p.threshold_scale} min={0.05} step={0.05} disabled={p.threshold != null} onChange={(v) => u(ch, { threshold_scale: v ?? 1 })} />}
+          </Row>
+          <Row label="Manual value" unit="intensity">
+            {(ch, p) => <NumInput value={p.threshold} min={0} disabled={p.threshold == null} onChange={(v) => u(ch, { threshold: v ?? 0 })} />}
+          </Row>
+          <Row label="Background">
+            {(ch, p) => (
+              <select
+                className="input sm"
+                value={p.background.method}
+                aria-label={`${ch} background method`}
+                onChange={(e) => u(ch, { background: { ...p.background, method: e.target.value as DetectionParams['background']['method'] } })}
+              >
+                <option value="none">none</option>
+                <option value="gaussian_subtract">Gaussian subtract</option>
+                <option value="white_tophat">white top-hat</option>
+              </select>
+            )}
+          </Row>
+          <Row label="Background σ / radius" unit="px">
+            {(ch, p) =>
+              p.background.method === 'gaussian_subtract' ? (
+                <NumInput value={p.background.sigma_px} min={1} onChange={(v) => u(ch, { background: { ...p.background, sigma_px: v ?? 50 } })} />
+              ) : p.background.method === 'white_tophat' ? (
+                <NumInput value={p.background.radius_px} min={1} step={1} onChange={(v) => u(ch, { background: { ...p.background, radius_px: Math.round(v ?? 25) } })} />
+              ) : (
+                <span className="muted small">–</span>
+              )
+            }
+          </Row>
+          <Row label="Tile size" unit="px (0 = whole)">
+            {(ch, p) => <NumInput value={p.tile_size} min={0} step={64} onChange={(v) => u(ch, { tile_size: Math.round(v ?? 0) })} />}
+          </Row>
+          <Row label="Dense decomposition">
+            {(ch, p) => (
+              <label className="chk">
+                <input type="checkbox" checked={p.dense_decomposition} onChange={(e) => u(ch, { dense_decomposition: e.target.checked })} data-testid={`${ch}-dense`} /> on
+              </label>
+            )}
+          </Row>
+        </tbody>
+      </table>
+      <div className="hint">“Auto scale” multiplies the Big-FISH automatic threshold (1 = unchanged); “Manual value” replaces it.</div>
+      {(req.red.dense_decomposition || req.green.dense_decomposition) && (
+        <div className="notice warn small">
           Dense decomposition can split or merge clumps by modelling a reference spot. It changes counts in crowded areas, so review those regions carefully. Off by default.
         </div>
       )}
@@ -161,10 +190,7 @@ export function DetectTab() {
       {a.provenance.stale_detection && a.objects.length > 0 && (
         <div className="notice warn small">Detection is stale: regions, mapping or parameters changed since the last run.</div>
       )}
-      <div className="params-grid">
-        <ParamForm ch="red" p={req.red} set={(p) => setReq({ ...req, red: p })} disabled={locked} />
-        <ParamForm ch="green" p={req.green} set={(p) => setReq({ ...req, green: p })} disabled={locked} />
-      </div>
+      <ParamTable req={req} set={setReq} disabled={locked} />
       <div className="row wrap">
         <button className="btn sm" disabled={locked} onClick={() => setReq({ ...req, green: JSON.parse(JSON.stringify(req.red)) })} title="Copy red parameters to green">
           Copy red → green

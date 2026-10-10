@@ -27,6 +27,7 @@ const check = (name, ok, info = '') => {
 const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
 const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 }, acceptDownloads: true });
 const page = await ctx.newPage();
+page.setDefaultTimeout(8000);
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
 page.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && pageErrors.push(m.text()));
@@ -365,7 +366,9 @@ async function editSuite() {
   const a = await toScreen(100, 100);
   const b = await toScreen(60, 320);
   await page.mouse.click(a.x, a.y);
-  await page.mouse.click(b.x, b.y, { modifiers: ['Shift'] });
+  await page.keyboard.down('Shift');
+  await page.mouse.click(b.x, b.y);
+  await page.keyboard.up('Shift');
   await page.keyboard.press('m');
   await page.waitForTimeout(300);
   objs = await count();
@@ -488,10 +491,10 @@ async function detectSuite() {
   await reset();
   await openAnalysis('demo');
   await tid('tab-detect').click();
-  check('dense decomposition off by default', (await page.locator('.params input[type=checkbox]').first().isChecked()) === false);
-  await page.locator('.params input[type=checkbox]').first().check();
+  check('dense decomposition off by default', (await tid('red-dense').isChecked()) === false);
+  await tid('red-dense').check();
   check('dense decomposition warning shown when enabled', (await tid('detect-tab').innerText()).includes('Dense decomposition can split or merge'));
-  await page.locator('.params input[type=checkbox]').first().uncheck();
+  await tid('red-dense').uncheck();
   check('pixel unit note when pixel size unknown', (await tid('detect-tab').innerText()).includes('Pixel size unknown'));
   check('re-run warning present', /Re-running keeps your manual edits/.test(await tid('detect-tab').innerText()));
   // preview
@@ -596,7 +599,7 @@ for (const s of suites) {
   try {
     await s();
   } catch (e) {
-    check(`suite ${s.name} completed`, false, String(e).split('\n')[0]);
+    check(`suite ${s.name} completed`, false, String(e).split('\n').slice(0,6).join(' ⏎ '));
     await shot(`FAILED-${s.name}`).catch(() => undefined);
   }
 }
