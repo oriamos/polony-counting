@@ -32,7 +32,8 @@ from polony_app.schemas import (
     ReportingMode,
     SlideMeta,
 )
-from polony_app.store import NotFound, Store
+from polony_app.config import load_settings
+from polony_app.store import NotFound, Store, open_store  # noqa: F401
 from polony_app.store.csv_import import parse_csv
 from polony_app.store.db import new_id
 from polony_app.store.jobs import JobRunner
@@ -146,9 +147,10 @@ def _sig(a: Analysis, st: AnalysisState) -> str:
     return hashlib.sha256(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def create_app(data_dir: str | Path | None = None) -> FastAPI:
+def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
     data_dir = Path(data_dir or os.environ.get("POLONY_DATA_DIR") or "./data")
-    store = Store(data_dir)
+    settings = settings or load_settings()
+    store = open_store(data_dir, settings)   # SQLite unless a shared database URL is configured
     runner = JobRunner(store)
     images = ImageService(store)
     max_upload = _env_int("POLONY_MAX_UPLOAD_MB", 512) * 1024 * 1024
@@ -197,6 +199,11 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         except metadata.PackageNotFoundError:
             bf = None
         return {"ok": True, "version": polony_app.__version__, "bigfish_version": bf}
+
+    @api.get("/storage")
+    def get_storage():
+        """Where analyses are stored (no credentials). Never raises: reports connected=false."""
+        return store.info()
 
     # ------------------------------------------------------------- analyses
     @api.post("/analyses")
@@ -326,6 +333,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             from polony_app.imaging import registration
 
             with store.view(aid) as st:
+                _need_originals(st)
                 red, green = (images.raw(st, "red"), images.raw(st, "green"))
                 # estimate on the UNSHIFTED green so the answer is absolute
                 cur = st.alignment
@@ -354,6 +362,60 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             images.forget(aid)
         return {"dy": body.dy, "dx": body.dx, "peak_corr": None, "applied": True}
 
+    # ------------------------------------------------------------- originals (local files)
+    def _missing_originals(st: AnalysisState) -> list[dict]:
+        im = st.analysis.image
+        if im is None:
+            return []
+        od = store.originals_dir(st.analysis.id)
+        return [{"file": n, "sha256": h} for n, h in im.sha256.items() if not (od / n).is_file()]
+
+    def _need_originals(st: AnalysisState) -> None:
+        miss = _missing_originals(st)
+        if miss:
+            raise ReviewError(
+                "original_missing",
+                "This analysis was created on another computer. Attach the original TIFF(s) to view the image.",
+                409, {"files": miss})
+
+    @api.post("/analyses/{aid}/originals")
+    def attach_originals(aid: str, files: list[UploadFile] = File(...)):
+        """Attach original TIFF(s) on this computer. Each file must match a recorded sha256."""
+        aid_ok(aid)
+        with store.view(aid) as st:
+            expected = dict(st.analysis.image.sha256) if st.analysis.image else {}
+        if not expected:
+            return err(409, "no_image", "analysis has no image")
+        by_hash = {h: n for n, h in expected.items()}
+        tmp = store.data_dir / "tmp" / uuid.uuid4().hex
+        tmp.mkdir(parents=True)
+        try:
+            staged: dict[str, Path] = {}
+            for i, f in enumerate(files):
+                p = tmp / f"{i}.part"
+                h = hashlib.sha256()
+                with open(p, "wb") as out:
+                    while chunk := f.file.read(1 << 20):
+                        h.update(chunk)
+                        out.write(chunk)
+                digest = h.hexdigest()
+                if digest not in by_hash:
+                    return err(422, "sha256_mismatch",
+                               f"'{safe_filename(f.filename)}' is not one of the original files of this analysis "
+                               "(its SHA-256 differs from the recorded one); nothing was attached",
+                               {"file": safe_filename(f.filename), "sha256": digest,
+                                "expected": [{"file": n, "sha256": x} for n, x in expected.items()]})
+                staged[by_hash[digest]] = p
+            od = store.originals_dir(aid)
+            od.mkdir(parents=True, exist_ok=True)
+            for name, p in staged.items():
+                shutil.move(str(p), str(od / name))
+            images.forget(aid)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        with store.view(aid) as st:
+            return {"attached": sorted(staged), "missing": _missing_originals(st)}
+
     # ------------------------------------------------------------- images
     def _crop(x0, y0, x1, y1, st):
         vals = [x0, y0, x1, y1]
@@ -381,6 +443,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         with store.view(aid_ok(aid)) as st:
             if st.analysis.image is None:
                 return err(409, "no_image", "analysis has no image")
+            _need_originals(st)
             crop = _crop(x0, y0, x1, y1, st)
             png, (alo, ahi) = images.render(st, view, lo, hi, gamma, crop, max_dim, colormap)
             im = st.analysis.image
@@ -395,6 +458,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
     @api.get("/analyses/{aid}/histogram/{role}")
     def get_histogram(aid: str, role: Literal["red", "green"]):
         with store.view(aid_ok(aid)) as st:
+            _need_originals(st)
             return images.histogram(st, role)
 
     @api.get("/analyses/{aid}/thumb/{object_id}")
@@ -405,6 +469,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             o = next((o for o in st.analysis.objects if o.id == object_id), None)
             if o is None:
                 raise NotFound("object", object_id)
+            _need_originals(st)
             im = st.analysis.image
             half = size // 2
             x0 = int(round(o.x)) - half
@@ -463,6 +528,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         if not engine.mapping_confirmed(a):
             raise ReviewError("channel_mapping_unconfirmed",
                               "confirm the red/green channel mapping before detecting", 409)
+        _need_originals(st)
 
     @api.post("/analyses/{aid}/detect")
     def post_detect(aid: str, body: DetectionRequest, raw: Any = Depends(_raw_body)):

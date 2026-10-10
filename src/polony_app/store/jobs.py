@@ -32,10 +32,32 @@ class JobRunner:
         self._jobs: dict[str, Job] = {}
         self._active_by_analysis: dict[str, str] = {}
         self._lock = threading.RLock()
+        self._flush_every = 1.0 if store.supports_heartbeat else 0.2   # fewer round trips to a remote DB
+        self._hb_stop = threading.Event()
+        self._hb_thread: threading.Thread | None = None
+        self.heartbeat_interval = 5.0
 
     def active_job(self, analysis_id: str) -> str | None:
         with self._lock:
-            return self._active_by_analysis.get(analysis_id)
+            local = self._active_by_analysis.get(analysis_id)
+        if local:
+            return local
+        return self.store.find_active_job(analysis_id)   # a job running on another computer
+
+    def _heartbeat_loop(self) -> None:
+        """Shared DB only: keep the heartbeat of our running jobs fresh (so other computers do
+        not mistake them for orphans) and pick up cancel requests made from another computer."""
+        while not self._hb_stop.wait(self.heartbeat_interval):
+            with self._lock:
+                ids = list(self._active_by_analysis.values())
+            for jid in ids:
+                try:
+                    if self.store.touch_job(jid):
+                        ev = self._cancel.get(jid)
+                        if ev is not None:
+                            ev.set()
+                except Exception:  # noqa: BLE001  (database briefly unreachable: keep trying)
+                    pass
 
     def submit(self, analysis_id: str, fn: JobFn, on_finish: Callable[[Job], None] | None = None) -> Job:
         """fn(progress, cancelled) -> optional final message. Raise JobCancelled
@@ -43,11 +65,14 @@ class JobRunner:
         with self._lock:
             if analysis_id in self._active_by_analysis:
                 raise RuntimeError("job_in_progress")
-            job = self.store.create_job(analysis_id)
+            job = self.store.create_job(analysis_id)   # RuntimeError('job_in_progress') if another machine runs one
             ev = threading.Event()
             self._cancel[job.id] = ev
             self._jobs[job.id] = job
             self._active_by_analysis[analysis_id] = job.id
+        if self.store.supports_heartbeat and self._hb_thread is None:
+            self._hb_thread = threading.Thread(target=self._heartbeat_loop, name="polony-heartbeat", daemon=True)
+            self._hb_thread.start()
         self._pool.submit(self._run, job.id, fn, ev, on_finish)
         return job.model_copy()
 
@@ -60,9 +85,10 @@ class JobRunner:
                 job.progress = max(0.0, min(1.0, float(frac)))
                 job.message = msg or job.message
                 t = time.monotonic()
-                if t - last_flush[0] > 0.2:
+                if t - last_flush[0] > self._flush_every:
                     last_flush[0] = t
-                    self.store.save_job(job)
+                    if self.store.save_job(job):
+                        ev.set()   # cancel requested from another computer
 
         with self._lock:
             if ev.is_set():
@@ -99,7 +125,10 @@ class JobRunner:
         finally:
             with self._lock:
                 job.finished_at = now()
-                self.store.save_job(job)
+                try:
+                    self.store.save_job(job)
+                except Exception:  # noqa: BLE001  (shared DB unreachable: the stale-heartbeat rule cleans up)
+                    pass
                 self._active_by_analysis.pop(job.analysis_id, None)
             if on_finish:
                 try:
@@ -119,9 +148,15 @@ class JobRunner:
             ev = self._cancel.get(jid)
             if ev is not None:
                 ev.set()
+        try:
+            self.store.request_cancel(jid)   # job owned by another computer: its heartbeat sees the flag
+        except Exception:  # noqa: BLE001
+            if ev is None:
+                raise
         return self.get(jid)
 
     def shutdown(self) -> None:
+        self._hb_stop.set()
         with self._lock:
             for ev in self._cancel.values():
                 ev.set()

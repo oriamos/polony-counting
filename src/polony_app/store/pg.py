@@ -1,0 +1,532 @@
+"""Shared PostgreSQL (Neon) persistence backend: same interface as ``db.Store``.
+
+* All tables live in one dedicated schema (default ``polony``) -> a restricted role needs
+  rights on that schema only.  Migrations are idempotent and versioned (``schema_version``).
+* Several computers can open the same analysis.  Every mutation is ONE transaction that takes
+  ``SELECT ... FOR UPDATE`` on the analysis row, so two people editing the same analysis are
+  serialised and no update is lost; undo/redo stacks live in the persisted state, so they stay
+  consistent.  ``version`` increases on every committed edit.
+* Round trips per request (pipelined, so each pipeline is one network round trip):
+    view  (cache fresh, < VIEW_TTL s)        0
+    view  (cache older)                      1   (version check; full reload only if changed)
+    edit                                     2   (BEGIN+lock+read | UPDATE+INSERT actions+COMMIT)
+* Original TIFFs are NOT in the database: they stay in ``data_dir/originals/<id>/`` on each
+  computer; the database holds metadata + sha256 (inside the analysis state).
+* The connection string is a secret: it is never logged, error messages are redacted.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import threading
+import time
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
+from typing import Iterator, Optional
+from urllib.parse import urlsplit
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool, PoolTimeout
+
+from polony_app.config import DEFAULT_SCHEMA, Settings, _valid_schema, redact
+from polony_app.review.counts import compute_counts
+from polony_app.review.engine import migrate_legacy_state, now, refresh_status
+from polony_app.review.state import AnalysisState, ReviewError
+from polony_app.schemas import (
+    Analysis,
+    AnalysisStatus,
+    CsvImport,
+    Job,
+    JobStatus,
+    ReviewAction,
+)
+
+from .db import NotFound, new_id
+
+JOB_STALE_SECONDS = 120.0       # a running job whose heartbeat is older than this is orphaned
+VIEW_TTL = 1.5                  # seconds a cached analysis may be served without a version check
+SCHEMA_VERSION = 1
+
+MIGRATIONS: dict[int, list[str]] = {
+    1: [
+        """CREATE TABLE IF NOT EXISTS {s}.analyses (
+             id text PRIMARY KEY, name text, status text,
+             created_at text, updated_at text, finalized_at text,
+             summary jsonb, state jsonb NOT NULL,
+             version integer NOT NULL DEFAULT 1,
+             updated_by text, db_updated_at timestamptz NOT NULL DEFAULT now())""",
+        """CREATE TABLE IF NOT EXISTS {s}.actions (
+             analysis_id text NOT NULL REFERENCES {s}.analyses(id) ON DELETE CASCADE,
+             seq integer NOT NULL, ts text, type text, payload jsonb,
+             machine_id text, data jsonb NOT NULL,
+             PRIMARY KEY (analysis_id, seq))""",
+        """CREATE TABLE IF NOT EXISTS {s}.jobs (
+             id text PRIMARY KEY, analysis_id text NOT NULL, status text, progress double precision,
+             message text, error text, started_at text, finished_at text, created_at text,
+             owner_machine_id text, heartbeat_at timestamptz NOT NULL DEFAULT now(),
+             cancel_requested boolean NOT NULL DEFAULT false)""",
+        "CREATE INDEX IF NOT EXISTS jobs_analysis_idx ON {s}.jobs (analysis_id)",
+        # at most ONE active job per analysis, across all machines
+        """CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_active_idx ON {s}.jobs (analysis_id)
+             WHERE status IN ('queued','running')""",
+        """CREATE TABLE IF NOT EXISTS {s}.csv_imports (
+             id text PRIMARY KEY, created_at text, data jsonb NOT NULL)""",
+        """CREATE TABLE IF NOT EXISTS {s}.machines (
+             machine_id text PRIMARY KEY, first_seen timestamptz NOT NULL DEFAULT now(),
+             last_seen timestamptz NOT NULL DEFAULT now(), app_version text)""",
+    ],
+}
+
+
+class DatabaseUnreachable(ReviewError):
+    def __init__(self, message: str = "the shared database is not reachable"):
+        super().__init__("database_unreachable", message, 503)
+
+
+def _summary(st: AnalysisState) -> str:
+    try:
+        return compute_counts(st.analysis)["slide"].model_dump_json()
+    except Exception:  # pragma: no cover
+        return "null"
+
+
+class _Entry:
+    __slots__ = ("st", "version", "checked", "saved_len")
+
+    def __init__(self, st: AnalysisState, version: int):
+        self.st, self.version, self.checked, self.saved_len = st, version, time.monotonic(), len(st.log)
+
+
+class PgStore:
+    backend = "postgres"
+    supports_heartbeat = True
+
+    def __init__(self, data_dir: str | Path, settings: Settings, *, stale_seconds: float = JOB_STALE_SECONDS,
+                 pool_size: int = 10, recover: bool = True, view_ttl: float = VIEW_TTL):
+        if not settings.database_url:
+            raise ValueError("PgStore needs settings.database_url")
+        self.data_dir = Path(data_dir).resolve()
+        for sub in ("originals", "csv_imports", "tmp"):
+            (self.data_dir / sub).mkdir(parents=True, exist_ok=True)
+        self._url = settings.database_url
+        self.schema = _valid_schema(settings.database_schema or DEFAULT_SCHEMA)
+        self.machine_id = settings.machine_id
+        self.stale_seconds = float(stale_seconds)
+        self.view_ttl = float(view_ttl)
+        self._pipeline = os.environ.get("POLONY_PG_PIPELINE", "1") != "0"
+        s = self.schema
+        self._A, self._X, self._J, self._C, self._M, self._V = (
+            f'"{s}".analyses', f'"{s}".actions', f'"{s}".jobs', f'"{s}".csv_imports',
+            f'"{s}".machines', f'"{s}".schema_version',
+        )
+        self._cache: dict[str, _Entry] = {}
+        self._locks: dict[str, threading.RLock] = {}
+        self._guard = threading.Lock()
+        self._tls = threading.local()
+        self._ready_ok = False
+        self._last_attempt = 0.0
+        self.last_error: Optional[str] = None
+        self.connected = False
+        self.stats = {"round_trips_hint": 0}
+        u = urlsplit(self._url)
+        self.host, self.database = u.hostname, (u.path or "/").lstrip("/")
+        self._pool = ConnectionPool(
+            self._url,
+            kwargs={"autocommit": True, "prepare_threshold": None, "row_factory": dict_row,
+                    "connect_timeout": 8, "application_name": "polony-review"},
+            min_size=1, max_size=int(pool_size), timeout=12, max_idle=90, max_lifetime=900,
+            open=False, name="polony-pg",
+        )
+        self._pool.open(wait=False)
+        try:
+            self._ready()
+            if recover:
+                self.recover_orphans()
+        except DatabaseUnreachable:
+            pass  # the app still starts; every operation reports 503 until the database is back
+
+    # ----------------------------------------------------------- connection handling
+    def _fail(self, e: BaseException) -> DatabaseUnreachable:
+        self.connected = False
+        self.last_error = redact(f"{type(e).__name__}: {e}", self._url)[:300]
+        self._ready_ok = False
+        return DatabaseUnreachable(f"the shared database is not reachable ({self.last_error})")
+
+    def _ready(self) -> None:
+        if self._ready_ok:
+            return
+        with self._guard:
+            if self._ready_ok:
+                return
+            if time.monotonic() - self._last_attempt < 2.0 and self.last_error:
+                raise DatabaseUnreachable(f"the shared database is not reachable ({self.last_error})")
+            self._last_attempt = time.monotonic()
+            try:
+                self._migrate()
+                self.connected, self.last_error, self._ready_ok = True, None, True
+            except (psycopg.OperationalError, PoolTimeout) as e:
+                raise self._fail(e) from None
+
+    @contextmanager
+    def _conn(self) -> Iterator[psycopg.Connection]:
+        self._ready()
+        try:
+            with self._pool.connection() as conn:
+                yield conn
+            self.connected = True
+        except (psycopg.OperationalError, psycopg.InterfaceError, PoolTimeout) as e:
+            raise self._fail(e) from None
+
+    def _pipe(self, conn):
+        return conn.pipeline() if self._pipeline else nullcontext()
+
+    def _q(self, sql: str, args: tuple = (), fetch: str = "none"):
+        """One autocommit statement, one retry on a dead pooled connection."""
+        for attempt in (0, 1):
+            was_ready = self._ready_ok
+            try:
+                with self._conn() as conn:
+                    cur = conn.execute(sql, args)
+                    if fetch == "one":
+                        return cur.fetchone()
+                    if fetch == "all":
+                        return cur.fetchall()
+                    return cur.rowcount
+            except DatabaseUnreachable:
+                if attempt or not was_ready:
+                    raise
+                self._ready_ok = True  # retry once with a fresh connection
+
+    def _migrate(self) -> None:
+        s = self.schema
+        with self._pool.connection() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name=%s", (s,)).fetchone()
+            if not exists:
+                conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{s}"')
+            conn.execute(f'CREATE TABLE IF NOT EXISTS {self._V} (version integer PRIMARY KEY, '
+                         "applied_at timestamptz NOT NULL DEFAULT now())")
+            cur = conn.execute(f"SELECT coalesce(max(version),0) AS v FROM {self._V}").fetchone()["v"]
+            if cur < SCHEMA_VERSION:
+                with conn.transaction():
+                    conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"polony:{s}",))
+                    cur = conn.execute(f"SELECT coalesce(max(version),0) AS v FROM {self._V}").fetchone()["v"]
+                    for v in sorted(MIGRATIONS):
+                        if v > cur:
+                            for stmt in MIGRATIONS[v]:
+                                conn.execute(stmt.format(s=f'"{s}"'))
+                            conn.execute(f"INSERT INTO {self._V} (version) VALUES (%s)", (v,))
+            conn.execute(
+                f"INSERT INTO {self._M} (machine_id, app_version) VALUES (%s, %s) "
+                "ON CONFLICT (machine_id) DO UPDATE SET last_seen=now()",
+                (self.machine_id, _app_version()))
+
+    def close(self) -> None:
+        try:
+            self._pool.close(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def info(self) -> dict:
+        latency = None
+        try:
+            t = time.perf_counter()
+            self._q("SELECT 1", fetch="one")
+            latency = round((time.perf_counter() - t) * 1000, 1)
+        except DatabaseUnreachable:
+            pass
+        return {"backend": "postgres", "host": self.host, "database": self.database, "schema": self.schema,
+                "machine_id": self.machine_id, "connected": self.connected and latency is not None,
+                "latency_ms": latency, "last_error": self.last_error}
+
+    def drop_schema(self) -> None:
+        """Test helper: only for throw-away ``test_*`` schemas."""
+        if not self.schema.startswith("test_"):
+            raise RuntimeError("refusing to drop a non-test schema")
+        with self._pool.connection() as conn:
+            conn.execute(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
+
+    # ----------------------------------------------------------- locks
+    def _lock_for(self, aid: str) -> threading.RLock:
+        with self._guard:
+            return self._locks.setdefault(aid, threading.RLock())
+
+    # ----------------------------------------------------------- recovery
+    def recover_orphans(self) -> list[str]:
+        """Fail only jobs that are provably dead: owned by THIS machine (we just started, so
+        they are gone) or whose heartbeat is older than ``stale_seconds`` (their machine
+        crashed / lost network).  Jobs of other machines with a fresh heartbeat are untouched."""
+        msg = "interrupted: the application was restarted while this job was running"
+        rows = self._q(
+            f"UPDATE {self._J} SET status='failed', error=%s, finished_at=%s "
+            "WHERE status IN ('queued','running') AND (owner_machine_id=%s OR "
+            "heartbeat_at < now() - make_interval(secs => %s)) RETURNING id",
+            (msg, now(), self.machine_id, self.stale_seconds), fetch="all")
+        ids = [r["id"] for r in rows]
+        stuck = self._q(
+            f"SELECT a.id FROM {self._A} a WHERE (a.status='detecting' OR a.state->>'job_active'='true') "
+            f"AND NOT EXISTS (SELECT 1 FROM {self._J} j WHERE j.analysis_id=a.id "
+            "AND j.status IN ('queued','running'))", fetch="all")
+        for r in stuck:
+            with self.edit(r["id"]) as st:
+                refresh_status(st, job_running=False)
+        return ids
+
+    # ----------------------------------------------------------- analyses
+    def originals_dir(self, aid: str) -> Path:
+        return self.data_dir / "originals" / aid
+
+    def create_analysis(self, name: str) -> str:
+        aid = new_id()
+        ts = now()
+        a = Analysis(id=aid, name=name, created_at=ts, updated_at=ts, status=AnalysisStatus.created)
+        st = AnalysisState(analysis=a)
+        st.sync_depths()
+        self.originals_dir(aid).mkdir(parents=True, exist_ok=True)
+        with self._lock_for(aid):
+            self._q(
+                f"INSERT INTO {self._A} (id,name,status,created_at,updated_at,finalized_at,summary,state,"
+                "version,updated_by) VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,1,%s)",
+                (aid, a.name, a.status.value, a.created_at, a.updated_at, a.finalized_at,
+                 _summary(st), json.dumps(st.to_json()), self.machine_id))
+            self._cache[aid] = _Entry(st, 1)
+        return aid
+
+    def _build(self, row: dict, log: list[ReviewAction]) -> AnalysisState:
+        st = AnalysisState.from_json(row["state"], log)
+        migrate_legacy_state(st)
+        return st
+
+    def _fresh(self, aid: str) -> AnalysisState:
+        """Cached state if the DB version still matches, else (re)loaded. Caller holds the lock."""
+        ent = self._cache.get(aid)
+        if ent is not None and time.monotonic() - ent.checked < self.view_ttl:
+            return ent.st
+        if ent is not None:
+            r = self._q(f"SELECT version FROM {self._A} WHERE id=%s", (aid,), fetch="one")
+            if r is None:
+                self._cache.pop(aid, None)
+                raise NotFound("analysis", aid)
+            if r["version"] == ent.version:
+                ent.checked = time.monotonic()
+                return ent.st
+        return self._reload(aid, ent)
+
+    def _reload(self, aid: str, ent: Optional[_Entry]) -> AnalysisState:
+        last = ent.saved_len and ent.st.log[ent.saved_len - 1].seq if ent and ent.saved_len else 0
+        for attempt in (0, 1):
+            was_ready = self._ready_ok
+            try:
+                with self._conn() as conn, self._pipe(conn):
+                    c1 = conn.execute(f"SELECT version, state FROM {self._A} WHERE id=%s", (aid,))
+                    c2 = conn.execute(f"SELECT data FROM {self._X} WHERE analysis_id=%s AND seq>%s ORDER BY seq",
+                                      (aid, last))
+                row, acts = c1.fetchone(), c2.fetchall()
+                break
+            except DatabaseUnreachable:
+                if attempt or not was_ready:
+                    raise
+                self._ready_ok = True
+        if row is None:
+            self._cache.pop(aid, None)
+            raise NotFound("analysis", aid)
+        new = [ReviewAction.model_validate(a["data"]) for a in acts]
+        log = (list(ent.st.log[: ent.saved_len]) if ent else []) + new
+        st = self._build(row, log)
+        self._cache[aid] = _Entry(st, row["version"])
+        return st
+
+    @contextmanager
+    def view(self, aid: str) -> Iterator[AnalysisState]:
+        """Locked read access. Do not mutate."""
+        with self._lock_for(aid):
+            yield self._fresh(aid)
+
+    @contextmanager
+    def edit(self, aid: str) -> Iterator[AnalysisState]:
+        """One transaction: lock the analysis row, read, mutate (caller), write, commit."""
+        with self._lock_for(aid):
+            held = getattr(self._tls, "held", None)
+            if held is None:
+                held = self._tls.held = set()
+            if aid in held:
+                raise RuntimeError("nested store.edit() on the same analysis")
+            ent = self._cache.get(aid)
+            last = ent.st.log[ent.saved_len - 1].seq if ent and ent.saved_len else 0
+            held.add(aid)
+            try:
+                with self._conn() as conn:
+                    try:
+                        st = self._locked_read(conn, aid, ent, last)
+                        ent = self._cache[aid]
+                        try:
+                            yield st
+                        except BaseException:
+                            self._cache.pop(aid, None)  # discard possibly half-mutated state
+                            raise
+                        self._commit(conn, aid, st, ent)
+                    except BaseException:
+                        self._cache.pop(aid, None)
+                        self._rollback(conn)
+                        raise
+            finally:
+                held.discard(aid)
+
+    def _rollback(self, conn) -> None:
+        try:
+            if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+                conn.execute("ROLLBACK")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _locked_read(self, conn, aid: str, ent: Optional[_Entry], last: int) -> AnalysisState:
+        with self._pipe(conn):
+            conn.execute("BEGIN")
+            conn.execute("SET LOCAL lock_timeout='30s'")
+            conn.execute("SET LOCAL idle_in_transaction_session_timeout='180s'")
+            c1 = conn.execute(f"SELECT version, state FROM {self._A} WHERE id=%s FOR UPDATE", (aid,))
+            c2 = conn.execute(f"SELECT data FROM {self._X} WHERE analysis_id=%s AND seq>%s ORDER BY seq",
+                              (aid, last))
+        row = c1.fetchone()
+        acts = c2.fetchall()
+        if row is None:
+            self._rollback(conn)
+            raise NotFound("analysis", aid)
+        if ent is not None and ent.version == row["version"]:
+            ent.checked = time.monotonic()
+            return ent.st
+        new = [ReviewAction.model_validate(a["data"]) for a in acts]
+        log = (list(ent.st.log[: ent.saved_len]) if ent else []) + new
+        st = self._build(row, log)
+        self._cache[aid] = _Entry(st, row["version"])
+        return st
+
+    def _commit(self, conn, aid: str, st: AnalysisState, ent: _Entry) -> None:
+        a = st.analysis
+        rows = [
+            (aid, act.seq, act.ts, act.type.value if hasattr(act.type, "value") else str(act.type),
+             json.dumps(act.payload), self.machine_id, act.model_dump_json())
+            for act in st.log[ent.saved_len:]
+        ]
+        with self._pipe(conn):
+            cu = conn.execute(
+                f"UPDATE {self._A} SET name=%s,status=%s,updated_at=%s,finalized_at=%s,summary=%s::jsonb,"
+                "state=%s::jsonb,version=version+1,updated_by=%s,db_updated_at=now() WHERE id=%s AND version=%s",
+                (a.name, a.status.value, a.updated_at, a.finalized_at, _summary(st),
+                 json.dumps(st.to_json()), self.machine_id, aid, ent.version))
+            if rows:
+                conn.cursor().executemany(
+                    f"INSERT INTO {self._X} (analysis_id,seq,ts,type,payload,machine_id,data) "
+                    "VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s::jsonb) "
+                    "ON CONFLICT (analysis_id,seq) DO UPDATE SET data=EXCLUDED.data", rows)
+            conn.execute("COMMIT")
+        if cu.rowcount != 1:  # pragma: no cover - the row lock makes this impossible
+            self._cache.pop(aid, None)
+            raise ReviewError("conflict", "the analysis was changed by someone else; reload and retry", 409)
+        ent.version += 1
+        ent.saved_len = len(st.log)
+        ent.checked = time.monotonic()
+
+    def exists(self, aid: str) -> bool:
+        return self._q(f"SELECT 1 AS x FROM {self._A} WHERE id=%s", (aid,), fetch="one") is not None
+
+    def list_analyses(self) -> list[dict]:
+        rows = self._q(f"SELECT id,name,status,updated_at,finalized_at,summary FROM {self._A} "
+                       "ORDER BY updated_at DESC", fetch="all")
+        return [{"id": r["id"], "name": r["name"], "status": r["status"], "updated_at": r["updated_at"],
+                 "finalized_at": r["finalized_at"], "counts": r["summary"]} for r in rows]
+
+    def delete_analysis(self, aid: str) -> None:
+        with self._lock_for(aid):
+            n = self._q(f"DELETE FROM {self._A} WHERE id=%s", (aid,))
+            if not n:
+                raise NotFound("analysis", aid)
+            self._q(f"DELETE FROM {self._J} WHERE analysis_id=%s", (aid,))
+            self._cache.pop(aid, None)
+            shutil.rmtree(self.originals_dir(aid), ignore_errors=True)
+
+    # ----------------------------------------------------------- jobs
+    def create_job(self, aid: str) -> Job:
+        j = Job(id=new_id(), analysis_id=aid, status=JobStatus.queued)
+        try:
+            with self._conn() as conn:
+                with conn.transaction():
+                    conn.execute(
+                        f"UPDATE {self._J} SET status='failed', error='stale: owner stopped sending heartbeats', "
+                        "finished_at=%s WHERE analysis_id=%s AND status IN ('queued','running') "
+                        "AND heartbeat_at < now() - make_interval(secs => %s)",
+                        (now(), aid, self.stale_seconds))
+                    conn.execute(
+                        f"INSERT INTO {self._J} (id,analysis_id,status,progress,message,created_at,owner_machine_id)"
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                        (j.id, aid, j.status.value, 0.0, "", now(), self.machine_id))
+        except psycopg.errors.UniqueViolation:
+            raise RuntimeError("job_in_progress") from None
+        return j
+
+    def save_job(self, j: Job) -> bool:
+        """Persist progress + heartbeat. Returns True when a cancel was requested (by any machine)."""
+        r = self._q(
+            f"UPDATE {self._J} SET status=%s,progress=%s,message=%s,error=%s,started_at=%s,finished_at=%s,"
+            "heartbeat_at=now() WHERE id=%s RETURNING cancel_requested",
+            (j.status.value, j.progress, j.message, j.error, j.started_at, j.finished_at, j.id), fetch="all")
+        return bool(r and r[0]["cancel_requested"])
+
+    def touch_job(self, jid: str) -> bool:
+        r = self._q(f"UPDATE {self._J} SET heartbeat_at=now() WHERE id=%s AND status IN ('queued','running') "
+                    "RETURNING cancel_requested", (jid,), fetch="all")
+        return bool(r and r[0]["cancel_requested"])
+
+    def request_cancel(self, jid: str) -> None:
+        self._q(f"UPDATE {self._J} SET cancel_requested=true WHERE id=%s AND status IN ('queued','running')",
+                (jid,))
+
+    def find_active_job(self, aid: str) -> Optional[str]:
+        r = self._q(f"SELECT id FROM {self._J} WHERE analysis_id=%s AND status IN ('queued','running') "
+                    "AND heartbeat_at >= now() - make_interval(secs => %s) LIMIT 1",
+                    (aid, self.stale_seconds), fetch="one")
+        return r["id"] if r else None
+
+    def get_job(self, jid: str) -> Job:
+        r = self._q(f"SELECT *, extract(epoch from now() - heartbeat_at) AS age FROM {self._J} WHERE id=%s",
+                    (jid,), fetch="one")
+        if r is None:
+            raise NotFound("job", jid)
+        status = JobStatus(r["status"])
+        error = r["error"]
+        if status in (JobStatus.queued, JobStatus.running):
+            # an orphan whose owner vanished must not look alive forever
+            if r["age"] > self.stale_seconds:
+                status, error = JobStatus.failed, "stale: owner stopped sending heartbeats"
+        return Job(id=r["id"], analysis_id=r["analysis_id"], status=status, progress=r["progress"] or 0.0,
+                   message=r["message"] or "", error=error, started_at=r["started_at"],
+                   finished_at=r["finished_at"])
+
+    # ----------------------------------------------------------- csv imports
+    def csv_dir(self, cid: str) -> Path:
+        return self.data_dir / "csv_imports" / cid
+
+    def save_csv_import(self, c: CsvImport, created: bool = False) -> None:
+        self._q(f"INSERT INTO {self._C} (id,created_at,data) VALUES (%s,%s,%s::jsonb) "
+                "ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data", (c.id, now(), c.model_dump_json()))
+
+    def get_csv_import(self, cid: str) -> CsvImport:
+        r = self._q(f"SELECT data FROM {self._C} WHERE id=%s", (cid,), fetch="one")
+        if r is None:
+            raise NotFound("csv_import", cid)
+        return CsvImport.model_validate(r["data"])
+
+    def list_csv_imports(self) -> list[CsvImport]:
+        rows = self._q(f"SELECT data FROM {self._C} ORDER BY created_at DESC", fetch="all")
+        return [CsvImport.model_validate(r["data"]) for r in rows]
+
+
+def _app_version() -> str:
+    try:
+        import polony_app
+
+        return str(polony_app.__version__)
+    except Exception:  # noqa: BLE001
+        return ""

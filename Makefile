@@ -117,3 +117,15 @@ app-test: ## run the app test-suite (tests/app)
 
 .PHONY: app
 app: app-install app-run ## ONE command: install (venv) + build frontend (if npm) + run
+
+##@ Installer (install/, see docs/app/INSTALL.md)
+
+.PHONY: web
+web: ## rebuild the frontend and copy it to src/polony_app/webdist (committed; the one-command installer serves it)
+	@cd frontend && npm install --no-audit --no-fund && npm run build
+	@rm -rf src/polony_app/webdist && mkdir -p src/polony_app/webdist && cp -R frontend/dist/. src/polony_app/webdist/
+	@echo "webdist rebuilt: commit src/polony_app/webdist together with the frontend change"
+
+.PHONY: package-icons
+package-icons: ## regenerate install/assets/PolonyReview.{png,ico,icns} (needs Pillow)
+	@$(APP_PY) install/make_icons.py

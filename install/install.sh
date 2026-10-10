@@ -182,8 +182,7 @@ main() {
     else
       mkdir -p "$DATA" "$PH/logs"
       POLONY_HOME="$PH" POLONY_CFG_DATA="$DATA" "$VPY" "$APP/install/write_config.py"
-      "$VPY" -c 'import bigfish, tifffile, fastapi, uvicorn, skimage, scipy; print("  libraries import fine (big-fish %s)" % bigfish.__version__)' \
-        || die "the installed libraries cannot be imported"
+      "$VPY" "$APP/install/check_imports.py" | sed 's/^/  /' || die "the installed libraries cannot be imported"
       say "  starting a temporary server to test it (the first start takes a while) ..."
       POLONY_HOME="$PH" POLONY_CI=1 "$VPY" -m polony_app.launcher --self-test | sed 's/^/  /' || die "the self-test failed"
     fi

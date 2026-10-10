@@ -11,6 +11,9 @@ tifffile>=2023.8.12
 roifile>=2023.5.12
 Pillow>=10.1
 big-fish>=0.6.2
+# optional shared database (Neon / PostgreSQL); the app runs on local SQLite without a database URL
+psycopg[binary]>=3.2
+psycopg_pool>=3.2
 # tests
 httpx>=0.27
 pytest>=7.4

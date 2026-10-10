@@ -95,14 +95,14 @@ function Install-PolonyReview {
                 [void](Invoke-Quiet $vpy @('-m', 'polony_app.launcher', 'stop'))
             }
             New-Item -ItemType Directory -Force -Path $ph | Out-Null
-            Set-Location $ph
+            Push-Location $ph
             $tmp = Join-Path $ph 'app.new'
             if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
             $done = $false
             if ($env:POLONY_SOURCE) {
                 if (-not (Test-Path (Join-Path $env:POLONY_SOURCE 'src\polony_app'))) { Fail "POLONY_SOURCE=$($env:POLONY_SOURCE) is not a Polony checkout" }
                 Say "  copying the local checkout $($env:POLONY_SOURCE)"
-                $null = & robocopy $env:POLONY_SOURCE $tmp /E /NFL /NDL /NJH /NJS /NP /XD .git node_modules __pycache__ data
+                $null = & robocopy $env:POLONY_SOURCE $tmp /E /NFL /NDL /NJH /NJS /NP /XD .git node_modules __pycache__
                 if ($LASTEXITCODE -ge 8) { Fail "copying the checkout failed (robocopy exit code $LASTEXITCODE)" }
                 $done = $true
             } elseif ((Has 'git') -and (Test-Path (Join-Path $app '.git'))) {
@@ -138,6 +138,7 @@ function Install-PolonyReview {
                 if (Test-Path $app) { Remove-Item -Recurse -Force $app }
                 Move-Item $tmp $app
             }
+            Pop-Location
             if (-not (Test-Path (Join-Path $app 'requirements-app.txt'))) { Fail 'the downloaded code has no requirements-app.txt' }
         }
 
@@ -212,7 +213,7 @@ function Install-PolonyReview {
             [void](Invoke-Quiet $vpy @('-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', 'pip'))
             $code = Invoke-Show $vpy @('-m', 'pip', 'install', '-q', '--disable-pip-version-check', '-r', (Join-Path $app 'requirements-app.txt'), '-r', (Join-Path $app 'install\extra-requirements.txt'))
             if ($code -ne 0) { Fail 'installing the libraries failed (see the messages above)' }
-            $sp = (Invoke-Quiet $vpy @('-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])')).Out
+            $sp = (Invoke-Quiet $vpy @('-c', 'import sysconfig; print(sysconfig.get_paths()[''purelib''])')).Out
             Set-Content -Path (Join-Path $sp 'polony_review.pth') -Value (Join-Path $app 'src') -Encoding ASCII
         }
 
@@ -226,7 +227,7 @@ function Install-PolonyReview {
             $env:POLONY_CFG_DATA = $data
             $code = Invoke-Show $vpy @((Join-Path $app 'install\write_config.py'))
             if ($code -ne 0) { Fail 'could not write config.json' }
-            $code = Invoke-Show $vpy @('-c', 'import bigfish, tifffile, fastapi, uvicorn, skimage, scipy; print("libraries import fine (big-fish %s)" % bigfish.__version__)')
+            $code = Invoke-Show $vpy @((Join-Path $app 'install\check_imports.py'))
             if ($code -ne 0) { Fail 'the installed libraries cannot be imported' }
             Say '  starting a temporary server to test it (the first start takes a while) ...'
             $env:POLONY_CI = '1'
