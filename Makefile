@@ -106,7 +106,7 @@ app-install: ## create .venv (if APP_PY is the default) and install requirements
 	@echo "app dependencies installed for $(APP_PY)"
 
 .PHONY: app-run
-app-run: ## build frontend (if npm is present) and run the app on http://127.0.0.1:$(PORT)
+app-run: ## build frontend (if npm is present) and run the app on http://127.0.0.1:8000 (PORT=...)
 	@test -x "$$(command -v $(APP_PY))" || { echo "$(APP_PY) not found: run 'make app-install' first"; exit 1; }
 	@APP_PY=$(APP_PY) POLONY_DATA_DIR=$(APP_DATA_DIR) PORT=$(PORT) ./scripts/run_app.sh
 
