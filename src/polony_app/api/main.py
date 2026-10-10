@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import polony_app
-from polony_app.export import exporter
+from polony_app.export import exporter, lab
 from polony_app.review import engine
 from polony_app.review.counts import compute_counts, review_queue
 from polony_app.review.state import AnalysisState, ReviewError
@@ -85,6 +85,13 @@ class SettingsBody(BaseModel):
 class ActionBody(BaseModel):
     type: str
     payload: dict[str, Any] = {}
+
+
+class LabExportBody(BaseModel):
+    analysis_ids: list[str]
+    style: Literal["t7", "counts"] = "t7"
+    series: Optional[str] = None
+    format: Literal["xlsx", "csv", "zip"] = "xlsx"
 
 
 class CsvMapBody(BaseModel):
@@ -431,6 +438,15 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                 v = getattr(s, f)
                 if v is not None and not (v > 0 and v < float("inf")):
                     return err(422, "invalid_slide", f"{f} must be a positive number or null")
+            for f in ("field_area", "grid_area", "efficiency_input"):
+                v = getattr(s, f)
+                if v is not None and not (v > 0 and v < float("inf")):
+                    return err(422, "invalid_slide", f"{f} must be a positive number or null")
+            names = [x.name for x in s.lab_series]
+            if any(not n.strip() for n in names) or len(set(names)) != len(names):
+                return err(422, "invalid_slide", "lab_series names must be non-empty and unique")
+            if s.qc is not None and s.qc not in (0, 1):
+                return err(422, "invalid_slide", "qc must be 0, 1 or null")
             if s.csv_color_mapping:
                 bad = [v for v in s.csv_color_mapping.values() if v not in ("red", "green", "yellow")]
                 if bad:
@@ -627,6 +643,38 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             status = exporter.status_label(a)
         return Response(body, media_type=mt, headers={
             "Content-Disposition": f'attachment; filename="{fn}"', "X-Export-Status": status})
+
+    # ------------------------------------------------------------- lab export
+    def _lab_response(ids: list[str], style: str, series: Optional[str], fmt: str) -> Response:
+        analyses = []
+        for i in ids:
+            with store.view(aid_ok(i)) as st:
+                analyses.append(st.analysis.model_copy(deep=True))
+        try:
+            files, slides = lab.build_files(analyses, style, series, fmt)
+            out = lab.package(files, slides, style, fmt)
+        except lab.LabExportError as e:
+            return err(e.status, e.code, e.message, e.detail)
+        warnings = lab.all_warnings(slides)
+        return Response(out.data, media_type=out.media_type, headers={
+            "Content-Disposition": f'attachment; filename="{out.name}"', "X-Export-Status": "FINAL",
+            "X-Lab-Warnings": str(len(warnings))})
+
+    @api.get("/analyses/{aid}/lab-export")
+    def get_lab_export(aid: str, series: Optional[str] = None, format: Literal["xlsx", "csv"] = "xlsx"):
+        with store.view(aid_ok(aid)) as st:
+            names = [x.name for x in st.analysis.slide.lab_series]
+        if series is None:
+            if len(names) != 1:
+                return err(422, "series_required",
+                           "choose the series to export (?series=<name>); defined: " + (", ".join(names) or "none"),
+                           {"lab_series": names})
+            series = names[0]
+        return _lab_response([aid], "t7", series, format)
+
+    @api.post("/lab-export")
+    def post_lab_export(body: LabExportBody):
+        return _lab_response(body.analysis_ids, body.style, body.series, body.format)
 
     # ------------------------------------------------------------- csv imports
     @api.post("/csv-imports")

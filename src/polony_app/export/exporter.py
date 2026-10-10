@@ -10,6 +10,7 @@ from importlib import metadata
 from pathlib import Path
 
 import polony_app
+from polony_app.export import lab
 from polony_app.review.counts import compute_counts, counted_objects
 from polony_app.review.engine import (
     action_log_summary,
@@ -147,37 +148,51 @@ def regions_csv(a: Analysis) -> str:
 
 
 # ------------------------------------------------------------------ slide
-_CONC_KEYS = ["red_only", "green_only", "yellow", "total_objects_exclusive", "red_positive", "green_positive"]
+CONC_FORMULA = (
+    "LAB FORMULA (as in the researcher's T7 sheets): abundance_per_ml = mean(field counts) * "
+    "(field_area / grid_area) / sample_volume_ul * 1000, where the mean is over the lab fields "
+    "(counting regions with a field_index; blank = no region, 0 = region with zero objects) and the count "
+    "type of each series is the one chosen by the user (lab_series). The concentration factor is NOT "
+    "part of this formula (it is exported as a column; the Counts-style workbook multiplies by it); "
+    "no confidence interval"
+)
 
 
-def concentration(a: Analysis, counts) -> tuple[dict[str, float | None], str, list[str]]:
-    """Return (estimates, status text, missing inputs). Never invents inputs.
+def concentration(a: Analysis) -> tuple[dict[str, dict], str, list[str]]:
+    """Lab abundance per configured series. Returns ({series: {...}}, status text, missing inputs).
 
-    PROPOSED / UNCONFIRMED formula (area-scaled, count per ml of the sample):
-
-        conc_per_ml = (n_counted / counting_area_px2) * sample_total_area_px2
-                      / (sample_volume_ul / 1000) * concentration_factor
-
-    i.e. the counted density (objects per px^2 of the net counting area) is scaled to the
-    whole sample area and divided by the sample volume. ALL of the following are required,
-    otherwise every estimate cell is empty and the status lists what is missing:
-    concentration_formula_confirmed, sample_volume_ul, concentration_factor,
-    counting_area_px2 (union of counting regions net of exclusions and overlaps),
-    sample_total_area_px2 (same pixel units), confirmed channel mapping. No confidence
-    interval is computed; raw counts are always exported next to the estimates."""
+    Never invents inputs. ALL of these are required, otherwise every estimate cell is empty and
+    the status lists what is missing: concentration_formula_confirmed (= field geometry and
+    series mapping confirmed by the researcher), sample_volume_ul, field_area, grid_area,
+    at least one lab_series, at least one counting region with a valid field_index (1..24, no
+    duplicates), confirmed channel mapping. `concentration_factor`, `sample_total_area_px2` and
+    `counting_area_px2` are not used by the lab formula."""
     s = a.slide
-    area = counting_area_px2(a)
     missing = []
     if not s.concentration_formula_confirmed:
         missing.append("concentration_formula_confirmed")
     if not s.sample_volume_ul or s.sample_volume_ul <= 0:
         missing.append("sample_volume_ul")
-    if not s.concentration_factor or s.concentration_factor <= 0:
-        missing.append("concentration_factor")
-    if not area or area <= 0:
-        missing.append("counting_area_px2")
-    if not s.sample_total_area_px2 or s.sample_total_area_px2 <= 0:
-        missing.append("sample_total_area_px2")
+    if not s.field_area or s.field_area <= 0:
+        missing.append("field_area")
+    if not s.grid_area or s.grid_area <= 0:
+        missing.append("grid_area")
+    if not s.lab_series:
+        missing.append("lab_series")
+    est: dict[str, dict] = {}
+    warns: list[str] = []
+    n_field_regions = 0
+    for ser in s.lab_series:
+        fields, table, w, probs = lab.field_counts(a, ser.count_type)
+        n_field_regions = max(n_field_regions, len(table))
+        if probs:
+            missing.append(f"valid_field_index ({'; '.join(probs)})")
+        warns.extend(w)
+        est[ser.name] = {"count_type": ser.count_type.value, "fields": fields, "table": table,
+                         "n_fields": sum(1 for v in fields if v is not None), "abundance_per_ml": None}
+    if s.lab_series and not any(e["n_fields"] for e in est.values()) and not any(
+            m.startswith("valid_field_index") for m in missing):
+        missing.append("field_regions")
     if not mapping_confirmed(a):
         missing.append("confirmed_channel_mapping")
     if missing:
@@ -187,37 +202,34 @@ def concentration(a: Analysis, counts) -> tuple[dict[str, float | None], str, li
                 msg += "; also missing: " + ", ".join(missing[1:])
         else:
             msg = "inputs incomplete: " + ", ".join(missing)
-        return {k: None for k in _CONC_KEYS}, msg, missing
-    vol_ml = s.sample_volume_ul / 1000.0
-    scale = s.sample_total_area_px2 / area / vol_ml * s.concentration_factor
-    est = {k: getattr(counts, k) * scale for k in _CONC_KEYS}
-    msg = "computed (PROPOSED area-scaled formula, UNCONFIRMED; no confidence interval)"
-    if area > s.sample_total_area_px2:
-        msg += "; WARNING counting_area_px2 exceeds sample_total_area_px2 (check units)"
-    if counts.uncertain:
-        msg += f"; {counts.uncertain} unresolved uncertain object(s) excluded"
+        return est, msg, missing
+    for e in est.values():
+        vals = [v for v in e["fields"] if v is not None]
+        if vals:
+            e["abundance_per_ml"] = (sum(vals) / len(vals)) * (s.field_area / s.grid_area) / s.sample_volume_ul * 1000
+    msg = "computed (lab formula; no confidence interval)"
+    if warns:
+        msg += f"; {len(warns)} warning(s): " + " | ".join(warns)
     return est, msg, []
-
-
-CONC_FORMULA = (
-    "PROPOSED (UNCONFIRMED): (n_counted / counting_area_px2) * sample_total_area_px2 / (sample_volume_ul / 1000) * "
-    "concentration_factor; assumes the counted area is representative of the whole sample area (no chamber geometry, "
-    "no edge/loss model, no confidence interval)"
-)
 
 
 def slide_csv(a: Analysis) -> str:
     c = compute_counts(a)["slide"]
     regs = [r for r in a.regions if r.kind == RegionKind.counting]
-    est, cstat, _ = concentration(a, c)
+    est, cstat, missing = concentration(a)
+    ok = not missing
     pix = a.slide.pixel_size_um or (a.image.pixel_size_um if a.image else None)
     header = [
         "slide_id", "analysis_id", "reporting_mode", "red_only", "green_only", "yellow", "uncertain",
         "red_positive_incl_yellow", "green_positive_incl_yellow", "yellow_overlap",
         "total_objects_exclusive", "n_counting_regions", "n_regions_approved", "counting_area_px2",
-        "pixel_size_um", "sample_volume_ul", "concentration_factor", "sample_total_area_px2",
-        "est_conc_per_ml_red_only", "est_conc_per_ml_green_only", "est_conc_per_ml_yellow",
-        "est_conc_per_ml_total_exclusive", "est_conc_per_ml_red_positive", "est_conc_per_ml_green_positive",
+        "pixel_size_um", "sample_volume_ul", "concentration_factor", "field_area", "grid_area",
+        "lab_series", "n_field_regions",
+    ]
+    series_cols = []
+    for ser in a.slide.lab_series:
+        series_cols += [f"n_fields_{ser.name}", f"abundance_per_ml_{ser.name}"]
+    header += series_cols + [
         "concentration_status", "concentration_formula", "channel_mapping_confirmed", "stale_detection",
         "finalized_at", "status",
     ]
@@ -225,12 +237,15 @@ def slide_csv(a: Analysis) -> str:
         a.slide.slide_id, a.id, a.reporting_mode.value, c.red_only, c.green_only, c.yellow, c.uncertain,
         c.red_positive, c.green_positive, c.yellow, c.total_objects_exclusive, len(regs),
         sum(1 for r in regs if r.approved), counting_area_px2(a), pix, a.slide.sample_volume_ul,
-        a.slide.concentration_factor, a.slide.sample_total_area_px2,
-        est["red_only"], est["green_only"], est["yellow"], est["total_objects_exclusive"],
-        est["red_positive"], est["green_positive"], cstat,
-        CONC_FORMULA if cstat.startswith("computed") else "",
-        _b(mapping_confirmed(a)), _b(a.provenance.stale_detection), a.finalized_at, status_label(a),
+        a.slide.concentration_factor, a.slide.field_area, a.slide.grid_area,
+        "|".join(f"{x.name}={x.count_type.value}" for x in a.slide.lab_series),
+        sum(1 for r in regs if r.field_index is not None),
     ]
+    for ser in a.slide.lab_series:
+        e = est.get(ser.name, {})
+        row += [e.get("n_fields"), e.get("abundance_per_ml") if ok else None]
+    row += [cstat, CONC_FORMULA if ok else "", _b(mapping_confirmed(a)), _b(a.provenance.stale_detection),
+            a.finalized_at, status_label(a)]
     return _csv(header, [row])
 
 
@@ -280,6 +295,7 @@ def provenance_dict(state: AnalysisState, originals_dir: str | Path | None = Non
         "alignment_applied_to_green_px": state.alignment,
         "regions": [r.model_dump(mode="json") for r in a.regions],
         "slide": a.slide.model_dump(mode="json"),
+        "lab": lab_provenance(a),
         "counts": {"regions": [c.model_dump(mode="json") for c in counts["regions"]],
                    "slide": counts["slide"].model_dump(mode="json")},
         "action_log_summary": action_log_summary(state),
@@ -291,6 +307,33 @@ def provenance_dict(state: AnalysisState, originals_dir: str | Path | None = Non
             "objects_history.csv": "per-object history trail, including deleted objects",
         },
         "coordinate_convention": "pixel coordinates, x=column, y=row, pixel (0,0) centre = (0.0, 0.0)",
+    }
+
+
+def lab_provenance(a: Analysis) -> dict:
+    """Lab-export inputs: the series -> count type mapping the user chose, the field -> region
+    table per series and the abundance (or why it is withheld)."""
+    est, status, missing = concentration(a)
+    return {
+        "formula": CONC_FORMULA,
+        "concentration_status": status,
+        "missing_inputs": missing,
+        "lab_series": [x.model_dump(mode="json") for x in a.slide.lab_series],
+        "series": {
+            name: {
+                "count_type": e["count_type"],
+                "n_fields": e["n_fields"],
+                "abundance_per_ml": e["abundance_per_ml"] if not missing else None,
+                "fields": [{"field_index": t.field_index, "region_id": t.region_id, "region_name": t.region_name,
+                            "count": t.count, "counted_area_px2": t.area_px2,
+                            "counted_area_fraction": t.area_fraction, "note": t.note or None}
+                           for t in e["table"]],
+            }
+            for name, e in est.items()
+        },
+        "field_regions_without_series": [r.id for r in a.regions
+                                         if r.kind == RegionKind.counting and r.field_index is not None
+                                         and not a.slide.lab_series],
     }
 
 
@@ -339,7 +382,7 @@ Generated {now()} by polony_app {polony_app.__version__}.
 FILES
   objects_<S>.csv one row per non-deleted object, with per-channel evidence
   regions_<S>.csv per-region counts, areas, approval status
-  slide_<S>.csv   slide totals and (only if inputs are complete) concentration
+  slide_<S>.csv   slide totals and (only if inputs are complete) the lab-formula abundance
                   (<S> is DRAFT or FINAL, the same status rule as the downloaded file names
                   <name>_<kind>_<DRAFT|FINAL>.<ext>)
   provenance.json parameters, image hash/shape/bit depth, TIFF info text, original upload
@@ -365,20 +408,23 @@ CONVENTIONS
     an exclusion) have counted=false and are not in any count.
   * Channel colours come only from the user-confirmed channel mapping (see provenance.json).
 
-CONCENTRATION  (PROPOSED formula - UNCONFIRMED, not validated)
-  Estimates are filled in ONLY when ALL of these are provided: concentration_formula_confirmed
-  (default false), sample_volume_ul, concentration_factor, a counting area (union of the
-  counting regions net of exclusions and of overlaps between regions), sample_total_area_px2
-  (the total area, in the same pixel units, that the sample volume spreads over) and a
-  confirmed channel mapping. Otherwise the estimate columns are empty and concentration_status
-  reads "inputs incomplete: <what is missing>". Raw counts are always present.
-  Proposed formula (an assumption that the counted area is representative of the whole sample
-  area; no chamber geometry, loss or edge model):
-      conc_per_ml = (n_counted / counting_area_px2) * sample_total_area_px2
-                    / (sample_volume_ul / 1000) * concentration_factor
-  The same count in a 4x larger counting area therefore gives 1/4 of the concentration.
-  Please compare with the legacy CSV convention
-  abundance = mean(fields) * (field/grid) / volume_ul * 1000.
+CONCENTRATION  (LAB FORMULA)
+  The estimate columns of slide_<S>.csv follow the researcher's own T7 sheets:
+      abundance_per_ml = mean(field counts) * (field_area / grid_area) / sample_volume_ul * 1000
+  mean(field counts) is over the lab fields = counting regions that carry a field_index (1..24);
+  a field without a region is blank and not in the mean, a region with zero objects is 0 and is.
+  Each series in `lab_series` (e.g. T7A, T7B) uses the count type the USER chose for it
+  (red_only / green_only / yellow / red_positive / green_positive); it is never inferred.
+  The concentration factor is NOT part of this formula (as in the T7 sheets); it is exported as
+  a column, and the Counts-style lab workbook (polonies/ml, column AK) multiplies by it.
+  Estimates are filled in ONLY when concentration_formula_confirmed (= field geometry and series
+  mapping confirmed; default false), sample_volume_ul, field_area, grid_area, lab_series, at least
+  one field region and a confirmed channel mapping are present; otherwise the estimate columns
+  are empty and concentration_status reads "inputs incomplete: <what is missing>".
+  The field -> region table and the series mapping used are in provenance.json ("lab").
+  A field region partly covered by an exclusion is counted over the remaining area only (flagged
+  in concentration_status / the lab export Notes sheet); sample_total_area_px2 and
+  counting_area_px2 are not used by this formula.
 
 UNCERTAINTY
   No confidence interval is provided (the estimates are point values of an unconfirmed
