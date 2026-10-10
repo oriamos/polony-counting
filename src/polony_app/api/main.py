@@ -181,6 +181,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         aid = None
         try:
             staged: list[tuple[str, Path]] = []
+            orig_names_all: list[str] = []
             for i, f in enumerate(files):
                 orig = f.filename or f"file{i}.tif"
                 sname = safe_filename(orig, f"file{i}.tif")
@@ -197,7 +198,8 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                         out.write(chunk)
                 if size == 0:
                     return err(422, "empty_file", f"'{sname}' is empty")
-                staged.append((orig_name := sname, dst))
+                staged.append((sname, dst))
+                orig_names_all.append(orig)
             default_name = Path(staged[0][0]).stem
             aid = store.create_analysis((name or "").strip()[:120] or default_name)
             from polony_app.imaging.ingest import IngestError, ingest_files
@@ -223,6 +225,18 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                                 if c.index == idx:
                                     c.suggested_role = role
                 del names
+            try:  # original (unsanitised) upload names, for provenance: {stored_name: original_name}
+                from polony_app.imaging.ingest import _safe_name
+
+                manifest = {}
+                for i_, ((sname_, _), orig_) in enumerate(zip(staged, orig_names_all)):
+                    cand = _safe_name(i_, sname_)
+                    if (store.originals_dir(aid) / cand).exists():
+                        manifest[cand] = orig_
+                (store.originals_dir(aid) / "upload_manifest.json").write_text(
+                    json.dumps(manifest, indent=1, ensure_ascii=False), encoding="utf-8")
+            except Exception:  # noqa: BLE001  provenance aid only
+                pass
             with store.edit(aid) as st:
                 st.analysis.image = meta
                 engine.refresh_status(st)
@@ -252,6 +266,9 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         aid_ok(aid)
         if runner.active_job(aid):
             return err(409, "job_in_progress", "a detection job is running; cancel it first")
+        with store.view(aid) as st:
+            if st.analysis.finalized_at is not None:
+                return err(409, "analysis_finalized", "this analysis is finalized; reopen it before deleting")
         store.delete_analysis(aid)
         images.forget(aid)
         return {"ok": True}
@@ -291,6 +308,11 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             return err(422, "invalid_alignment", "shift larger than 500 px refused")
         with store.edit(aid) as st:
             engine.guard_editable(st)
+            im = st.analysis.image
+            if im is not None and (abs(body.dy) >= im.height / 2 or abs(body.dx) >= im.width / 2):
+                return err(422, "invalid_alignment",
+                           f"shift must be smaller than half the image size ({im.height // 2} px vertically, "
+                           f"{im.width // 2} px horizontally)")
             role_index(st.analysis, "green")  # mapping must be confirmed
             engine.set_alignment(st, body.dy, body.dx)
             images.forget(aid)
@@ -306,7 +328,10 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         if x1 <= x0 or y1 <= y0:
             raise ReviewError("invalid_crop", "crop must have x1>x0 and y1>y0", 422)
         im = st.analysis.image
-        return (max(0, x0), max(0, y0), min(im.width, x1), min(im.height, y1))
+        c = (max(0, x0), max(0, y0), min(im.width, x1), min(im.height, y1))
+        if c[2] <= c[0] or c[3] <= c[1]:
+            raise ReviewError("invalid_crop", f"crop lies outside the {im.width} x {im.height} image", 422)
+        return c
 
     @api.get("/analyses/{aid}/image/{view}")
     def get_image(aid: str, view: str, lo: Optional[float] = None, hi: Optional[float] = None,
@@ -398,10 +423,9 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             _detection_inputs(st)
             if runner.active_job(aid):
                 raise ReviewError("job_in_progress", "a detection job is already running", 409)
-            st.analysis.detection_request = body
             start_sig = _sig(st.analysis, st)
             regions = [r.model_copy(deep=True) for r in st.analysis.regions]
-            red, green = None, None  # loaded in the worker thread
+            align = (int(st.analysis.alignment_dy), int(st.analysis.alignment_dx))
             engine.refresh_status(st, job_running=True)
 
         def work(progress, cancelled):
@@ -417,7 +441,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             with store.view(aid) as st:
                 red, green = images.raw_pair(st)
             progress(0.02, "images loaded")
-            res = pipeline.run_detection(red, green, regions, body, progress, cancelled)
+            res = pipeline.run_detection(red, green, regions, body, progress, cancelled, alignment=align)
             if cancelled():
                 finish(None)
                 return "cancelled"
@@ -427,6 +451,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                         "regions, channel mapping or alignment changed while detection ran; "
                         "results discarded - run detection again"
                     )
+                st.analysis.detection_request = body  # committed only now that the result is applied
                 engine.apply_detection_result(
                     st, list(res.objects), body, dict(res.package_versions), list(res.notes)
                 )
@@ -458,10 +483,11 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                 return err(422, "invalid_window", "preview_window must lie within the image")
             red, green = images.raw_pair(st)
             regions = [r.model_copy(deep=True) for r in st.analysis.regions]
+            align = (int(st.analysis.alignment_dy), int(st.analysis.alignment_dx))
         from polony_app.detection import pipeline
 
         res = pipeline.run_detection(red, green, regions, body, lambda f, m="": None,
-                                     lambda: False, window=body.preview_window)
+                                     lambda: False, window=body.preview_window, alignment=align)
         return {"objects": [o.model_dump(mode="json") for o in res.objects], "notes": list(res.notes)}
 
     @api.get("/jobs/{jid}")

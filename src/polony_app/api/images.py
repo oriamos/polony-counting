@@ -103,14 +103,38 @@ class ImageService:
     def raw_pair(self, st: AnalysisState) -> tuple[np.ndarray, np.ndarray]:
         return self.raw(st, "red"), self.raw(st, "green")
 
+    def detection_valid_mask(self, st: AnalysisState, role: str) -> np.ndarray:
+        """The valid mask detection uses for this channel (counting minus exclusions; with no counting
+        region the large saturated outside area is excluded automatically; green also loses the strip
+        not covered by the alignment shift), so the processed view equals the detection image."""
+        from polony_app.detection.masks import build_valid_mask
+        from polony_app.imaging.registration import shifted_valid_region
+
+        a = st.analysis
+        red, green = self.raw(st, "red"), self.raw(st, "green")
+        shape = red.shape
+        valid = build_valid_mask(shape, a.regions)
+        if not any(r.kind.value == "counting" for r in a.regions):
+            from polony_app.detection.pipeline import _saturated_outside
+
+            req = a.detection_request
+            valid &= ~(_saturated_outside(red, req.red.spot_radius_px) | _saturated_outside(green, req.green.spot_radius_px))
+        dy, dx = int(a.alignment_dy), int(a.alignment_dx)
+        if role == "green" and (dy, dx) != (0, 0):
+            valid &= shifted_valid_region(shape, dy, dx)
+        return valid
+
     def processed(self, st: AnalysisState, role: str) -> np.ndarray:
         from polony_app.imaging.preprocess import correct_background
 
         a = st.analysis
         params = (a.detection_request.red if role == "red" else a.detection_request.green).background
-        key = self.proc_key(st, role)
+        key = self.proc_key(st, role) + (self._regions_sig(a),)
         return self._proc.get_or_make(
-            key, lambda: np.asarray(correct_background(self.raw(st, role), params), dtype=np.float32)
+            key,
+            lambda: np.asarray(
+                correct_background(self.raw(st, role), params, self.detection_valid_mask(st, role)), dtype=np.float32
+            ),
         )
 
     @staticmethod

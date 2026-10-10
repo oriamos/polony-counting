@@ -1,11 +1,20 @@
 """Pure review-engine tests (no FastAPI)."""
 import pytest
 
-from fakes import counting, exclusion, make_state, obj, rect
+from fakes import counting, exclusion, make_state as _make_state, obj, rect
 from polony_app.review import engine
 from polony_app.review.counts import compute_counts, review_queue
 from polony_app.review.state import ReviewError
 from polony_app.schemas import ObjectClass, Origin, ReportingMode, ReviewReason
+
+
+def make_state(*a, **k):
+    """fakes.make_state + what a real detection run records (request + input signature)."""
+    st = _make_state(*a, **k)
+    if st.analysis.provenance.detection_ran_at is not None:
+        st.analysis.provenance.detection_request = st.analysis.detection_request.model_copy(deep=True)
+        st.detection_sig = engine.input_signature(st.analysis)
+    return st
 
 
 def live(st):

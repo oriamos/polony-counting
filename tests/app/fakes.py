@@ -105,8 +105,9 @@ class FakeDetector:
         self.fail = False
         self.last_window = None
 
-    def __call__(self, red, green, regions, request, progress, cancelled, window=None):
+    def __call__(self, red, green, regions, request, progress, cancelled, window=None, alignment=(0, 0), **kw):
         self.calls += 1
+        self.last_alignment = alignment
         self.last_window = window
         from polony_app.detection import pipeline
 

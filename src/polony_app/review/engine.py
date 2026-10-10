@@ -34,7 +34,7 @@ from polony_app.schemas import (
 
 from ..detection import masks as _masks
 from .geometry import bbox, polygon_area, polygons_overlap, validate_polygon
-from .state import AnalysisState, ReviewError
+from .state import AnalysisState, DetectionCancelled, ReviewError
 
 RERUN_MERGE_RADIUS_PX = 3.0
 MAX_UNDO = 1000
@@ -46,6 +46,19 @@ def now() -> str:
 
 def _short(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
+def _unique_id(prefix: str, taken: set[str]) -> str:
+    """Fresh id not in `taken` (loops until unique), and reserves it."""
+    while True:
+        i = _short(prefix)
+        if i not in taken:
+            taken.add(i)
+            return i
+
+
+def _taken_ids(tx: "Tx") -> set[str]:
+    return {o.id for o in tx.a.objects} | set(tx.before_objs)
 
 
 # ------------------------------------------------------------------ guards
@@ -104,6 +117,55 @@ def region_objects_fingerprint(a: Analysis, region_id: str) -> str:
     return hashlib.sha256(json.dumps(objs).encode()).hexdigest()
 
 
+def _roles(a: Analysis) -> list[list]:
+    return [
+        [c.index, c.role.value if c.role else None, bool(c.role_confirmed)]
+        for c in (a.image.channels if a.image else [])
+    ]
+
+
+def input_signature(a: Analysis, request: DetectionRequest | None = None) -> dict:
+    """Everything a detection result depends on: the request, the regions, the channel
+    roles and the green->red alignment. Recorded at detection time (AnalysisState.detection_sig);
+    `provenance.stale_detection` is derived by comparing the CURRENT signature with it."""
+    req = (request if request is not None else a.detection_request).model_dump(mode="json")
+    regions = hashlib.sha256(
+        json.dumps(
+            [[r.id, r.kind.value, _round_poly(r.polygon)] for r in a.regions], sort_keys=True
+        ).encode()
+    ).hexdigest()
+    return {
+        "request": req,
+        "regions_sha256": regions,
+        "channel_roles": _roles(a),
+        "alignment": [int(a.alignment_dy), int(a.alignment_dx)],
+    }
+
+
+def request_differs(a: Analysis) -> bool:
+    """True if the parameters currently set differ from those the shown detection used."""
+    ran = a.provenance.detection_request
+    if a.provenance.detection_ran_at is None or ran is None:  # nothing recorded to compare with
+        return False
+    return ran.model_dump(mode="json") != a.detection_request.model_dump(mode="json")
+
+
+def compute_stale(a: Analysis, recorded_sig: dict | None, flag: bool = False) -> bool:
+    if a.provenance.detection_ran_at is None:
+        return False
+    if request_differs(a):
+        return True
+    if recorded_sig is None:  # legacy state without a recorded signature: keep the stored flag
+        return bool(flag)
+    return recorded_sig != input_signature(a)
+
+
+def recompute_stale(state: AnalysisState) -> bool:
+    a = state.analysis
+    a.provenance.stale_detection = compute_stale(a, state.detection_sig, a.provenance.stale_detection)
+    return a.provenance.stale_detection
+
+
 def region_fingerprint(a: Analysis, region: Region) -> str:
     """Hash of (region polygon, overlapping exclusion polygons, non-deleted
     objects inside). Anything affecting the count inside the region changes it."""
@@ -116,6 +178,8 @@ def region_fingerprint(a: Analysis, region: Region) -> str:
         "region": [region.id, region.kind.value, _round_poly(region.polygon)],
         "exclusions": excl,
         "objects": region_objects_fingerprint(a, region.id),
+        # a different channel mapping / alignment changes what the objects mean
+        "inputs": {"roles": _roles(a), "alignment": [int(a.alignment_dy), int(a.alignment_dx)]},
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -130,6 +194,7 @@ class Tx:
         self.before_objs: dict[str, dict | None] = {}
         self.before_regions: list[dict] | None = None
         self.before_prov: dict | None = None
+        self.before_book: dict | None = None
         self.cleared_approvals: list[str] = []
 
     def touch(self, obj_id: str) -> DetectedObject:
@@ -158,6 +223,17 @@ class Tx:
     def touch_prov(self) -> None:
         if self.before_prov is None:
             self.before_prov = self.a.provenance.model_dump(mode="json")
+        self.touch_book()
+
+    def _book(self) -> dict:
+        return {
+            "detection_sig": copy.deepcopy(self.state.detection_sig),
+            "user_deleted": list(self.state.user_deleted),
+        }
+
+    def touch_book(self) -> None:
+        if self.before_book is None:
+            self.before_book = self._book()
 
     def get(self, obj_id: str) -> DetectedObject:
         for o in self.a.objects:
@@ -187,6 +263,7 @@ class Tx:
             "provenance": self.a.provenance.model_dump(mode="json")
             if self.before_prov is not None
             else None,
+            "bookkeeping": self._book() if self.before_book is not None else None,
         }
 
     def commit(self, type_: ActionType, payload: dict, undoable: bool = True) -> ReviewAction:
@@ -197,6 +274,7 @@ class Tx:
                 "objects": self.before_objs,
                 "regions": self.before_regions,
                 "provenance": self.before_prov,
+                "bookkeeping": self.before_book,
             },
             "after": self._after_snapshot(),
         }
@@ -217,7 +295,8 @@ class Tx:
         return act
 
 
-def _apply_snapshot(a: Analysis, snap: dict) -> None:
+def _apply_snapshot(state: AnalysisState, snap: dict) -> None:
+    a = state.analysis
     objs = snap.get("objects") or {}
     index = {o.id: i for i, o in enumerate(a.objects)}
     appended: list[DetectedObject] = []
@@ -238,6 +317,10 @@ def _apply_snapshot(a: Analysis, snap: dict) -> None:
         from polony_app.schemas import Provenance
 
         a.provenance = Provenance.model_validate(snap["provenance"])
+    book = snap.get("bookkeeping")
+    if book is not None:
+        state.detection_sig = copy.deepcopy(book.get("detection_sig"))
+        state.user_deleted = list(book.get("user_deleted", []))
 
 
 def revalidate_approvals(a: Analysis, tx: Tx | None = None) -> list[str]:
@@ -261,11 +344,17 @@ def revalidate_approvals(a: Analysis, tx: Tx | None = None) -> list[str]:
     return cleared
 
 
-def refresh_status(state: AnalysisState, job_running: bool = False) -> None:
+def refresh_status(state: AnalysisState, job_running: bool | None = None) -> None:
+    """Recompute staleness and status. `job_running` True/False sets the persisted
+    `state.job_active` flag; None keeps it, so an edit made while a detection job runs can
+    never move 'detecting' to 'in_review'."""
     a = state.analysis
+    if job_running is not None:
+        state.job_active = bool(job_running)
+    recompute_stale(state)
     if a.finalized_at is not None:
         a.status = AnalysisStatus.finalized
-    elif job_running:
+    elif state.job_active:
         a.status = AnalysisStatus.detecting
     elif a.image is None:
         a.status = AnalysisStatus.created
@@ -382,7 +471,7 @@ def _h_add(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
     cls = _cls(_need(p, "cls"))
     rid = _check_position_counted(a, x, y)
     o = DetectedObject(
-        id=_short("m"),
+        id=_unique_id("m", _taken_ids(tx)),
         x=x,
         y=y,
         cls=cls,
@@ -396,11 +485,16 @@ def _h_add(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
 
 
 def _h_delete(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
-    for oid in _ids(p):
-        o = tx.get_live(oid)
+    ids = _ids(p)
+    objs = [tx.get_live(oid) for oid in ids]  # validate all before mutating
+    tx.touch_book()
+    for o in objs:
         tx.touch_obj(o)
         o.deleted = True
         _hist(o, "deleted by user", ts)
+        # explicit marker (snapshotted for undo/redo): this deletion was a user decision
+        if o.id not in tx.state.user_deleted:
+            tx.state.user_deleted.append(o.id)
 
 
 def _h_move(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
@@ -465,7 +559,7 @@ def _h_merge(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
             if r not in reasons:
                 reasons.append(r)
     new = DetectedObject(
-        id=_short("e"),
+        id=_unique_id("e", _taken_ids(tx)),
         x=cx,
         y=cy,
         cls=cls,
@@ -500,15 +594,19 @@ def _h_split(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
     tx.touch_obj(o)
     o.deleted = True
     new_ids = []
+    taken = _taken_ids(tx)
     for (x, y), c, rid in zip(pts, cl, rids):
+        # a child keeps only the evidence that matches its class
+        keep_r = c != ObjectClass.green
+        keep_g = c != ObjectClass.red
         n = DetectedObject(
-            id=_short("e"),
+            id=_unique_id("e", taken),
             x=x,
             y=y,
             cls=c,
             origin=Origin.manual if o.origin == Origin.manual else Origin.edited,
-            red=o.red.model_copy(deep=True),
-            green=o.green.model_copy(deep=True),
+            red=o.red.model_copy(deep=True) if keep_r else ChannelEvidence(detected=False),
+            green=o.green.model_copy(deep=True) if keep_g else ChannelEvidence(detected=False),
             review_reasons=list(o.review_reasons),
             reviewed=True,
             region_id=rid,
@@ -575,10 +673,10 @@ def _h_approve_region(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
             409,
             {"object_ids": unresolved},
         )
-    if a.provenance.stale_detection:
+    if recompute_stale(tx.state):
         raise ReviewError(
             "stale_detection",
-            "detection is stale (regions, channels or alignment changed); re-run detection first",
+            "detection is stale (parameters, regions, channels or alignment changed); re-run detection first",
             409,
         )
     has_obj = any(o.region_id == r.id and not o.deleted for o in a.objects)
@@ -620,9 +718,10 @@ def undo(state: AnalysisState) -> ReviewAction:
         raise ReviewError("nothing_to_undo", "nothing to undo", 409)
     seq = state.undo.pop()
     act = state.action_by_seq(seq)
-    _apply_snapshot(state.analysis, act.inverse["before"])
+    _apply_snapshot(state, act.inverse["before"])
     state.redo.append(seq)
     state.undo_performed += 1
+    _log_event(state, "undo", {"undone_seq": seq, "action_type": act.type.value})
     _after_history_move(state)
     return act
 
@@ -633,9 +732,10 @@ def redo(state: AnalysisState) -> ReviewAction:
         raise ReviewError("nothing_to_redo", "nothing to redo", 409)
     seq = state.redo.pop()
     act = state.action_by_seq(seq)
-    _apply_snapshot(state.analysis, act.inverse["after"])
+    _apply_snapshot(state, act.inverse["after"])
     state.undo.append(seq)
     state.redo_performed += 1
+    _log_event(state, "redo", {"redone_seq": seq, "action_type": act.type.value})
     _after_history_move(state)
     return act
 
@@ -688,9 +788,6 @@ def set_regions(state: AnalysisState, new_regions: list[Region]) -> ReviewAction
             if nid != o.region_id:
                 tx.touch_obj(o)
                 o.region_id = nid
-        if a.provenance.detection_ran_at is not None:
-            tx.touch_prov()
-            a.provenance.stale_detection = True
     update_counting_area(a)
     tx.revalidate()
     act = tx.commit(
@@ -729,18 +826,51 @@ def _log_event(state: AnalysisState, kind: str, detail: dict) -> None:
     state.analysis.updated_at = ts
 
 
-def _invalidate_for_input_change(state: AnalysisState, why: str) -> None:
-    """Inputs of detection changed: mark stale, clear approvals, drop undo."""
+def _invalidate_for_input_change(state: AnalysisState, why: str, detail: dict | None = None) -> None:
+    """Inputs of detection (channel mapping / alignment) changed. Whenever there is anything
+    that depends on them - a detection result, any object (also manual), any approval or
+    inspection mark - approvals and inspection marks are cleared and the undo history is
+    dropped (an undo would resurrect state that belongs to the old inputs). Staleness is
+    derived (refresh_status). The region fingerprint also contains roles + alignment, so
+    an approval could not survive this even if this function were bypassed."""
     a = state.analysis
-    if a.provenance.detection_ran_at is not None:
-        a.provenance.stale_detection = True
-    for r in a.regions:
-        if r.approved:
+    has_dependents = (
+        a.provenance.detection_ran_at is not None
+        or bool(a.objects)
+        or any(r.approved or r.inspected for r in a.regions)
+    )
+    cleared: list[str] = []
+    if has_dependents:
+        for r in a.regions:
+            if r.approved:
+                cleared.append(r.id)
             r.approved, r.approved_at, r.approval_fingerprint = False, None, None
-        r.inspected = False if a.provenance.detection_ran_at is not None else r.inspected
-    state.undo, state.redo = [], []
-    _log_event(state, why, {})
+            r.inspected = False
+        state.undo, state.redo = [], []
+    _log_event(state, why, {**(detail or {}), "approvals_cleared": cleared,
+                            "had_dependents": has_dependents})
     state.sync_depths()
+
+
+def _swap_red_green_evidence(state: AnalysisState, ts: str) -> int:
+    """Confirmed role swap (red channel <-> green channel): what the objects' 'red' and
+    'green' fields hold now belongs to the other colour. Mirror red<->green classes, swap
+    the evidence, keep yellow/uncertain classes, and force re-review. See RERUN_POLICY.md."""
+    n = 0
+    for o in state.analysis.objects:
+        if o.deleted:
+            continue
+        o.red, o.green = o.green, o.red
+        old = o.cls
+        if o.cls == ObjectClass.red:
+            o.cls = ObjectClass.green
+        elif o.cls == ObjectClass.green:
+            o.cls = ObjectClass.red
+        o.reviewed = False
+        _hist(o, f"red/green channel roles swapped: class {old.value} -> {o.cls.value}, "
+                 "evidence swapped, needs re-review", ts)
+        n += 1
+    return n
 
 
 def set_channel_mapping(state: AnalysisState, mapping: list[dict]) -> bool:
@@ -769,19 +899,27 @@ def set_channel_mapping(state: AnalysisState, mapping: list[dict]) -> bool:
             "invalid_mapping", "exactly one channel must be red and one green", 422
         )
     was_confirmed = mapping_confirmed(a)
-    changed = (not was_confirmed) or any(
-        (by_index[i].role.value if by_index[i].role else None) != r for i, r in roles.items()
-    )
+    old_roles = {i: (c.role.value if c.role else None) for i, c in by_index.items()}
+    changed = (not was_confirmed) or any(old_roles[i] != r for i, r in roles.items())
+    old_red = next((i for i, r in old_roles.items() if r == "red"), None)
+    old_green = next((i for i, r in old_roles.items() if r == "green"), None)
+    new_red = next(i for i, r in roles.items() if r == "red")
+    new_green = next(i for i, r in roles.items() if r == "green")
+    is_swap = was_confirmed and old_red == new_green and old_green == new_red
     from polony_app.schemas import ChannelRole
 
     for i, r in roles.items():
         by_index[i].role = ChannelRole(r)
         by_index[i].role_confirmed = True
     if changed:
-        if a.provenance.detection_ran_at is not None:
-            _invalidate_for_input_change(state, "channel_mapping_changed")
-        else:
-            _log_event(state, "channel_mapping_confirmed", {"roles": {str(k): v for k, v in roles.items()}})
+        detail: dict = {"roles": {str(k): v for k, v in roles.items()},
+                        "previous_roles": {str(k): v for k, v in old_roles.items()},
+                        "was_confirmed": was_confirmed}
+        if is_swap:
+            detail["red_green_swapped"] = _swap_red_green_evidence(state, now())
+        _invalidate_for_input_change(
+            state, "channel_mapping_changed" if was_confirmed else "channel_mapping_confirmed", detail
+        )
     a.provenance.reporting_mode = a.reporting_mode
     refresh_status(state)
     return changed
@@ -793,10 +931,10 @@ def set_alignment(state: AnalysisState, dy: int, dx: int) -> bool:
     if int(cur.get("dy", 0)) == int(dy) and int(cur.get("dx", 0)) == int(dx):
         return False
     state.alignment = {"dy": int(dy), "dx": int(dx)}
-    if state.analysis.provenance.detection_ran_at is not None:
-        _invalidate_for_input_change(state, "alignment_changed")
-    else:
-        _log_event(state, "alignment_changed", {"dy": int(dy), "dx": int(dx)})
+    _invalidate_for_input_change(
+        state, "alignment_changed",
+        {"dy": int(dy), "dx": int(dx), "previous": {"dy": int(cur.get("dy", 0)), "dx": int(cur.get("dx", 0))}},
+    )
     refresh_status(state)
     return True
 
@@ -813,11 +951,8 @@ def set_settings(state: AnalysisState, reporting_mode=None, slide=None, detectio
         a.slide.counting_area_px2 = keep_area  # computed from regions, not user-set
     if detection_request is not None:
         a.detection_request = detection_request
-        ran = a.provenance.detection_request
-        if a.provenance.detection_ran_at is not None and (
-            ran is None or ran.model_dump(mode="json") != detection_request.model_dump(mode="json")
-        ):
-            a.provenance.stale_detection = True
+    # staleness is derived: setting the parameters back to the ones used clears it again
+    recompute_stale(state)
     a.updated_at = now()
     _log_event(state, "settings_changed", {})
 
@@ -830,22 +965,36 @@ def apply_detection_result(
     package_versions: dict[str, str],
     notes: list[str],
     engine_name: str = "bigfish",
+    cancelled: Callable[[], bool] | None = None,
 ) -> ReviewAction:
-    """Merge a detection run into the analysis per docs/app/RERUN_POLICY.md."""
+    """Merge a detection run into the analysis per docs/app/RERUN_POLICY.md.
+
+    Call it inside the store's edit lock and pass `cancelled`: it is checked HERE, before
+    anything is mutated, so a cancelled job commits nothing (raises DetectionCancelled)."""
     guard_editable(state)
+    if cancelled is not None and cancelled():
+        raise DetectionCancelled("cancelled before commit")
     a = state.analysis
     tx = Tx(state)
     ts = now()
     r2 = RERUN_MERGE_RADIUS_PX ** 2
 
+    user_deleted = set(state.user_deleted)
+
     def is_tombstone(o: DetectedObject) -> bool:
-        return o.deleted and o.origin == Origin.auto and any(h.endswith("deleted by user") for h in o.history[-1:])
+        # explicit marker set by the `delete` action (any origin); merge/split deletions are not
+        return o.deleted and o.id in user_deleted
 
     live = [o for o in a.objects if not o.deleted]
     replaceable = [o for o in live if o.origin == Origin.auto and not o.reviewed]
     preserved = [o for o in live if not (o.origin == Origin.auto and not o.reviewed)]
     tombstones = [o for o in a.objects if is_tombstone(o)]
     anchors = [(o.x, o.y, "preserved") for o in preserved] + [(o.x, o.y, "tombstone") for o in tombstones]
+    # a deleted object that had been moved still suppresses re-detection where it was detected
+    for o in tombstones:
+        for ev in (o.red, o.green):
+            if ev.detected and ev.x is not None and ev.y is not None:
+                anchors.append((ev.x, ev.y, "tombstone"))
 
     before_fp = {r.id: region_objects_fingerprint(a, r.id) for r in _counting(a)}
 
@@ -875,7 +1024,7 @@ def apply_detection_result(
             continue
         old_id = n.id
         if n.id in existing_ids or not n.id:
-            n.id = _short("a")
+            n.id = _unique_id("a", existing_ids)
         existing_ids.add(n.id)
         idmap[old_id] = n.id
         n.history = list(n.history) + [f"{ts} created by detection"]
@@ -890,8 +1039,12 @@ def apply_detection_result(
     p.detection_ran_at = ts
     p.package_versions = dict(package_versions)
     p.engine = engine_name
-    p.stale_detection = False
     p.reporting_mode = a.reporting_mode
+    # signature of what this result was produced from (the `request` actually used + current
+    # regions/roles/alignment). Staleness is derived against the CURRENT analysis settings in
+    # refresh_status (called by commit): a settings change during the job => stale.
+    state.detection_sig = input_signature(a, request)
+    recompute_stale(state)
 
     # inspection of omissions is void for any region whose objects changed
     for r in _counting(a):
@@ -913,27 +1066,45 @@ def apply_detection_result(
 
 
 # ------------------------------------------------------------------ finalize / reopen
-def finalize_problems(a: Analysis) -> list[tuple[str, str]]:
+def finalize_problems(x: "Analysis | AnalysisState") -> list[tuple[str, str]]:
+    """Why the analysis cannot be finalized. Accepts the state (preferred: also compares the
+    recorded detection-input signature) or a bare Analysis."""
+    state = x if isinstance(x, AnalysisState) else None
+    a = state.analysis if state is not None else x
     probs = []
     counting = _counting(a)
     if not counting:
         probs.append(("no_counting_region", "define at least one counting region"))
     if not mapping_confirmed(a):
         probs.append(("channel_mapping_unconfirmed", "channel mapping has not been confirmed"))
-    if a.provenance.stale_detection:
+    sig = state.detection_sig if state is not None else None
+    if request_differs(a):
+        probs.append(("stale_detection",
+                      "the detection parameters now set differ from those the shown result was "
+                      "produced with; re-run detection (or set them back)"))
+    elif a.provenance.stale_detection or (
+        state is not None and compute_stale(a, sig, a.provenance.stale_detection)
+    ):
         probs.append(("stale_detection", "detection is stale; re-run detection"))
     if a.provenance.detection_ran_at is None and not any(not o.deleted for o in a.objects):
         probs.append(("no_detection", "no detection has been run and there are no objects"))
     unapproved = [r.name for r in counting if not r.approved]
     if unapproved:
         probs.append(("regions_not_approved", "regions not approved: " + ", ".join(unapproved)))
+    outdated = [
+        r.name for r in counting
+        if r.approved and r.approval_fingerprint != region_fingerprint(a, r)
+    ]
+    if outdated:
+        probs.append(("approval_outdated",
+                      "approval no longer matches the region content: " + ", ".join(outdated)))
     return probs
 
 
 def finalize(state: AnalysisState) -> ReviewAction:
     guard_editable(state)
     a = state.analysis
-    probs = finalize_problems(a)
+    probs = finalize_problems(state)
     if probs:
         raise ReviewError(
             probs[0][0],
@@ -991,6 +1162,6 @@ def action_log_summary(state: AnalysisState) -> dict:
         "redo_performed": state.redo_performed,
         "first_action_at": state.log[0].ts if state.log else None,
         "last_action_at": state.log[-1].ts if state.log else None,
-        "events": state.events[-50:],
+        "events": list(state.events),  # complete, never truncated
         "rerun_summaries": [a.payload for a in state.log if a.type == ActionType.rerun_detection],
     }

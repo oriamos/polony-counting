@@ -19,6 +19,11 @@ class ReviewError(Exception):
         self.detail = detail
 
 
+class DetectionCancelled(Exception):
+    """Raised by apply_detection_result when the job was cancelled before the commit
+    (the job runner recognises this class by name -> job ends as 'cancelled', nothing committed)."""
+
+
 @dataclass
 class AnalysisState:
     analysis: Analysis
@@ -30,6 +35,15 @@ class AnalysisState:
     redo_performed: int = 0
     prev_status: str | None = None
     events: list[dict] = field(default_factory=list)  # non-undoable events (mapping, reopen...)
+    # --- engine bookkeeping (the shared schema has no field for these) ---
+    # Inputs (request, regions, channel roles, alignment) that the CURRENT detection result was
+    # produced from. Staleness is DERIVED: stale <=> current inputs != this signature.
+    detection_sig: dict | None = None
+    # Ids of objects the user deleted with the `delete` action (explicit marker; any origin).
+    # Only these soft-deleted objects act as tombstones on re-detection.
+    user_deleted: list[str] = field(default_factory=list)
+    # A detection job is running (persisted; cleared by refresh_status(job_running=False)).
+    job_active: bool = False
 
     @property
     def alignment(self) -> dict[str, Any]:
@@ -60,6 +74,9 @@ class AnalysisState:
             "redo_performed": self.redo_performed,
             "prev_status": self.prev_status,
             "events": self.events,
+            "detection_sig": self.detection_sig,
+            "user_deleted": self.user_deleted,
+            "job_active": self.job_active,
         }
 
     @classmethod
@@ -75,4 +92,7 @@ class AnalysisState:
         st.redo_performed = d.get("redo_performed", 0)
         st.prev_status = d.get("prev_status")
         st.events = d.get("events", [])
+        st.detection_sig = d.get("detection_sig")
+        st.user_deleted = list(d.get("user_deleted", []))
+        st.job_active = bool(d.get("job_active", False))
         return st
