@@ -52,15 +52,21 @@
 * **Reopen** is logged as `ActionType.reopen`; alignment lives on `Analysis.alignment_dy/dx`;
   upload pairing hints (`red_file`/`green_file`) only set `ChannelInfo.suggested_role` - `role`
   stays None and unconfirmed until `PUT /channels`.
-* **Concentration** is gated first by `SlideMeta.concentration_formula_confirmed` (default
-  false). Unless it is true AND `sample_volume_ul`, `concentration_factor`, a counting area
-  (net of exclusions and of overlaps between counting regions), `sample_total_area_px2` and a
-  confirmed mapping are all present, every concentration cell is empty and
-  `concentration_status` lists what is missing ("inputs incomplete: ..."). The built-in
-  formula is only a PROPOSAL, flagged UNCONFIRMED in the export README and the CSV:
-  `conc_per_ml = (n_counted / counting_area_px2) * sample_total_area_px2 /
-  (sample_volume_ul/1000) * concentration_factor` (assumes the counted area is representative
-  of the whole sample area; the same count in a 4x larger counting area gives 1/4 of the
-  concentration). The legacy convention
-  `abundance = mean(fields)*(field/grid)/volume_ul*1000` is quoted for the researcher to compare.
-  No confidence interval is ever exported.
+* **Concentration / lab abundance** is gated first by `SlideMeta.concentration_formula_confirmed`
+  (default false; it now means "field geometry and series mapping confirmed by the researcher").
+  Unless it is true AND `sample_volume_ul`, `field_area`, `grid_area`, at least one `lab_series`,
+  at least one counting region with a `field_index` (1..24, unique) and a confirmed channel mapping
+  are present, every estimate cell is empty and `concentration_status` lists what is missing
+  ("inputs incomplete: ..."). The formula is the researcher's own (T7 sheets):
+  `abundance = mean(field counts) * (field_area/grid_area) / sample_volume_ul * 1000`, mean over
+  the fields that exist (blank = no region, 0 = region with zero objects). The concentration
+  factor is **not** part of it (it is exported as a column; the Counts-style workbook multiplies
+  by it in AK). The count type of every series (red_only / green_only / yellow / red_positive /
+  green_positive) is chosen by the user in `lab_series`, never inferred. `sample_total_area_px2`
+  is no longer used. No confidence interval is ever exported.
+* **Lab export** (`GET /api/analyses/{id}/lab-export`, `POST /api/lab-export`; details in
+  `LAB_EXPORT.md`) works on FINALIZED analyses only (409 `not_finalized` otherwise) and answers 422
+  `lab_export_incomplete` with the exact missing items per analysis. A field region that exclusions
+  cover partly is counted over the remaining area only and flagged in the Notes sheet; a field
+  that is covered completely is left blank and flagged. Counting regions without a `field_index`
+  are not in the lab export (warned).

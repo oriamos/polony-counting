@@ -144,11 +144,11 @@ The Finish tab offers (API: `GET /api/analyses/{id}/export?kind=...`):
 |---|---|
 | `objects*.csv` | one row per non-deleted object: id, x, y (pixels; x = column, y = row; pixel (0,0) centre = 0.0), class, origin, region_id, `counted` (inside a counting region and outside exclusions), per-channel evidence (`red_/green_` detected, x, y, peak, local_background, snr, saturated), `association_distance_px`, `review_reasons` (`|`-separated), `ambiguous_with`, `reviewed`, `status` |
 | `regions*.csv` | per region: area_px2, red_only, green_only, yellow, uncertain, red_positive_incl_yellow, green_positive_incl_yellow, yellow_overlap, total_objects_exclusive, reporting_mode, inspected, approval_status, approved_at, status. Exclusions appear with empty counts |
-| `slide*.csv` | slide totals (same count columns), n_counting_regions, n_regions_approved, counting_area_px2, pixel_size_um, sample inputs, `est_conc_per_ml_*`, `concentration_status`, `concentration_formula`, channel_mapping_confirmed, stale_detection, finalized_at, status |
+| `slide*.csv` | slide totals (same count columns), n_counting_regions, n_regions_approved, counting_area_px2, pixel_size_um, sample inputs, field_area, grid_area, `lab_series`, `n_fields_<series>`, `abundance_per_ml_<series>`, `concentration_status`, `concentration_formula`, channel_mapping_confirmed, stale_detection, finalized_at, status |
 | `provenance.json` | parameters requested and used, package versions at detection and export, recorded detection inputs, image hash/shape/bit depth, TIFF info text, original upload names, channel mapping, alignment, regions, slide metadata, counts, action summary, complete event list |
 | `actions.jsonl` | complete review-action log (the undo/redo snapshots are omitted) |
 | `objects_history.csv` | per-object history trail including deleted objects |
-| `*.zip` bundle | all of the above plus `README.txt` (conventions, concentration caveats) |
+| `*.zip` bundle | all of the above plus `README.txt` (conventions, lab formula) |
 
 **Draft vs final.** Until finalized, file names end in `_DRAFT`, every CSV row has `status = DRAFT`, and the bundle README starts with "DRAFT - NOT FINAL". After finalizing: `FINAL`. Do not use DRAFT numbers as results.
 
@@ -161,14 +161,22 @@ Selected on the **Totals** tab (`reporting_mode`); both sets of columns are alwa
 
 `uncertain` is in neither. Which convention the laboratory reports for each assay is **not confirmed**; see the open questions. In particular, if the quantity reported per clade is the dual-positive (yellow) count, the choice is decisive.
 
-## 14. Concentration
+## 14. Concentration (lab formula)
 
-Estimates are written only if ALL of these are set: `concentration_formula_confirmed` (default false; the researcher must tick it), sample volume (uL), concentration factor, sample total area (px^2), a counting area from the regions, and a confirmed mapping. Otherwise the
-estimate cells are empty and `concentration_status` lists what is missing. The built-in formula is a **proposal, unconfirmed**:
+The estimate columns use the laboratory's own T7 formula:
 
-`conc_per_ml = (n_counted / counting_area_px2) * sample_total_area_px2 / (sample_volume_ul / 1000) * concentration_factor`
+`abundance_per_ml = mean(field counts) * (field_area / grid_area) / sample_volume_ul * 1000`
 
-It differs from the legacy convention `abundance = mean(fields) * (field/grid) / volume_ul * 1000`. No confidence interval is produced. Raw counts are always exported.
+Fields are counting regions that carry a **field number** (1-24); a missing field is blank and not averaged, a field with zero objects counts as 0. Each series (e.g. `T7A`, `T7B`) counts one **count type** that you choose (red-only, green-only, yellow, red-positive, green-positive); the app never guesses it from the name. The CONCENTRATION FACTOR is not part of this formula (as in your T7 sheets); the Counts-style workbook multiplies by it (column AK). Estimates are written only if `concentration_formula_confirmed` (tick it once field geometry and series mapping are right), volume, field area, grid area, a series, at least one field and a confirmed mapping are set; otherwise `concentration_status` lists what is missing. No confidence interval is produced. Raw counts are always exported.
+
+### Lab export (T7 / Counts files)
+
+For finalized slides, **Lab export** (or `GET /api/analyses/{id}/lab-export?series=T7B&format=xlsx|csv`, `POST /api/lab-export`) writes your workbook layouts:
+
+* **T7-style**: `T7B_15-09-2026.xlsx|csv` (series name + sampling date), one row per slide, same headers as your template, real Excel formula in column I (the xlsx also carries the calculated values), dates `dd/mm/yyyy` in the CSV (UTF-8 BOM, CRLF line ends, abundance with 10 significant digits as in your CSVs).
+* **Counts-style**: `Counts_<polony date>.xlsx`, one sheet per series, replicates paired by slide ID `<sample>_A` / `<sample>_B`; NTC columns are filled only if a slide ID starting with `NTC` is part of the export (never `#REF!`).
+* A **Notes** sheet (and `lab_export_notes.txt` in zips) lists the series mapping, analysis ids, SHA-256 of the original images, the field-to-region table and warnings (fields partly covered by an exclusion are counted over the remaining area only; uncertain objects; regions without a field number).
+* Refused with a clear message: unfinalized analyses, field number > 24 or duplicated, missing metadata (the exact list is returned).
 
 ## 15. CSV import
 
