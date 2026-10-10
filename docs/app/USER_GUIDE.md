@@ -43,7 +43,7 @@ membership and area; areas are pixel-centre counts. The automatic threshold is c
 ## 4. Parameters and preview
 
 The **Detect** tab holds the parameters of [PARAMETERS.md](PARAMETERS.md) for red and green and the match tolerance. Use **Preview on selected window** (drag a window): temporary dotted amber rings show what would be found there with the
-current parameters; nothing is saved. Tune the spot radius to the visible blob size first.
+current parameters; nothing is saved. Tune the spot radius to the visible blob size first, and keep it matched to the real spots: the debris-like flag is relative to the configured radius (a blob with sigma below about 0.6 x radius counts as compact), so a radius that is too large turns genuine small polonies into `debris_like` / `uncertain` (in a synthetic test all 144 small dual-channel polonies with sigma 1.5-3 px were `uncertain` at radius 5). The threshold is in noise units (LoG response divided by its robust noise sigma), so it does not change with image brightness; a value below about 5 is noise. If a channel is empty or nearly empty the run shows a WARNING (noise-regime threshold or mostly debris-like spots): confirm it visually before trusting its count.
 
 ![Preview](img/04-preview.png)
 
@@ -178,6 +178,7 @@ The left rail can import a researcher CSV (e.g. `T7A_15-09-2026.csv`) for viewin
 
 * Each re-detection stores a before-snapshot of every replaced automatic object so it can be undone; with 10 000+ objects a re-run (and the saved state) gets slow and large. Split very dense slides into separate analyses/regions.
 * Export names: downloads are `<name>_<kind>_<DRAFT|FINAL>.<ext>`; the three CSVs inside the bundle are `objects|regions|slide_<DRAFT|FINAL>.csv`; `provenance.json`, `actions.jsonl` and `objects_history.csv` keep fixed names inside the bundle and carry `status` in their content (objects_history.csv column, actions.jsonl field, provenance `status`).
+* Counts are not validated for accuracy (one red-only test image; see SCIENCE_NOTES, "Measured performance and limits"). Touching saturated polonies stay merged into one object flagged `suspicious_shape`: check those by eye.
 * Unknown fields in `PUT /settings` and `POST /detect` bodies are refused (422) instead of being ignored.
 
 ## What the app will not do

@@ -90,13 +90,13 @@ function ParamTable({ req, set, disabled }: { req: DetectionRequest; set: (r: De
           <Row label="Min. distance" unit="px">
             {(ch, p) => <NumInput value={p.minimum_distance_px} min={1} step={0.5} onChange={(v) => u(ch, { minimum_distance_px: v ?? p.minimum_distance_px })} />}
           </Row>
-          <Row label="Threshold">
+          <Row label="Threshold (noise units, robust σ of the LoG response)">
             {(ch, p) => (
               <div className="seg sm" role="group" aria-label={`${ch} threshold mode`}>
                 <button type="button" className={p.threshold == null ? 'on' : ''} onClick={() => u(ch, { threshold: null })}>
                   Auto
                 </button>
-                <button type="button" className={p.threshold != null ? 'on' : ''} onClick={() => u(ch, { threshold: p.threshold ?? 100 })}>
+                <button type="button" className={p.threshold != null ? 'on' : ''} onClick={() => u(ch, { threshold: p.threshold ?? 50 })}>
                   Manual
                 </button>
               </div>
@@ -105,7 +105,7 @@ function ParamTable({ req, set, disabled }: { req: DetectionRequest; set: (r: De
           <Row label="Auto scale" unit="×">
             {(ch, p) => <NumInput value={p.threshold_scale} min={0.05} step={0.05} disabled={p.threshold != null} onChange={(v) => u(ch, { threshold_scale: v ?? 1 })} />}
           </Row>
-          <Row label="Manual value" unit="intensity">
+          <Row label="Manual value" unit="noise units (σ of LoG)">
             {(ch, p) => <NumInput value={p.threshold} min={0} disabled={p.threshold == null} onChange={(v) => u(ch, { threshold: v ?? 0 })} />}
           </Row>
           <Row label="Background">
@@ -145,7 +145,7 @@ function ParamTable({ req, set, disabled }: { req: DetectionRequest; set: (r: De
           </Row>
         </tbody>
       </table>
-      <div className="hint">“Auto scale” multiplies the Big-FISH automatic threshold (1 = unchanged); “Manual value” replaces it.</div>
+      <div className="hint">Thresholds are in noise units: the LoG response divided by its robust noise σ (1.4826 × MAD over the counting area), so they do not depend on image brightness. “Auto scale” multiplies the automatic threshold (1 = unchanged); “Manual value” replaces it (the automatic one is typically 40–60 on the test image; a value below ~5 is in the noise).</div>
       {(req.red.dense_decomposition || req.green.dense_decomposition) && (
         <div className="notice warn small">
           Dense decomposition can split or merge clumps by modelling a reference spot. It changes counts in crowded areas, so review those regions carefully. Off by default.

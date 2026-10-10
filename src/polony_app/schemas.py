@@ -79,6 +79,7 @@ class RegionKind(str, Enum):
 
 class Region(BaseModel):
     id: str
+    field_index: Optional[int] = None   # lab "field" number (1-based) for counting regions; None = not a lab field
     kind: RegionKind
     name: str
     # Closed polygon [[x,y],...]; rectangle = 4 points. Pixel coords.
@@ -238,9 +239,32 @@ class Job(BaseModel):
     finished_at: Optional[str] = None
 
 
+class LabCountType(str, Enum):
+    red_only = "red_only"
+    green_only = "green_only"
+    yellow = "yellow"
+    red_positive = "red_positive"      # red_only + yellow
+    green_positive = "green_positive"  # green_only + yellow
+
+
+class LabSeries(BaseModel):
+    """One count series exported in the lab layout (e.g. the researcher's 'T7A' / 'T7B' files).
+    The user must choose which count type feeds each series: it is never inferred."""
+    name: str                          # file/sheet name, e.g. "T7A"
+    count_type: LabCountType
+    sheet_title: Optional[str] = None  # title used in the Counts-style workbook (e.g. "Clade A")
+
+
 class SlideMeta(BaseModel):
     """Explicit scientific inputs. None = not provided (gates concentration)."""
-    slide_id: Optional[str] = None
+    slide_id: Optional[str] = None          # lab slide ID, e.g. "AI_A" (sample + "_" + replicate letter)
+    sampling_date: Optional[str] = None     # dd/mm/yyyy, as in the lab files
+    polony_date: Optional[str] = None       # dd/mm/yyyy
+    qc: Optional[int] = None                # lab QC flag (0/1); meaning unconfirmed
+    field_area: Optional[float] = None      # lab "field [Pixel^2]" value (template: 2.9)
+    grid_area: Optional[float] = None       # lab "grid [Pixel^2]" value (template: 0.1)
+    lab_series: list[LabSeries] = []        # count series to export in lab layout
+    efficiency_input: Optional[float] = None  # denominator for 'Efficiency' (template: 1500); optional
     sample_volume_ul: Optional[float] = None
     concentration_factor: Optional[float] = None   # dilution/concentration
     sampled_area_note: Optional[str] = None

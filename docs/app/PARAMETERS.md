@@ -19,7 +19,7 @@ Red and green have separate parameter sets (`request.red`, `request.green`); the
 |---|---|---|
 | `spot_radius_px` ("Spot radius") | 5.0 | Passed to Big-FISH as `log_kernel_size`: the **standard deviation (sigma) of the Laplacian-of-Gaussian in px**, not a radius or diameter. On `test_img.tif` the fitted polony sigma had median 5.3 px (IQR 4.6-6.1). The sigma of other slides may differ (screenshots suggested 8-12 px, not measured). Also sets the size of the measurement disc, the local-background annulus (2.0 to 3.5 x radius) and the near-edge distance (2 x radius). |
 | `minimum_distance_px` ("Min. distance") | 5.0 | Big-FISH local-maximum window: `ndi.maximum_filter` with a **square** window of side `2*ceil(d)+1`. Two peaks closer than `ceil(d)` along both axes collapse into one. Changing it between 1x and 2x sigma changed counts by <= 4 % on test_img. Also used by the `dense_cluster` rule. |
-| `threshold` (mode "Manual", "Manual value") | `None` = automatic | A threshold on the **LoG response** of the background-corrected float32 image, in LoG units. It is not an intensity, is not scale-normalised, and is not comparable between channels or between different spot radii. If set, `threshold_scale` is ignored (a note says so). |
+| `threshold` (mode "Manual", "Manual value") | `None` = automatic | A threshold on the **LoG response** of the background-corrected float32 image, expressed in **noise units**: LoG response divided by its robust noise sigma (1.4826 x MAD of the signed LoG response over the valid pixels, computed after masking and background correction). It is therefore independent of image brightness / exposure, but still depends on the spot radius. UI label: "Threshold (noise units, robust sigma of the LoG response)". The absolute LoG threshold applied is `threshold x noise sigma` (stored as `threshold_abs` in the run info). Values below about 5 are within the noise. If set, `threshold_scale` is ignored (a note says so). |
 | `threshold_scale` ("Auto scale") | 1.0 | Multiplies the automatic value (or the noise fallback below). 1 = unchanged. On test_img the automatic value was about 2-3 x stricter than the researcher's manual marks; lower scales find more spots but also more debris. |
 | `background.method` ("Background") | `gaussian_subtract` | `none`, `gaussian_subtract` or `white_tophat`. See below. |
 | `background.sigma_px` | 50.0 | Sigma of the Gaussian background estimate (`gaussian_subtract`), about 10 x the spot sigma. |
@@ -33,15 +33,17 @@ Red and green have separate parameter sets (`request.red`, `request.green`); the
 ### Threshold: auto, manual, scale
 
 1. **Automatic** (`threshold = None`): the Big-FISH `automated_threshold_setting` (elbow of the
-   spot-count vs threshold curve) is applied to the LoG response **restricted to the valid mask** (counting regions
-   minus exclusions), computed **once on the whole masked image per channel** and cached, then multiplied
-   by `threshold_scale`. Preview windows and tiles reuse exactly this value, so a preview shows what the full run would
+   spot-count vs threshold curve) is applied to the **noise-normalised** LoG response (divided by its robust sigma, see above) **restricted to the valid mask** (counting regions
+   minus exclusions), computed **once on the whole masked image per channel** and cached (together with the noise sigma, which a manual threshold also needs), then multiplied
+   by `threshold_scale`. Why noise units: Big-FISH's candidate grid is absolute (integer steps up to the 99.9999th percentile), so on raw LoG units the same slide imaged at x0.5 / x0.25 brightness gave a different automatic threshold and different detections (R=5 on test_img: 103 -> 67 -> 64 red detections, recall vs the 77 marks 0.56 -> 0.44 -> 0.43). In noise units the detections are identical at x1, x0.5, x0.25 (tested, synthetic and test_img) and with a constant offset. Detections of a *clipped* image still change when the exposure change un-clips pixels (plateau merging). Preview windows and tiles reuse exactly this value, so a preview shows what the full run would
    find in the window.
-2. **Fallback**: if Big-FISH cannot pick a value (too few maxima, monotone curve, `ValueError`) or returns <= 0, the app uses
-   `5 x 1.4826 x MAD` of the signed -LoG response over the valid pixels, and says so in the notes ("WARNING automatic
+2. **Fallback**: if Big-FISH cannot pick a value (too few maxima, monotone curve, `ValueError`), returns <= 0, or picks an elbow below 5 noise units (the noise regime: local maxima of pure LoG noise rarely exceed ~4 sigma, i.e. there is no separable population of spots, as in an empty or very sparse channel), the app uses
+   5 noise units (`5 x 1.4826 x MAD` of the signed -LoG response over the valid pixels), and says so in the notes (the noise-regime case reads "WARNING automatic threshold (x noise units) is in the noise regime ... this channel may contain no (or very few) real spots") ("WARNING automatic
    threshold unusable ... Set a threshold manually if unsure"). The automatic method is known to fail on sparse slides (few true spots)
    and on images with bright structures inside the analysed area.
-3. **Manual**: the given LoG value is used as is.
+3. **Manual**: the given value is used as is, in noise units (the noise sigma is still estimated on the full counting area, so previews match the full run).
+
+**Empty-channel warning.** If more than 50 % of a channel's spots (at least 3) are debris-like (compact relative to the configured radius), the run adds a WARNING note per channel suggesting the channel may be empty or the radius too large; classes are not changed.
 
 A counting region is strongly recommended: without one, large saturated areas (>= 5000 px, dilated by about 3 radii) are
 excluded automatically as a best effort and a WARNING note is added; otherwise the whole image is counted. On test_img an unmasked
@@ -73,8 +75,7 @@ grid) and each spot is reported by the tile whose core contains its peak pixel, 
 ### Saturated spots
 
 Connected saturated components (raw value == dtype maximum, inside the mask) are merged into **one** spot at the plateau centroid, flagged
-`saturated`. A plateau whose equivalent diameter exceeds 6 x spot radius also gets `suspicious_shape`. A plateau is a lower bound of the true spot; touching
-saturated polonies cannot be resolved from clipped data.
+`saturated`. A plateau gets `suspicious_shape` if its equivalent diameter exceeds 6 x spot radius, if its elongation exceeds 1.3, or if more than one LoG maximum lay on it (touching saturated polonies; synthetic test: two sigma-5 polonies 10-18 px apart are flagged as one merged object, 20 px or more apart they are two objects). The merge is kept, not split: clipped data do not say how the true intensity divides. A plateau is a lower bound of the true spot. SNR is undefined for a plateau-merged spot (clipped peak, annulus possibly inside the plateau), so `weak_signal` and `near_threshold` are not evaluated for it.
 
 ## Cross-channel association (`DetectionRequest`)
 
@@ -117,7 +118,7 @@ because the only real image has none.
 | `dense_cluster` | another same-channel spot within `dense_distance_factor` = 2.0 x `minimum_distance_px`; or a spot added by dense decomposition |
 | `near_edge` | distance to the valid-mask boundary or the image border < `edge_radius_factor` = 2.0 x `spot_radius_px` |
 | `suspicious_shape` | elongation > `elongation_max` = 1.8; or an oversized saturated plateau (> 6 x radius) |
-| `debris_like` | scale ratio >= `debris_ratio` = 1.0 in any detected channel |
+| `debris_like` | scale ratio >= `debris_ratio` = 1.0 in any detected channel. The criterion is "compact relative to the CONFIGURED radius", not an absolute size: with `spot_radius_px` = R, blobs with sigma below about 0.6 R become debris-like (measured: 144/144 small dual-channel Gaussian polonies with sigma 1.5-3 px were made `uncertain` at R = 5). Set the radius from the visible blob size. |
 | `ambiguous_match` | set by the matching step (above) |
 
 Special rule: a matched red+green pair that is debris-like in **both** channels is not auto-classed yellow; it becomes `uncertain` (with a history note). On test_img this changed 22 yellow

@@ -42,9 +42,11 @@ def test_real_image_detection_independent_of_brightness(tmp_path):
                  polygon=[(400, 500), (900, 500), (900, 1000), (400, 1000)])
     p = DetectionParams(spot_radius_px=5, minimum_distance_px=5)
     ref = run_detection(red, green, [reg], DetectionRequest(red=p, green=p))
-    pts = lambda r: sorted((round(o.red.x), round(o.red.y)) for o in r.objects if o.red.detected)
+    pts = lambda r: np.array(sorted((o.red.x, o.red.y) for o in r.objects if o.red.detected))
     assert len(pts(ref)) > 5
     for f in (0.5, 0.25):
         r2 = np.clip(np.rint(red.astype(float) * f), 0, 65535).astype(red.dtype)
         res = run_detection(r2, green, [reg], DetectionRequest(red=p, green=p))
-        assert pts(res) == pts(ref), f
+        a, b = pts(res), pts(ref)
+        # (a clipped spot loses its plateau-centroid position when the scaled image is no longer clipped)
+        assert a.shape == b.shape and np.abs(a - b).max() < 3.0, f

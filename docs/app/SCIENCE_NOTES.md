@@ -25,13 +25,15 @@ What the app implements, where it deviates from the recommendations below, and w
 3. **Saturated plateaus** are merged into ONE spot at the plateau centroid (all spots within the connected
    saturated component dilated by the spot radius); a plateau with equivalent diameter > 6 spot radii also gets
    `suspicious_shape`. Plateau size is a lower bound of the true spot; its centroid is not a sub-pixel estimate of
-   the true centre. Several touching saturated polonies cannot be resolved.
+   the true centre. Several touching saturated polonies cannot be resolved: a plateau that is elongated (> 1.3) or
+   carried more than one LoG maximum also gets `suspicious_shape` (merge kept, no splitting). SNR is undefined for
+   merged plateaus, so `weak_signal` / `near_threshold` are skipped for them.
 4. **Masking** follows §1.4: LoG on the real background-corrected image, response zeroed outside the mask, maxima
    inside the mask (+1 px, the final decision uses the refined centre), automatic threshold from maxima strictly
    inside the mask. Only pixels > 4 sigma from the mask and saturated pixels outside the mask are median-filled.
    Synthetic border test: spots centred at x >= 100 outside a region [0,100) are not counted; inside positions
    are exact to <= 0.05 px.
-5. **Preview == full run:** background correction on the full image, automatic threshold from the full masked
+5. **Preview == full run:** background correction on the full image, automatic threshold (in noise units) and noise sigma from the full masked
    image, cached (small LRU keyed by image hash + mask + radius/min-distance/background). Tiling already shared
    one global threshold. The LoG/measurement of a preview runs on a padded crop.
 6. **One geometry rule** (`detection/masks.py`, half-open pixel-centre rule) is used by detection, review
@@ -51,9 +53,25 @@ What the app implements, where it deviates from the recommendations below, and w
 11. **Matching:** alternative partners are searched out to tolerance + max(1.5 px, 25 %): a 5.9 px pair with a 6.1 px
     alternative is `ambiguous_match`. The assignment is one-to-one per spot; this does NOT prove that two spots
     are different physical objects or that one object was not split into two spots.
-12. **Still open / not validated:** accuracy on any other slide; green and yellow performance on real green
+12. **Thresholds are in noise units** (LoG response / 1.4826 x MAD of the signed LoG response over valid pixels).
+    Big-FISH's elbow search uses an absolute candidate grid, so the previous automatic threshold depended on image
+    brightness (see "Measured performance and limits"). An elbow below 5 noise units is treated as the noise regime
+    (fallback to 5, WARNING note), and a channel with > 50 % debris-like spots gets a WARNING note.
+13. **Still open / not validated:** accuracy on any other slide; green and yellow performance on real green
     polonies (the only image has none); the default review thresholds (weak_snr 5, elongation 1.8, debris ratio 1.0)
     are starting points; concentration formula and chamber geometry await the researcher; no confidence intervals.
+
+### Measured performance and limits (test_img.tif, red channel only, 15 px match to the 77 embedded marks, 17 counted grid squares)
+
+* Defaults on the single red-only image: recall vs the 77 marks about 0.53-0.60 and precision 0.19-0.42 for all red-detected spots
+  (R = 3: 185 spots, recall 0.53, precision 0.22; R = 4: 124, 0.53, 0.33; R = 5: 103, 0.56, 0.42, after the noise-unit change; before it,
+  at R = 3 the numbers were 244, 0.60, 0.19). The marks are imprecise and were made by one annotator; the parameters were explored on this same image.
+* There is no green and no yellow validation: the image has no real green polonies.
+* The automatic threshold was brightness dependent (R = 5: 103 / 67 / 64 detections, recall 0.56 / 0.44 / 0.43 at brightness x1 / x0.5 / x0.25);
+  it is now noise-normalised and gives identical detections at those scales (R = 3, 4, 5).
+* Counts are not validated for accuracy. The app reports detections plus review flags, not an accuracy-checked count.
+* The debris criterion is relative to the configured radius; touching saturated polonies stay merged (flagged); an empty or very sparse channel
+  can have its automatic threshold in the noise regime (WARNING).
 
 ---
 
