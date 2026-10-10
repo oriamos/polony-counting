@@ -50,7 +50,8 @@ def test_separate_files_with_default_scene_end_to_end(tmp_path):
         # file names only SUGGEST a role: never confirmed automatically
         assert a["status"] == "needs_channel_mapping"
         assert all(not ch["role_confirmed"] for ch in a["image"]["channels"])
-        assert [ch["role"] for ch in a["image"]["channels"]] == ["red", "green"]
+        assert all(ch["role"] is None for ch in a["image"]["channels"])
+        assert [ch["suggested_role"] for ch in a["image"]["channels"]] == ["red", "green"]
         assert c.post(f"/api/analyses/{aid}/detect", json={}).json()["code"] == "channel_mapping_unconfirmed"
         c.put(f"/api/analyses/{aid}/channels", json={"mapping": [{"index": 0, "role": "red"}, {"index": 1, "role": "green"}]})
         c.put(f"/api/analyses/{aid}/regions", json={"regions": [counting("c1", rect(5, 5, w - 5, h - 5)).model_dump(mode="json")]})

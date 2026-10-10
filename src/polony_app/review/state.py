@@ -26,11 +26,19 @@ class AnalysisState:
     undo: list[int] = field(default_factory=list)   # seqs, last = next to undo
     redo: list[int] = field(default_factory=list)
     next_seq: int = 1
-    alignment: dict[str, Any] = field(default_factory=lambda: {"dy": 0, "dx": 0})
     undo_performed: int = 0
     redo_performed: int = 0
     prev_status: str | None = None
     events: list[dict] = field(default_factory=list)  # non-undoable events (mapping, reopen...)
+
+    @property
+    def alignment(self) -> dict[str, Any]:
+        return {"dy": self.analysis.alignment_dy, "dx": self.analysis.alignment_dx}
+
+    @alignment.setter
+    def alignment(self, v: dict[str, Any]) -> None:
+        self.analysis.alignment_dy = int(v.get("dy", 0))
+        self.analysis.alignment_dx = int(v.get("dx", 0))
 
     def action_by_seq(self, seq: int) -> ReviewAction:
         for a in reversed(self.log):
@@ -48,7 +56,6 @@ class AnalysisState:
             "undo": self.undo,
             "redo": self.redo,
             "next_seq": self.next_seq,
-            "alignment": self.alignment,
             "undo_performed": self.undo_performed,
             "redo_performed": self.redo_performed,
             "prev_status": self.prev_status,
@@ -62,7 +69,8 @@ class AnalysisState:
         st.undo = list(d.get("undo", []))
         st.redo = list(d.get("redo", []))
         st.next_seq = d.get("next_seq", 1)
-        st.alignment = d.get("alignment", {"dy": 0, "dx": 0})
+        if "alignment" in d and not (st.analysis.alignment_dy or st.analysis.alignment_dx):
+            st.alignment = d["alignment"]  # legacy persisted form
         st.undo_performed = d.get("undo_performed", 0)
         st.redo_performed = d.get("redo_performed", 0)
         st.prev_status = d.get("prev_status")

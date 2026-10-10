@@ -147,6 +147,8 @@ def test_full_round_trip_with_restart_and_export(data_dir, tiff, detector):
         # reopen: approvals kept, edit clears it
         r = client2.post(f"/api/analyses/{aid}/reopen")
         assert r.json()["status"] == "in_review" and r.json()["finalized_at"] is None and r.json()["regions"][0]["approved"]
+        prov2 = client2.get(f"/api/analyses/{aid}/export", params={"kind": "provenance"}).json()
+        assert prov2["action_log_summary"]["by_type"]["reopen"] == 1
         # the undo history was dropped on finalize
         assert client2.post(f"/api/analyses/{aid}/undo").json()["code"] == "nothing_to_undo"
         r = act(client2, aid, "move", object_id="d1", x=31, y=31)
@@ -283,6 +285,8 @@ def test_alignment_endpoint(client, tiff, detector):
     assert client.post(f"/api/analyses/{aid}/alignment", json={}).json()["code"] == "invalid_alignment"
     z = client.get(f"/api/analyses/{aid}/export", params={"kind": "provenance"}).json()
     assert z["alignment_applied_to_green_px"] == {"dy": 1, "dx": -2}
+    an = client.get(f"/api/analyses/{aid}").json()
+    assert (an["alignment_dy"], an["alignment_dx"]) == (1, -2)
 
 
 def test_job_failure_cancellation_and_orphans(data_dir, tiff, detector):

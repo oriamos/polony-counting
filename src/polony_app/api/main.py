@@ -221,7 +221,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
                             idx = orig_names.index(h)
                             for c in meta.channels:
                                 if c.index == idx:
-                                    c.role = role
+                                    c.suggested_role = role
                 del names
             with store.edit(aid) as st:
                 st.analysis.image = meta

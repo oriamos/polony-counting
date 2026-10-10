@@ -52,6 +52,7 @@ def test_regions_csv_both_conventions_unambiguous_and_uncertain_separate():
 def test_slide_csv_gates_concentration_and_never_hardcodes_volume():
     st = state()
     a = st.analysis
+    a.slide.concentration_formula_confirmed = True
     s = rows(exporter.slide_csv(a))[0]
     assert s["concentration_status"].startswith("inputs incomplete: ")
     for m in ("sample_volume_ul", "concentration_factor"):
@@ -60,6 +61,10 @@ def test_slide_csv_gates_concentration_and_never_hardcodes_volume():
     assert s["red_only"] == "1" and s["uncertain"] == "1" and s["sample_volume_ul"] == ""
     a.slide = SlideMeta(sample_volume_ul=2.5, concentration_factor=2.0)
     engine.update_counting_area(a)
+    s = rows(exporter.slide_csv(a))[0]  # all inputs present but formula NOT confirmed
+    assert s["concentration_status"] == "inputs incomplete: formula/geometry not confirmed by researcher"
+    assert all(s[k] == "" for k in s if k.startswith("est_conc")) and s["concentration_formula"] == ""
+    a.slide.concentration_formula_confirmed = True
     s = rows(exporter.slide_csv(a))[0]
     assert s["concentration_status"].startswith("computed") and "uncertain" in s["concentration_status"]
     assert float(s["est_conc_per_ml_red_only"]) == 1 / 0.0025 * 2.0
@@ -67,12 +72,12 @@ def test_slide_csv_gates_concentration_and_never_hardcodes_volume():
     assert s["concentration_formula"]
     # same inputs but unconfirmed mapping => withheld
     st2 = make_state([obj("r", 10, 10)], [counting()], mapped=False)
-    st2.analysis.slide = SlideMeta(sample_volume_ul=5, concentration_factor=1)
+    st2.analysis.slide = SlideMeta(sample_volume_ul=5, concentration_factor=1, concentration_formula_confirmed=True)
     s = rows(exporter.slide_csv(st2.analysis))[0]
     assert "confirmed_channel_mapping" in s["concentration_status"] and s["est_conc_per_ml_red_only"] == ""
     # missing counting region => area missing
     st3 = make_state([obj("r", 10, 10)], [])
-    st3.analysis.slide = SlideMeta(sample_volume_ul=5, concentration_factor=1)
+    st3.analysis.slide = SlideMeta(sample_volume_ul=5, concentration_factor=1, concentration_formula_confirmed=True)
     assert "counting_area_px2" in rows(exporter.slide_csv(st3.analysis))[0]["concentration_status"]
 
 
@@ -88,6 +93,7 @@ def test_final_vs_draft_labels_and_no_confidence_interval():
     assert "ci_" not in blob and "confidence" not in blob and "interval" not in blob
     readme = zdraft.read("README.txt").decode()
     assert "No confidence interval is provided" in readme and "Poisson" in readme
+    assert "UNCONFIRMED" in readme and "mean(fields)" in readme
     st.analysis.finalized_at = "2026-01-01T00:00:00Z"
     assert exporter.export_filename(a, "objects") == "t_objects.csv"
     assert rows(exporter.objects_csv(a))[0]["status"] == "FINAL"

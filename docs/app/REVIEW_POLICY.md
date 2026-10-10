@@ -34,9 +34,16 @@
   them: any later edit inside an approved region clears just that approval, so
   re-finalizing needs those regions re-approved). Finalize and reopen are in the action
   log / provenance summary. The undo history is not restored.
-* **Concentration**: only computed when `sample_volume_ul`, `concentration_factor`, a
-  counting area and a confirmed mapping are all present; otherwise empty with
-  `concentration_status = "inputs incomplete: ..."`. The formula used is stated in the
-  export (`count / (sample_volume_ul/1000) * concentration_factor`, which assumes the
-  counted region represents the whole sample volume - to be confirmed by the scientist).
-  No confidence interval is exported.
+* **Reopen** is logged as `ActionType.reopen`; alignment lives on `Analysis.alignment_dy/dx`;
+  upload pairing hints (`red_file`/`green_file`) only set `ChannelInfo.suggested_role` - `role`
+  stays None and unconfirmed until `PUT /channels`.
+* **Concentration** is gated first by `SlideMeta.concentration_formula_confirmed` (default
+  false). Unless it is true AND `sample_volume_ul`, `concentration_factor`, a counting area
+  and a confirmed mapping are present, all concentration columns are empty and
+  `concentration_status` says "inputs incomplete: formula/geometry not confirmed by
+  researcher" (or lists the missing inputs). The built-in formula
+  `count / (sample_volume_ul/1000) * concentration_factor` (assumes the counted region
+  represents the whole sample volume) is only a PROPOSAL, flagged UNCONFIRMED in the export
+  README together with the legacy CSV convention
+  `abundance = mean(fields)*(field/grid)/volume_ul*1000` for the researcher to compare.
+  No confidence interval is ever exported.

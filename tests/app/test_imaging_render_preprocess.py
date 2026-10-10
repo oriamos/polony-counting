@@ -56,7 +56,7 @@ def test_gaussian_subtract_removes_uneven_background():
     out = correct_background(img.astype(np.float32), BackgroundParams(sigma_px=40, clip_negative=False))
     assert out.dtype == np.float32
     quiet = np.ones(out.shape, bool); quiet[95:110, 195:210] = False
-    assert abs(out[quiet].mean()) < 100 and out[quiet].std() < 100  # large-scale bump is partially kept by any finite sigma
+    assert abs(out[quiet].mean()) < 100 and out[quiet].std() < 0.5 * bg[quiet].std()  # large-scale bump is partially kept by any finite sigma
     assert (bg.max() - bg.min()) > 1500
     assert out[100:105, 200:205].mean() > 2500
 

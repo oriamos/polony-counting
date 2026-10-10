@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional, Protocol
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -32,6 +32,7 @@ class RawSpot:
     simulated: bool = False                  # added by dense decomposition, not a direct detection
 
 
+@runtime_checkable
 class SpotEngine(Protocol):
     name: str
 

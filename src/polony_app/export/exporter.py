@@ -119,6 +119,10 @@ def concentration(a: Analysis, counts) -> tuple[dict[str, float | None], str, li
     s = a.slide
     area = counting_area_px2(a)
     missing = []
+    if not s.concentration_formula_confirmed:
+        keys0 = ["red_only", "green_only", "yellow", "total_objects_exclusive", "red_positive", "green_positive"]
+        return ({k: None for k in keys0},
+                "inputs incomplete: formula/geometry not confirmed by researcher", ["concentration_formula_confirmed"])
     if not s.sample_volume_ul or s.sample_volume_ul <= 0:
         missing.append("sample_volume_ul")
     if not s.concentration_factor or s.concentration_factor <= 0:
@@ -139,7 +143,7 @@ def concentration(a: Analysis, counts) -> tuple[dict[str, float | None], str, li
 
 
 CONC_FORMULA = (
-    "count / (sample_volume_ul / 1000) * concentration_factor, i.e. the counting region(s) are "
+    "PROPOSED (UNCONFIRMED assumption): count / (sample_volume_ul / 1000) * concentration_factor, i.e. the counting region(s) are "
     "taken to represent the whole sample volume (assumption; no chamber geometry is modelled)"
 )
 
@@ -261,7 +265,13 @@ CONCENTRATION
   Estimates are filled in ONLY when sample_volume_ul, concentration_factor and a counting
   area are provided and the channel mapping is confirmed; otherwise the columns are empty and
   concentration_status reads "inputs incomplete: <missing>". Raw counts are always present.
-  Formula used when complete: {CONC_FORMULA}.
+  Concentration output is gated by SlideMeta.concentration_formula_confirmed (default false): until
+  the researcher confirms the formula and geometry the columns are empty with status
+  "inputs incomplete: formula/geometry not confirmed by researcher".
+  Proposed formula (UNCONFIRMED assumption: the counted region represents the whole sample
+  volume): count / (sample_volume_ul / 1000) * concentration_factor.
+  Please compare with the legacy CSV convention
+  abundance = mean(fields) * (field/grid) / volume_ul * 1000.
 
 UNCERTAINTY
   No confidence interval is provided. Only Poisson counting uncertainty could be given and it

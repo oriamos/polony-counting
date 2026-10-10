@@ -986,8 +986,8 @@ def reopen(state: AnalysisState) -> None:
     act = ReviewAction(
         seq=state.next_seq,
         ts=ts,
-        type=ActionType.finalize,
-        payload={"event": "reopen", "previous_finalized_at": a.finalized_at},
+        type=ActionType.reopen,
+        payload={"previous_finalized_at": a.finalized_at},
         inverse={},
     )
     state.next_seq += 1
@@ -1005,8 +1005,6 @@ def action_log_summary(state: AnalysisState) -> dict:
     by_type: dict[str, int] = {}
     for a in state.log:
         key = a.type.value
-        if a.type == ActionType.finalize and a.payload.get("event") == "reopen":
-            key = "reopen"
         by_type[key] = by_type.get(key, 0) + 1
     return {
         "total_actions": len(state.log),
