@@ -15,13 +15,21 @@ import numpy as np
 
 from ..imaging.preprocess import correct_background
 from ..imaging.registration import check_compatible, shifted_valid_region
-from ..schemas import DetectedObject, DetectionParams, DetectionRequest, Region, RegionKind
+import time
+
+from ..schemas import (ConsensusStatus, ConsensusSummary, DetectedObject, DetectionParams, DetectionRequest,
+                       EngineChoice, EngineName, EngineRunInfo, RawDetection, Region, RegionKind, ReviewReason)
 from .bigfish_engine import BigFishEngine
 from .engine import SpotEngine
 from .errors import DetectionCancelled
 from .masks import build_valid_mask, points_regions
-from .matching import associate, sort_spots
+from .matching import associate, sort_spots, spot_index
 from .review_reasons import ReviewConfig, apply_review_reasons
+from .two_engine import SpotInfo, fill_evidence, make_validity, measure_spots_at, union_spots
+from ..consensus.matching import match_engines, summarize
+from ..engines.base import EngineError, EngineUnavailable, new_run_id, utcnow_iso
+from ..engines.bigfish_adapter import spots_to_result
+from ..engines.spotiflow_adapter import SpotiflowEngine
 
 DEBRIS_CHANNEL_FRACTION = 0.5   # > this fraction of a channel's spots debris-like => pipeline WARNING
 DEBRIS_CHANNEL_MIN = 3          # ... if the channel has at least this many spots
@@ -34,13 +42,25 @@ class DetectionResult:
     objects: list[DetectedObject]
     package_versions: dict[str, str]
     notes: list[str] = field(default_factory=list)
+    # two-engine architecture: one EngineRunInfo per engine and channel page, every raw detection of
+    # every engine (valid flag set), and per-channel consensus counts (hybrid only)
+    engine_runs: list[EngineRunInfo] = field(default_factory=list)
+    raw_detections: list[RawDetection] = field(default_factory=list)
+    consensus: list[ConsensusSummary] = field(default_factory=list)
 
 
-def package_versions() -> dict[str, str]:
+def package_versions(with_spotiflow: bool = False) -> dict[str, str]:
     import bigfish, numpy, scipy, skimage, tifffile
-    return {"bigfish": bigfish.__version__, "numpy": numpy.__version__, "scipy": scipy.__version__,
-            "skimage": skimage.__version__, "tifffile": tifffile.__version__,
-            "python": platform.python_version()}
+    out = {"bigfish": bigfish.__version__, "numpy": numpy.__version__, "scipy": scipy.__version__,
+           "skimage": skimage.__version__, "tifffile": tifffile.__version__,
+           "python": platform.python_version()}
+    if with_spotiflow:
+        for pkg in ("spotiflow", "torch"):
+            try:
+                out[pkg] = md.version(pkg)
+            except Exception:
+                pass
+    return out
 
 
 def _saturated_outside(raw: np.ndarray, radius: float, min_area: int = 5000) -> np.ndarray:
@@ -120,7 +140,10 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
                   window: Optional[tuple[int, int, int, int]] = None,
                   engine: Optional[SpotEngine] = None,
                   review: Optional[ReviewConfig] = None,
-                  alignment: tuple[int, int] = (0, 0)) -> DetectionResult:
+                  alignment: tuple[int, int] = (0, 0),
+                  analysis_id: str = "", pages: tuple[int, int] = (0, 1),
+                  roles: tuple[Optional[str], Optional[str]] = ("red", "green"),
+                  image_sha256: Optional[dict] = None, spotiflow_engine=None) -> DetectionResult:
     """Detect spots in both channels and associate them.
 
     ``red``/``green`` are raw original-dtype 2-D arrays in the same (registered)
@@ -135,6 +158,13 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     local-maximum search and measurement run on a padded crop. Raises DetectionCancelled.
     Region rule (single, detection/masks.py): an object is kept iff ``point_region`` is not
     None (or, with no counting region, iff it is outside every exclusion).
+
+    Two-engine architecture (``request.engine``): 'bigfish' (default) is the path above, unchanged.
+    'spotiflow' detects with Spotiflow only; 'hybrid' runs Big-FISH and Spotiflow independently on each
+    channel page, matches them (consensus/matching.py) and feeds the union candidates to the SAME
+    association / review-reason code. ``pages`` are the TIFF page indices of ``red`` / ``green`` and ``roles``
+    their colour roles; both come from the caller's confirmed channel mapping (never inferred here; a role of
+    None means "unconfirmed"). ``spotiflow_engine`` injects an engine (tests); default SpotiflowEngine().
     """
     def check() -> None:
         if cancelled():
@@ -188,14 +218,39 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
                      "and the automatic threshold come from the full image (identical to the full run)")
     check()
 
+    choice = request.engine
+    run_bf = choice in (EngineChoice.bigfish, EngineChoice.hybrid)
+    run_sf = choice in (EngineChoice.spotiflow, EngineChoice.hybrid)
+    if run_sf:
+        notes.append(f"engine: {choice.value}" + (" (Big-FISH and Spotiflow run independently on each channel "
+                                                    "page; agreement is not ground truth)" if run_bf else ""))
+        if win is not None and run_sf:
+            notes.append("preview window with Spotiflow: inference runs on the padded window crop, so its automatic "
+                         "normalisation can differ slightly from the full run, and preview is slower than Big-FISH")
+    # single region rule (virtual whole-image counting region when the user drew none, so the half-open rule
+    # still applies at the border); also used to flag raw detections
+    if has_counting:
+        rule_regions = list(regions)
+    else:
+        rule_regions = [Region(id="__image__", kind=RegionKind.counting, name="image",
+                               polygon=[(0, 0), (w, 0), (w, h), (0, h)])] + list(regions)
+    engine_runs: list[EngineRunInfo] = []
+    raw_dets: list[RawDetection] = []
+    consensus_summaries: list[ConsensusSummary] = []
+    span_bf = 0.4 if choice == EngineChoice.bigfish else 0.1
+    span_sf = 0.33 if choice == EngineChoice.hybrid else 0.4
+    sf_eng = None
+    sf_dead: Optional[str] = None    # unavailable-reason once Spotiflow is known not to run
+
     can_inject = "threshold_info" in inspect.signature(engine.detect).parameters and hasattr(engine, "estimate_threshold")
     spots = {}
     infos = {}
+    spot_info: dict[int, SpotInfo] = {}
     for k, (name, arr, params) in enumerate((("red", red, request.red), ("green", green, request.green))):
-        base = 0.05 + 0.4 * k
+        base = 0.05 + span_bf * k if choice != EngineChoice.hybrid else 0.02 + 0.1 * k
 
-        def sub(f, msg, base=base, name=name):
-            progress(base + 0.4 * f, f"{name}: {msg}")
+        def sub(f, msg, base=base, name=name, span=span_bf):
+            progress(base + span * f, f"{name}: {msg}")
 
         check()
         valid_c = valid_by[name]
@@ -214,37 +269,134 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
             corrected_full = np.where(nodata[name], np.float32(max(fillv, 0.0) if params.background.clip_negative else fillv),
                                       corrected_full)
         check()
-        raw = arr[sl]
-        measured, corrected, valid = measured_full[sl], corrected_full[sl], valid_c[sl]
-        tinfo = None
-        key = None
-        if can_inject:
-            key = threshold_cache_key(arr, valid_c, params)
-            tinfo = _cache_get(key)
-            if tinfo is None and win is not None:
-                sub(0.05, "automatic threshold (full image)")
-                tinfo = engine.estimate_threshold(corrected_full, params, valid_c, arr, measured_full)
-                _cache_put(key, tinfo)
-        kw = {"threshold_info": tinfo} if (tinfo is not None and can_inject) else {}
-        sp = engine.detect(corrected, params, valid, raw=raw, progress=lambda f, m, s=sub: s(0.1 + 0.9 * f, m),
-                           cancelled=cancelled, measure=measured, **kw)
-        info = getattr(engine, "last_info", {}) or {}
-        infos[name] = info
-        if (key is not None and tinfo is None and info.get("threshold_info") is not None
-                and params.threshold is None):
-            _cache_put(key, info["threshold_info"])  # full run: remember for later previews
-        for s_ in sp:
-            s_.x += ox
-            s_.y += oy
+        validity = make_validity(rule_regions, (h, w), auto, nodata[name])
+        page_i, role_i = int(pages[k]), roles[k]
+        info = {}
+        sp: list = []
+        bf_res = None
+        if run_bf:
+            raw = arr[sl]
+            measured, corrected, valid = measured_full[sl], corrected_full[sl], valid_c[sl]
+            tinfo = None
+            key = None
+            if can_inject:
+                key = threshold_cache_key(arr, valid_c, params)
+                tinfo = _cache_get(key)
+                if tinfo is None and win is not None:
+                    sub(0.05, "automatic threshold (full image)")
+                    tinfo = engine.estimate_threshold(corrected_full, params, valid_c, arr, measured_full)
+                    _cache_put(key, tinfo)
+            kw = {"threshold_info": tinfo} if (tinfo is not None and can_inject) else {}
+            t_bf = time.perf_counter()
+            started_bf = utcnow_iso()
+            sp = engine.detect(corrected, params, valid, raw=raw, progress=lambda f, m, s=sub: s(0.1 + 0.9 * f, m),
+                               cancelled=cancelled, measure=measured, **kw)
+            info = getattr(engine, "last_info", {}) or {}
+            infos[name] = info
+            if (key is not None and tinfo is None and info.get("threshold_info") is not None
+                    and params.threshold is None):
+                _cache_put(key, info["threshold_info"])  # full run: remember for later previews
+            for s_ in sp:
+                s_.x += ox
+                s_.y += oy
+            thr = info.get("threshold")
+            notes.append(f"{name}: {len(sp)} spot(s); LoG threshold "
+                         f"{'n/a' if thr is None else f'{thr:.4g}'} noise units"
+                         f"{'' if info.get('auto_threshold') is None else f' (auto {info['auto_threshold']:.4g} x scale {params.threshold_scale:g})'}"
+                         f"; tiles {info.get('n_tiles', 1)}")
+            notes += [f"{name}: {n}" for n in info.get("notes", [])]
+            if params.background.method == "none":
+                notes.append(f"{name}: no background correction applied")
+            bf_res, bf_order = spots_to_result(
+                sp, analysis_id=analysis_id, page=page_i, channel_role=role_i, params=params,
+                image_sha256=image_sha256, noise_sigma=info.get("noise_sigma"), validity=validity, info=info,
+                started_at=started_bf, duration_s=time.perf_counter() - t_bf,
+                notes=[n for n in info.get("notes", [])])
+            engine_runs.append(bf_res.run)
+            raw_dets += bf_res.detections
+        else:
+            infos[name] = {}
+
+        sf_res = None
+        if run_sf:
+            if sf_eng is None:
+                sf_eng = spotiflow_engine if spotiflow_engine is not None else SpotiflowEngine()
+            sf_params = request.spotiflow.model_dump(mode="json")
+            sf_valid = valid_c
+            if win is not None:
+                rect = np.zeros((h, w), bool)
+                rect[sl] = True
+                sf_valid = valid_c & rect
+            sbase = (0.22 + span_sf * k) if choice == EngineChoice.hybrid else (0.05 + span_sf * k)
+
+            def sub_sf(f, msg, sbase=sbase, name=name):
+                progress(sbase + span_sf * f, f"{name}: {msg}")
+
+            try:
+                if sf_dead is not None:
+                    raise EngineUnavailable(sf_dead)
+                sf_res = sf_eng.detect_page(
+                    arr, analysis_id=analysis_id, page=page_i, channel_role=role_i, valid_mask=sf_valid,
+                    params=sf_params, image_sha256=dict(image_sha256 or {}), progress=sub_sf, cancelled=cancelled,
+                    point_validity=validity)
+            except DetectionCancelled:
+                raise
+            except EngineError as exc:
+                if choice == EngineChoice.spotiflow:
+                    raise
+                if isinstance(exc, EngineUnavailable):
+                    sf_dead = str(exc)
+                engine_runs.append(EngineRunInfo(
+                    run_id=new_run_id(), analysis_id=analysis_id, image_sha256=dict(image_sha256 or {}),
+                    engine=EngineName.spotiflow, engine_version=sf_eng.version() if hasattr(sf_eng, "version") else "",
+                    model_name=request.spotiflow.model_name, page=page_i, channel_role=role_i, params=sf_params,
+                    started_at=utcnow_iso(), finished_at=utcnow_iso(), status="failed", error=str(exc),
+                    notes=["Spotiflow failed; the Big-FISH result of this channel page is unaffected"]))
+                notes.append(f"WARNING {name}: Spotiflow failed ({exc}); this channel is Big-FISH only "
+                             "(no consensus status). The run itself succeeded.")
+            else:
+                engine_runs.append(sf_res.run)
+                raw_dets += sf_res.detections
+                n_ok = sum(1 for d in sf_res.detections if d.valid)
+                notes.append(f"{name}: Spotiflow {len(sf_res.detections)} raw detection(s), {n_ok} inside the counting "
+                             f"area (model {sf_res.run.model_name} {sf_res.run.model_version or ''} on "
+                             f"{sf_res.run.device}, {sf_res.run.duration_s or 0:.1f} s)".replace("  ", " "))
+                notes += [f"{name}: {n}" for n in sf_res.run.notes]
+
+        # ---- candidate spots of this channel
+        if sf_res is not None and choice == EngineChoice.spotiflow:
+            sf_valid_dets = [d for d in sf_res.detections if d.valid]
+            if not hasattr(engine, "_measure"):
+                raise EngineError("the injected Big-FISH engine cannot measure spots; Spotiflow-only needs it")
+            thr_abs = float(infos[name].get("threshold_abs") or 0.0)
+            ms = measure_spots_at(engine, params, corrected_full, measured_full, valid_c, arr,
+                                  [d.x for d in sf_valid_dets], [d.y for d in sf_valid_dets], thr_abs)
+            for s_, d in zip(ms, sf_valid_dets):
+                spot_info[id(s_)] = SpotInfo(None, None, d, None, ())
+            sp = ms
+        elif sf_res is not None:   # hybrid
+            bf_valid = [(d, sp[i]) for d, i in zip(bf_res.detections, bf_order) if d.valid]
+            bf_invalid = [sp[i] for d, i in zip(bf_res.detections, bf_order) if not d.valid]
+            bf_spot_of = {d.id: s_ for d, s_ in bf_valid}
+            sf_valid_dets = [d for d in sf_res.detections if d.valid]
+            pairs = match_engines([d for d, _ in bf_valid], sf_valid_dets, request.consensus_tolerance_px)
+            need = [p.spotiflow for p in pairs if p.bigfish is None]
+            if need and not hasattr(engine, "_measure"):
+                raise EngineError("the injected Big-FISH engine cannot measure spots; hybrid needs it")
+            thr_abs = float(infos[name].get("threshold_abs") or 0.0)
+            ms = measure_spots_at(engine, params, corrected_full, measured_full, valid_c, arr,
+                                  [d.x for d in need], [d.y for d in need], thr_abs)
+            sf_spots = {d.id: s_ for d, s_ in zip(need, ms)}
+            union, ui = union_spots(pairs, bf_spot_of, sf_spots)
+            spot_info.update(ui)
+            sp = union + bf_invalid          # BF spots outside the valid area flow through exactly as today
+            consensus_summaries += summarize(pairs)
+            n_by = {st: sum(1 for p in pairs if p.status == st) for st in ConsensusStatus}
+            notes.append(f"{name}: consensus (tolerance {request.consensus_tolerance_px:g} px) "
+                         f"agreement={n_by[ConsensusStatus.agreement]}, "
+                         f"bigfish_only={n_by[ConsensusStatus.bigfish_only]}, "
+                         f"spotiflow_only={n_by[ConsensusStatus.spotiflow_only]}")
         spots[name] = sp
-        thr = info.get("threshold")
-        notes.append(f"{name}: {len(sp)} spot(s); LoG threshold "
-                     f"{'n/a' if thr is None else f'{thr:.4g}'} noise units"
-                     f"{'' if info.get('auto_threshold') is None else f' (auto {info['auto_threshold']:.4g} x scale {params.threshold_scale:g})'}"
-                     f"; tiles {info.get('n_tiles', 1)}")
-        notes += [f"{name}: {n}" for n in info.get("notes", [])]
-        if params.background.method == "none":
-            notes.append(f"{name}: no background correction applied")
 
     check()
     progress(0.88, "associating channels")
@@ -253,6 +405,8 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     check()
     progress(0.93, "review reasons")
     apply_review_reasons(objects, red_s, green_s, request.red, request.green, valid_full, (h, w), review)
+    if spot_info:
+        _attach_engine_evidence(objects, {"red": red_s, "green": green_s}, spot_info, choice)
     if win is None:  # (a preview window sees only part of the channel)
         dr = (review or ReviewConfig()).debris_ratio
         for name, sp in (("red", red_s), ("green", green_s)):
@@ -266,11 +420,6 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
 
     # single region rule: keep iff point_region is not None (virtual whole-image counting
     # region when the user drew none, so the half-open rule still applies at the border)
-    if has_counting:
-        rule_regions = list(regions)
-    else:
-        rule_regions = [Region(id="__image__", kind=RegionKind.counting, name="image",
-                               polygon=[(0, 0), (w, 0), (w, h), (0, h)])] + list(regions)
     rids = points_regions([o.x for o in objects], [o.y for o in objects], rule_regions)
     kept = []
     dropped_mask = 0
@@ -291,4 +440,35 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     progress(1.0, "done")
     notes.append(f"{len(kept)} object(s): " + ", ".join(
         f"{c}={sum(1 for o in kept if o.cls.value == c)}" for c in ("red", "green", "yellow", "uncertain")))
-    return DetectionResult(objects=kept, package_versions=package_versions(), notes=notes)
+    return DetectionResult(objects=kept, package_versions=package_versions(run_sf), notes=notes,
+                           engine_runs=engine_runs, raw_detections=raw_dets, consensus=consensus_summaries)
+
+
+def _attach_engine_evidence(objects: list[DetectedObject], lists: dict, spot_info: dict,
+                            choice: EngineChoice) -> None:
+    """Fill the two-engine provenance of each channel evidence and add the disagreement review reasons
+    (nothing is added for a plain agreement). Mutates ``objects``."""
+    for o in objects:
+        add: list[ReviewReason] = []
+        for key in ("red", "green"):
+            ev = getattr(o, key)
+            if not ev.detected:
+                continue
+            si = spot_info.get(id(lists[key][spot_index(ev.spot_id)]))
+            if si is None:
+                continue
+            fill_evidence(ev, si)
+            if si.status == ConsensusStatus.bigfish_only:
+                add.append(ReviewReason.bigfish_only)
+                o.history.append(f"auto: {key} spot is Big-FISH only (no Spotiflow detection within the consensus "
+                                 "tolerance); not rejected")
+            elif si.status == ConsensusStatus.spotiflow_only:
+                add.append(ReviewReason.spotiflow_only)
+                o.history.append(f"auto: {key} spot is Spotiflow only (no Big-FISH detection within the consensus "
+                                 "tolerance); peak / background / SNR measured at the Spotiflow position; not rejected")
+            elif si.status == ConsensusStatus.agreement and si.ambiguous_with:
+                o.history.append(f"auto: {key} Big-FISH / Spotiflow match is ambiguous with "
+                                 f"{', '.join(si.ambiguous_with)}")
+        for r in add:
+            if r not in o.review_reasons:
+                o.review_reasons.append(r)

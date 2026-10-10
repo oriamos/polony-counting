@@ -97,12 +97,36 @@ def _b(v: bool) -> str:
 
 
 # ------------------------------------------------------------------ objects
+# per-channel two-engine columns (empty for Big-FISH-only runs). Score wording: Big-FISH = LoG response in
+# noise units; Spotiflow = raw "model score". Neither is a probability or a confidence percentage.
+ENGINE_COLS = ["consensus_status", "bigfish_x", "bigfish_y", "bigfish_loG_noise_units",
+               "spotiflow_x", "spotiflow_y", "spotiflow_model_score", "engine_match_distance_px"]
+
+
+def raw_detections_csv(detections) -> str:
+    """Every raw engine detection (valid and excluded), exactly as the engines produced it."""
+    header = ["id", "run_id", "engine", "page", "channel_role", "x", "y", "z", "radius_px",
+              "model_score", "loG_noise_units", "score_kind", "valid", "region_id", "excluded_reason"]
+    rows = []
+    for d in detections:
+        eng = d.engine.value
+        rows.append([d.id, d.run_id, eng, d.page, d.channel_role, d.x, d.y, d.z, d.radius_px,
+                     d.score if eng == "spotiflow" else None, d.score if eng == "bigfish" else None,
+                     d.score_kind, _b(d.valid), d.region_id, d.excluded_reason])
+    return _csv(header, rows)
+
+
+def engine_runs_json(runs) -> str:
+    return json.dumps([r.model_dump(mode="json") for r in runs], indent=2, default=str)
+
+
 def objects_csv(a: Analysis) -> str:
     status = status_label(a)
     header = ["id", "x", "y", "class", "origin", "region_id", "counted"]
     for ch in ("red", "green"):
         header += [f"{ch}_detected", f"{ch}_x", f"{ch}_y", f"{ch}_peak", f"{ch}_local_background",
                    f"{ch}_snr", f"{ch}_saturated"]
+        header += [f"{ch}_{c}" for c in ENGINE_COLS]
     header += ["association_distance_px", "review_reasons", "ambiguous_with", "reviewed", "status"]
     counted_ids = {o.id for o in counted_objects(a)}
     rows = []
@@ -114,6 +138,9 @@ def objects_csv(a: Analysis) -> str:
         for ev in (o.red, o.green):
             row += [_b(ev.detected), ev.x, ev.y, ev.peak_intensity, ev.local_background, ev.snr,
                     _b(ev.saturated)]
+            row += [ev.consensus_status.value if ev.consensus_status is not None else None,
+                    ev.bigfish_x, ev.bigfish_y, ev.bigfish_score,
+                    ev.spotiflow_x, ev.spotiflow_y, ev.spotiflow_score, ev.match_distance_px]
         row += [o.association_distance_px, "|".join(r.value for r in o.review_reasons),
                 "|".join(o.ambiguous_with), _b(o.reviewed), status]
         rows.append(row)
@@ -254,7 +281,11 @@ def slide_csv(a: Analysis) -> str:
 
 
 # ------------------------------------------------------------------ provenance
-def provenance_dict(state: AnalysisState, originals_dir: str | Path | None = None) -> dict:
+SCORE_NOTE = ("Big-FISH score = LoG response in noise units; Spotiflow score = raw model score. Neither is a "
+              "probability or a confidence percentage. Agreement between the engines is not ground truth.")
+
+
+def provenance_dict(state: AnalysisState, originals_dir: str | Path | None = None, engine_runs=None) -> dict:
     a = state.analysis
     img = a.image
     image = None
@@ -302,6 +333,8 @@ def provenance_dict(state: AnalysisState, originals_dir: str | Path | None = Non
         "lab": lab_provenance(a),
         "counts": {"regions": [c.model_dump(mode="json") for c in counts["regions"]],
                    "slide": counts["slide"].model_dump(mode="json")},
+        "engine_runs": [r.model_dump(mode="json") for r in (engine_runs or [])],  # model name/version/checksum, params, preprocessing, device, errors
+        "engine_scores_note": SCORE_NOTE,
         "action_log_summary": action_log_summary(state),
         "events": list(state.events),  # complete: mapping/alignment/settings/undo/redo/reopen, never truncated
         "files_note": {
@@ -341,8 +374,8 @@ def lab_provenance(a: Analysis) -> dict:
     }
 
 
-def provenance_json(state: AnalysisState, originals_dir: str | Path | None = None) -> str:
-    return json.dumps(provenance_dict(state, originals_dir), indent=2, sort_keys=False, default=str)
+def provenance_json(state: AnalysisState, originals_dir: str | Path | None = None, engine_runs=None) -> str:
+    return json.dumps(provenance_dict(state, originals_dir, engine_runs), indent=2, sort_keys=False, default=str)
 
 
 def actions_jsonl(state: AnalysisState) -> str:
@@ -396,6 +429,21 @@ FILES
   actions.jsonl   complete review-action log (seq, ts, type, payload). The undo/redo restore
                   snapshots ("inverse") are omitted (marked inverse_omitted)
   objects_history.csv  history trail of every object, deleted ones included
+  raw_detections.csv  (only when engine runs are stored) every raw detection of every engine, valid or
+                  excluded, in full-resolution pixel coordinates
+  engine_runs.json (only when engine runs are stored) one record per engine run: engine/model
+                  name, version, weights checksum, parameters, preprocessing, device, status, errors
+
+TWO-ENGINE DETECTION
+  Big-FISH (classical) and Spotiflow (learned) can run independently on the same page; their
+  detections are matched one-to-one within a pixel tolerance. objects_<S>.csv has, per channel,
+  <red|green>_consensus_status (agreement | bigfish_only | spotiflow_only | human_added) and each
+  engine's own coordinates and score. AGREEMENT IS NOT TRUTH: two engines can make the same
+  mistake, and an engine that missed a spot is not evidence that the spot is absent. Nothing is
+  removed because one engine did not see it; disagreements are reviewed by a person first.
+  A MODEL SCORE IS NOT A PROBABILITY (Spotiflow: raw model score; Big-FISH: LoG response in noise
+  units): neither is calibrated and neither is a confidence percentage. human_rejected (a candidate a
+  user deleted) is derived from the action log and not stored on objects.
 
 CONVENTIONS
   * Coordinates are image pixels; x = column, y = row; pixel (0,0) centre is (0.0, 0.0).
@@ -443,7 +491,8 @@ STATUS
 """
 
 
-def bundle_zip(state: AnalysisState, originals_dir: str | Path | None = None) -> bytes:
+def bundle_zip(state: AnalysisState, originals_dir: str | Path | None = None,
+               engine_runs=None, raw_detections=None) -> bytes:
     a = state.analysis
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -451,7 +500,10 @@ def bundle_zip(state: AnalysisState, originals_dir: str | Path | None = None) ->
         z.writestr(member_name(a, "objects"), objects_csv(a))
         z.writestr(member_name(a, "regions"), regions_csv(a))
         z.writestr(member_name(a, "slide"), slide_csv(a))
-        z.writestr("provenance.json", provenance_json(state, originals_dir))
+        z.writestr("provenance.json", provenance_json(state, originals_dir, engine_runs))
         z.writestr("actions.jsonl", actions_jsonl(state))
         z.writestr("objects_history.csv", objects_history_csv(a))
+        if engine_runs or raw_detections:
+            z.writestr("raw_detections.csv", raw_detections_csv(raw_detections or []))
+            z.writestr("engine_runs.json", engine_runs_json(engine_runs or []))
     return buf.getvalue()

@@ -23,6 +23,7 @@ from polony_app.schemas import (
     Analysis,
     AnalysisStatus,
     ChannelEvidence,
+    ConsensusStatus,
     DetectedObject,
     DetectionRequest,
     ObjectClass,
@@ -488,11 +489,16 @@ def _h_add(tx: Tx, a: Analysis, p: dict, ts: str) -> None:
     x, y = _xy(a, _need(p, "x"), _need(p, "y"))
     cls = _cls(_need(p, "cls"))
     rid = _check_position_counted(a, x, y)
+    # A manual add is, by definition, a human-added candidate: ALWAYS recorded (whatever engine ran)
+    # on the channel evidence of the colour(s) the user chose. `detected` stays False: no engine saw it.
+    ha = ChannelEvidence(detected=False, consensus_status=ConsensusStatus.human_added)
     o = DetectedObject(
         id=_unique_id("m", _taken_ids(tx)),
         x=x,
         y=y,
         cls=cls,
+        red=ha.model_copy() if cls in (ObjectClass.red, ObjectClass.yellow) else ChannelEvidence(detected=False),
+        green=ha.model_copy() if cls in (ObjectClass.green, ObjectClass.yellow) else ChannelEvidence(detected=False),
         origin=Origin.manual,
         region_id=rid,
         reviewed=True,

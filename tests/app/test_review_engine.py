@@ -3,7 +3,7 @@ import pytest
 
 from fakes import counting, exclusion, make_state as _make_state, obj, rect
 from polony_app.review import engine
-from polony_app.review.counts import compute_counts, review_queue
+from polony_app.review.counts import REASON_PRIORITY, compute_counts, review_queue
 from polony_app.review.state import ReviewError
 from polony_app.schemas import ObjectClass, Origin, ReportingMode, ReviewReason
 
@@ -139,7 +139,7 @@ def test_review_queue_priority_and_ties():
     st = make_state(objs, [counting()])
     q = review_queue(st.analysis)
     assert [i["object_id"] for i in q] == ["amb", "sat", "weak1", "weak2", "dense", "shape", "edge"]
-    assert q[2]["priority"] == q[3]["priority"] == 2
+    assert q[2]["priority"] == q[3]["priority"] == REASON_PRIORITY[R.weak_signal]
 
 
 def test_accept_and_approve_gates():

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { DetectionParams, DetectionRequest } from '../api/types';
 import { useApp } from '../state/store';
+import { EngineRuns, EngineSection } from './EngineSection';
 
 export function NumInput({
   value,
@@ -184,7 +185,7 @@ export function DetectTab() {
   const unitsUnknown = !a.image?.pixel_size_um;
   return (
     <div className="detect" data-testid="detect-tab">
-      <h3>Detection (Big-FISH)</h3>
+      <h3>Detection</h3>
       {unitsUnknown && <div className="notice small">Pixel size unknown: all distances and radii here are in image pixels. Nothing is converted to µm.</div>}
       {!mapped && (
         <div className="notice warn">
@@ -205,6 +206,7 @@ export function DetectTab() {
           </button>
         </div>
       )}
+      <EngineSection req={req} set={setReq} disabled={locked} />
       <ParamTable req={req} set={setReq} disabled={locked} />
       <div className="presets" data-testid="sensitivity-presets">
         <div className="row wrap">
@@ -304,6 +306,7 @@ export function DetectTab() {
         )}
         {running && !job && <div className="small">Detection running on the server…</div>}
       </section>
+      <EngineRuns />
     </div>
   );
 }

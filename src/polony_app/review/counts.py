@@ -14,12 +14,17 @@ from polony_app.schemas import (
 REASON_PRIORITY = {
     ReviewReason.ambiguous_match: 0,
     ReviewReason.saturated: 1,
-    ReviewReason.weak_signal: 2,
-    ReviewReason.near_threshold: 2,
-    ReviewReason.debris_like: 3,   # below saturated/weak, above dense_cluster: every flagged object must be queued
-    ReviewReason.dense_cluster: 4,
-    ReviewReason.suspicious_shape: 5,
-    ReviewReason.near_edge: 6,
+    # engine disagreements (Big-FISH <-> Spotiflow): directly after ambiguous/saturated, above every
+    # single-engine heuristic flag. Agreements are NOT queued (only the random qc_sample is).
+    ReviewReason.bigfish_only: 2,
+    ReviewReason.spotiflow_only: 2,
+    ReviewReason.weak_signal: 3,
+    ReviewReason.near_threshold: 3,
+    ReviewReason.debris_like: 4,   # below saturated/weak, above dense_cluster: every flagged object must be queued
+    ReviewReason.dense_cluster: 5,
+    ReviewReason.suspicious_shape: 6,
+    ReviewReason.near_edge: 7,
+    ReviewReason.qc_sample: 8,     # random sample of agreements: below every disagreement/flag
 }
 # Every ReviewReason must have a priority: an object whose ONLY reason is missing here would
 # never reach the review queue (this was the case for debris_like).

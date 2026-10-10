@@ -80,11 +80,121 @@ export interface DetectionParams {
   tile_overlap_px: number;
 }
 
+// ---- two-engine architecture (docs/app/TWO_ENGINE_CONTRACT.md) ----
+export type EngineName = 'bigfish' | 'spotiflow' | 'human';
+export type EngineChoice = 'bigfish' | 'spotiflow' | 'hybrid';
+/** Spatial relation of the two engines' detections. NOT a truth label: agreement is not ground truth. */
+export type ConsensusStatus = 'agreement' | 'bigfish_only' | 'spotiflow_only' | 'human_added' | 'human_rejected';
+
+export interface SpotiflowParams {
+  model_name: string;
+  prob_thresh: number | null;
+  min_distance: number;
+  exclude_border: boolean;
+  subpix: boolean | null;
+  n_tiles: [number, number] | null;
+  max_tile_size: number | null;
+  normalizer: 'auto' | 'none';
+  device: 'auto' | 'cpu' | 'cuda' | 'mps';
+}
+
+export const DEFAULT_SPOTIFLOW: SpotiflowParams = {
+  model_name: 'general',
+  prob_thresh: null,
+  min_distance: 1,
+  exclude_border: false,
+  subpix: null,
+  n_tiles: null,
+  max_tile_size: null,
+  normalizer: 'auto',
+  device: 'auto',
+};
+
 export interface DetectionRequest {
   red: DetectionParams;
   green: DetectionParams;
   preview_window: [number, number, number, number] | null;
   match_tolerance_px: number;
+  engine?: EngineChoice;
+  spotiflow?: SpotiflowParams;
+  consensus_tolerance_px?: number;
+}
+
+export interface EngineRunInfo {
+  run_id: string;
+  analysis_id: string;
+  image_sha256?: Record<string, string>;
+  engine: EngineName;
+  engine_version: string;
+  model_name: string | null;
+  model_version: string | null;
+  model_checksum: string | null;
+  page: number;
+  channel_role: string | null;
+  params?: Record<string, unknown>;
+  preprocessing?: Record<string, unknown>;
+  started_at: string;
+  finished_at: string | null;
+  device: string | null;
+  duration_s: number | null;
+  status: 'ok' | 'failed' | 'skipped';
+  error: string | null;
+  n_raw: number;
+  n_valid: number;
+  notes: string[];
+}
+
+export interface RawDetection {
+  id: string;
+  run_id: string;
+  analysis_id: string;
+  engine: EngineName;
+  page: number;
+  channel_role: string | null;
+  x: number;
+  y: number;
+  z?: number | null;
+  radius_px?: number | null;
+  /** RAW engine score, never a probability: Big-FISH = LoG response in noise units, Spotiflow = model score */
+  score: number | null;
+  score_kind: string | null;
+  valid: boolean;
+  region_id: string | null;
+  excluded_reason: string | null;
+}
+
+export interface ConsensusSummary {
+  page: number | null;
+  channel_role: string | null;
+  agreement: number;
+  bigfish_only: number;
+  spotiflow_only: number;
+  human_added: number;
+  human_rejected: number;
+  confirmed: number;
+  rejected: number;
+  unresolved: number;
+}
+
+export interface ConsensusSummaryResponse {
+  pages: ConsensusSummary[];
+  total: ConsensusSummary;
+}
+
+export interface EngineModelInfo {
+  name: string;
+  cached: boolean;
+  version: string | null;
+  checksum: string | null;
+}
+
+export interface EngineInfo {
+  name: EngineName;
+  available: boolean;
+  reason: string | null;
+  version: string | null;
+  device?: { cuda?: boolean; mps?: boolean; cpu?: boolean } | null;
+  models?: EngineModelInfo[];
 }
 
 export type ReportingMode = 'exclusive' | 'channel_inclusive';
@@ -99,6 +209,19 @@ export interface ChannelEvidence {
   snr: number | null;
   saturated: boolean;
   spot_id: string | null;
+  // two-engine provenance (absent for Big-FISH-only runs)
+  consensus_status?: ConsensusStatus | null;
+  bigfish_raw_id?: string | null;
+  bigfish_x?: number | null;
+  bigfish_y?: number | null;
+  /** raw LoG response in noise units (not a probability) */
+  bigfish_score?: number | null;
+  spotiflow_raw_id?: string | null;
+  spotiflow_x?: number | null;
+  spotiflow_y?: number | null;
+  /** raw Spotiflow "model score" (not calibrated, not a confidence) */
+  spotiflow_score?: number | null;
+  match_distance_px?: number | null;
 }
 
 export type Origin = 'auto' | 'manual' | 'edited';
@@ -111,6 +234,9 @@ export type ReviewReason =
   | 'suspicious_shape'
   | 'near_edge'
   | 'near_threshold'
+  | 'bigfish_only'
+  | 'spotiflow_only'
+  | 'qc_sample'
   | 'debris_like';
 
 export interface DetectedObject {

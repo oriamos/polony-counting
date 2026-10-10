@@ -8,6 +8,9 @@ import { RegionsTab } from './RegionsTab';
 import { DetectTab } from './DetectTab';
 import { FinishTab } from './FinishTab';
 import { TotalsTab } from './TotalsTab';
+import { AgreementInfo } from './EngineLayers';
+import { SCORE_LABEL, STATUS_LABEL, filteredQueue, hasEngineInfo, objectStatus } from '../lib/consensus';
+import { ConsensusSummaryCard, EngineFilterBar, QcSample } from './EngineReview';
 
 const TABS: { id: RightTab; label: string }[] = [
   { id: 'review', label: 'Review' },
@@ -69,6 +72,53 @@ function Evidence({ label, e }: { label: string; e: ChannelEvidence }) {
   );
 }
 
+function EngineProvenance({ o }: { o: DetectedObject }) {
+  const chans = (['red', 'green'] as const).filter((c) => o[c].consensus_status);
+  if (!chans.length) return null;
+  return (
+    <div className="provenance" data-testid="engine-provenance">
+      <div className="small">
+        <strong>Engine provenance</strong> <span className="muted">(candidate proposal, not a verdict)</span>
+      </div>
+      <table className="tbl evid">
+        <thead>
+          <tr>
+            <th>Channel</th>
+            <th>Produced by</th>
+            <th>Big-FISH x, y</th>
+            <th className="num" title="raw Laplacian-of-Gaussian response divided by robust noise sigma">{SCORE_LABEL.bigfish}</th>
+            <th>Spotiflow x, y</th>
+            <th className="num" title="raw Spotiflow heatmap value; not calibrated">{SCORE_LABEL.spotiflow}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {chans.map((c) => {
+            const e = o[c];
+            const st = e.consensus_status!;
+            const hasBf = e.bigfish_x != null && e.bigfish_y != null;
+            const hasSf = e.spotiflow_x != null && e.spotiflow_y != null;
+            return (
+              <tr key={c} data-testid={`prov-${c}`} data-status={st}>
+                <th>{c}</th>
+                <td>
+                  {STATUS_LABEL[st]}
+                  {st === 'agreement' && e.match_distance_px != null && <div className="muted">matched, {f(e.match_distance_px)} px apart</div>}
+                </td>
+                <td className="mono">{hasBf ? `${f(e.bigfish_x)}, ${f(e.bigfish_y)}` : '–'}</td>
+                <td className="num mono">{f(e.bigfish_score, 1)}</td>
+                <td className="mono">{hasSf ? `${f(e.spotiflow_x)}, ${f(e.spotiflow_y)}` : '–'}</td>
+                <td className="num mono">{f(e.spotiflow_score, 3)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="hint">Scores are each engine’s raw output on its own scale. They are not probabilities and cannot be compared between engines.</div>
+      {chans.some((c) => o[c].consensus_status === 'agreement') && <AgreementInfo />}
+    </div>
+  );
+}
+
 export function ReasonList({ reasons }: { reasons: DetectedObject['review_reasons'] }) {
   if (!reasons.length) return <div className="muted small">No measurable review concerns.</div>;
   return (
@@ -91,6 +141,7 @@ function Inspector() {
   const locked = a.status === 'finalized';
   if (!objs.length) return null;
   const o = objs[0];
+  const engineObj = objs.length === 1 && objectStatus(o) != null;
   const region = o.region_id ? a.regions.find((r) => r.id === o.region_id) : null;
   return (
     <section className="inspector" aria-label="Selected spot" data-testid="inspector">
@@ -100,6 +151,7 @@ function Inspector() {
             <GlyphIcon cls={o.cls} size={18} /> <strong className="mono">{shortId(o.id)}</strong>
             <span className={`chip cls-${o.cls}`}>{CLASS_LABEL[o.cls]}</span>
             <span className="chip">{o.origin}</span>
+            {objectStatus(o) && <span className="chip" data-testid="engine-chip">{STATUS_LABEL[objectStatus(o)!]}</span>}
             {o.reviewed ? <span className="chip ok">reviewed</span> : <span className="chip warn">unreviewed</span>}
           </>
         ) : (
@@ -125,8 +177,8 @@ function Inspector() {
         ))}
       </div>
       <div className="insp-actions">
-        <button className="btn sm primary" disabled={locked} onClick={() => void confirmSel()} title="Mark as reviewed (Enter)" data-testid="confirm">
-          Confirm <kbd>Enter</kbd>
+        <button className="btn sm primary" disabled={locked} onClick={() => void confirmSel()} title={engineObj ? 'Approve this candidate (= confirm; Enter)' : 'Mark as reviewed (Enter)'} data-testid="confirm">
+          {engineObj ? 'Approve' : 'Confirm'} <kbd>Enter</kbd>
         </button>
         <button className="btn sm" disabled={locked || objs.length < 2} onClick={() => void act('merge', { object_ids: objs.map((x) => x.id) })} title="Merge (M)">
           Merge <kbd>M</kbd>
@@ -134,8 +186,8 @@ function Inspector() {
         <button className="btn sm" disabled={locked || objs.length !== 1} onClick={() => setTool('split')} title="Split (S)">
           Split <kbd>S</kbd>
         </button>
-        <button className="btn sm danger" disabled={locked} onClick={() => void act('delete', { object_ids: objs.map((x) => x.id) })} title="Delete (Del)" data-testid="inspector-delete">
-          Delete <kbd>Del</kbd>
+        <button className="btn sm danger" disabled={locked} onClick={() => void act('delete', { object_ids: objs.map((x) => x.id) })} title={engineObj ? 'Reject this candidate (= delete; kept in the audit history; Del)' : 'Delete (Del)'} data-testid="inspector-delete">
+          {engineObj ? 'Reject' : 'Delete'} <kbd>Del</kbd>
         </button>
       </div>
       {objs.length === 1 && (
@@ -175,6 +227,7 @@ function Inspector() {
               <Evidence label="green" e={o.green} />
             </tbody>
           </table>
+          <EngineProvenance o={o} />
           <ReasonList reasons={o.review_reasons} />
           {o.history.length > 0 && (
             <details className="small">
@@ -200,6 +253,9 @@ function ReviewTab() {
   const goto = useApp((s) => s.gotoQueue);
   const zoom = useApp((s) => s.zoomToPoint);
   const objects = new Map(a.objects.map((o) => [o.id, o]));
+  const filter = useApp((s) => s.reviewFilter);
+  const engineData = hasEngineInfo(a.objects);
+  const listed = engineData ? filteredQueue(queue, a.objects, filter) : queue;
   const noDetection = a.objects.length === 0;
   const unreviewed = a.objects.filter((o) => !o.deleted && !o.reviewed);
   const stepUnreviewed = (dir: 1 | -1) => {
@@ -226,12 +282,20 @@ function ReviewTab() {
       <div className="notice small" data-testid="uncertain-note">
         Uncertain objects (including dual-channel debris-like specks) are never counted in colour totals until you resolve them.
       </div>
+      {engineData && (
+        <>
+          <ConsensusSummaryCard />
+          <EngineFilterBar filter={filter} onChange={(f) => patch({ reviewFilter: f })} />
+          <QcSample />
+        </>
+      )}
       <div className="muted small">Ordered by measured review concerns (not confidence). Enter confirms the selected spot and moves on.</div>
       {noDetection && <div className="empty">No detections yet. Run detection from the Detect tab, or add spots manually.</div>}
-      {!noDetection && queue.length === 0 && unreviewed.length === 0 && (
+      {!noDetection && engineData && filter !== 'all' && listed.length === 0 && <div className="empty" data-testid="filter-empty">No candidates match this engine-status filter.</div>}
+      {!noDetection && filter === 'all' && queue.length === 0 && unreviewed.length === 0 && (
         <div className="empty ok">Nothing flagged for review. Still inspect each region for omissions before approving.</div>
       )}
-      {!noDetection && queue.length === 0 && unreviewed.length > 0 && (
+      {!noDetection && filter === 'all' && queue.length === 0 && unreviewed.length > 0 && (
         <div className="empty" data-testid="unreviewed-note">
           {unreviewed.length} object{unreviewed.length > 1 ? 's' : ''} unreviewed (no automatic flags).
           <div className="row">
@@ -245,8 +309,9 @@ function ReviewTab() {
         </div>
       )}
       <ol className="queue">
-        {queue.map((q, i) => {
+        {listed.map((q, i) => {
           const o = objects.get(q.object_id);
+          const es = o ? objectStatus(o) : null;
           return (
             <li key={q.object_id} className={selection.length === 1 && selection[0] === q.object_id ? 'active' : ''}>
               <button
@@ -263,9 +328,10 @@ function ReviewTab() {
                     <span className="muted mono">#{i + 1}</span> {o && <GlyphIcon cls={o.cls} size={14} />}
                     <strong className="mono">{shortId(q.object_id)}</strong>
                     {o && <span className="small">{CLASS_LABEL[o.cls]}</span>}
+                    {es && <span className="chip" data-testid={`qstatus-${q.object_id}`}>{STATUS_LABEL[es]}</span>}
                   </span>
                   <span className="qreasons small">
-                    {q.reasons.length ? q.reasons.map((r) => REASON_SHORT[r] ?? r).join(' · ') : 'flagged'}
+                    {q.reasons.length ? q.reasons.map((r) => REASON_SHORT[r] ?? r).join(' · ') : es ? STATUS_LABEL[es] : 'flagged'}
                   </span>
                 </span>
               </button>

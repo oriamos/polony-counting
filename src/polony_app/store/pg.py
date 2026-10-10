@@ -38,8 +38,10 @@ from polony_app.schemas import (
     Analysis,
     AnalysisStatus,
     CsvImport,
+    EngineRunInfo,
     Job,
     JobStatus,
+    RawDetection,
     ReviewAction,
 )
 
@@ -47,7 +49,7 @@ from .db import NotFound, new_id
 
 JOB_STALE_SECONDS = 120.0       # a running job whose heartbeat is older than this is orphaned
 VIEW_TTL = 1.5                  # seconds a cached analysis may be served without a version check
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -76,6 +78,19 @@ MIGRATIONS: dict[int, list[str]] = {
         """CREATE TABLE IF NOT EXISTS {s}.machines (
              machine_id text PRIMARY KEY, first_seen timestamptz NOT NULL DEFAULT now(),
              last_seen timestamptz NOT NULL DEFAULT now(), app_version text)""",
+    ],
+    2: [   # two-engine architecture: append-only audit of engine runs + raw detections
+        """CREATE TABLE IF NOT EXISTS {s}.engine_runs (
+             analysis_id text NOT NULL REFERENCES {s}.analyses(id) ON DELETE CASCADE,
+             run_id text NOT NULL, engine text, page integer, seq bigserial,
+             data jsonb NOT NULL, PRIMARY KEY (analysis_id, run_id))""",
+        "CREATE INDEX IF NOT EXISTS engine_runs_aid_idx ON {s}.engine_runs (analysis_id, engine, page)",
+        """CREATE TABLE IF NOT EXISTS {s}.raw_detections (
+             analysis_id text NOT NULL REFERENCES {s}.analyses(id) ON DELETE CASCADE,
+             run_id text NOT NULL, id text NOT NULL, engine text, page integer, valid boolean,
+             seq bigserial, data jsonb NOT NULL, PRIMARY KEY (analysis_id, run_id, id))""",
+        "CREATE INDEX IF NOT EXISTS raw_det_aid_idx ON {s}.raw_detections (analysis_id, engine, page, valid)",
+        "CREATE INDEX IF NOT EXISTS raw_det_run_idx ON {s}.raw_detections (analysis_id, run_id)",
     ],
 }
 
@@ -447,6 +462,66 @@ class PgStore:
             self._q(f"DELETE FROM {self._J} WHERE analysis_id=%s", (aid,))
             self._cache.pop(aid, None)
             shutil.rmtree(self.originals_dir(aid), ignore_errors=True)
+
+    # ----------------------------------------------------------- engine results (audit, append-only)
+    def save_engine_results(self, aid: str, runs: list[EngineRunInfo],
+                            detections: list[RawDetection]) -> None:
+        """Append engine runs + raw detections of one detect job (one transaction). Earlier runs are
+        never touched; only an identical run_id is replaced. Not part of the Analysis JSON."""
+        if not self.exists(aid):
+            raise NotFound("analysis", aid)
+        E, D = f'"{self.schema}".engine_runs', f'"{self.schema}".raw_detections'
+        try:
+            with self._conn() as conn:
+                with conn.transaction():
+                    for r in runs:
+                        conn.execute(f"DELETE FROM {D} WHERE analysis_id=%s AND run_id=%s", (aid, r.run_id))
+                        conn.execute(f"DELETE FROM {E} WHERE analysis_id=%s AND run_id=%s", (aid, r.run_id))
+                        conn.execute(
+                            f"INSERT INTO {E} (analysis_id,run_id,engine,page,data) VALUES (%s,%s,%s,%s,%s::jsonb)",
+                            (aid, r.run_id, r.engine.value, r.page, r.model_dump_json()))
+                    if detections:
+                        conn.cursor().executemany(
+                            f"INSERT INTO {D} (analysis_id,run_id,id,engine,page,valid,data) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb) ON CONFLICT (analysis_id,run_id,id) "
+                            "DO UPDATE SET data=EXCLUDED.data, valid=EXCLUDED.valid",
+                            [(aid, d.run_id, d.id, d.engine.value, d.page, bool(d.valid), d.model_dump_json())
+                             for d in detections])
+        except psycopg.errors.ForeignKeyViolation:
+            raise NotFound("analysis", aid) from None
+
+    def get_engine_runs(self, aid: str) -> list[EngineRunInfo]:
+        rows = self._q(f'SELECT data FROM "{self.schema}".engine_runs WHERE analysis_id=%s ORDER BY seq',
+                       (aid,), fetch="all")
+        return [EngineRunInfo.model_validate(r["data"]) for r in rows]
+
+    @staticmethod
+    def _det_where(aid, engine, page, run_id, valid) -> tuple[str, list]:
+        where, args = ["analysis_id=%s"], [aid]
+        for col, v in (("engine", engine), ("page", page), ("run_id", run_id), ("valid", valid)):
+            if v is not None:
+                where.append(f"{col}=%s")
+                args.append(getattr(v, "value", v))
+        return " AND ".join(where), args
+
+    def get_raw_detections(self, aid: str, engine=None, page: int | None = None, run_id: str | None = None,
+                           valid: bool | None = None, limit: int | None = None, offset: int = 0) -> list[RawDetection]:
+        w, args = self._det_where(aid, engine, page, run_id, valid)
+        sql = f'SELECT data FROM "{self.schema}".raw_detections WHERE {w} ORDER BY seq'
+        if limit is not None:
+            sql += " LIMIT %s"
+            args.append(int(limit))
+        if offset:
+            sql += " OFFSET %s"
+            args.append(int(offset))
+        rows = self._q(sql, tuple(args), fetch="all")
+        return [RawDetection.model_validate(r["data"]) for r in rows]
+
+    def count_raw_detections(self, aid: str, engine=None, page: int | None = None, run_id: str | None = None,
+                             valid: bool | None = None) -> int:
+        w, args = self._det_where(aid, engine, page, run_id, valid)
+        r = self._q(f'SELECT count(*) AS n FROM "{self.schema}".raw_detections WHERE {w}', tuple(args), fetch="one")
+        return int(r["n"])
 
     # ----------------------------------------------------------- jobs
     def create_job(self, aid: str) -> Job:

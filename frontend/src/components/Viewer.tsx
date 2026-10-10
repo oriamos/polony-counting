@@ -15,7 +15,8 @@ import {
 } from '../lib/geometry';
 import { ringRadiusImage } from '../lib/glyph';
 import { liveObjects, useApp } from '../state/store';
-import { ChamberPreviewLayer, ReferenceGridPreviewLayer, ReferencePointsLayer, GridPreviewLayer, HaloText, ObjectsLayer, RegionLabelsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
+import { ChamberPreviewLayer, ReferenceGridPreviewLayer, ReferencePointsLayer, GridPreviewLayer, HaloText, ObjectsLayer, RawLayer, RejectedLayer, RegionLabelsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
+import { rawKey } from '../state/store';
 import { ScaleBar } from './ScaleBar';
 
 export const useCursor = create<{ pt: { x: number; y: number } | null; set: (p: { x: number; y: number } | null) => void }>((set) => ({
@@ -49,6 +50,8 @@ export function Viewer() {
   const preview = useApp((s) => s.preview);
   const previewBusy = useApp((s) => s.previewBusy);
   const splitPts = useApp((s) => s.splitPts);
+  const layers = useApp((s) => s.layers);
+  const rawCache = useApp((s) => s.rawCache);
   const st = useApp;
 
   const ref = useRef<HTMLDivElement>(null);
@@ -486,6 +489,16 @@ export function Viewer() {
   const visPrev = preview ? preview.objects.filter((o) => !o.deleted && classVisible[o.cls] && inView(o)) : [];
   const regions = a.regions;
   const k = 1 / scale;
+  const RAW_DRAW_CAP = 4000;
+  const rawVisible = (eng: 'bigfish' | 'spotiflow') =>
+    a.image!.channels
+      .filter((c) => c.role !== 'ignore')
+      .map((c) => c.page)
+      .filter((pg, i, arr) => arr.indexOf(pg) === i)
+      .flatMap((pg) => rawCache[rawKey(eng, pg, layers.rawExcluded)]?.items ?? [])
+      .filter((d) => (layers.rawExcluded || d.valid) && inView(d))
+      .slice(0, RAW_DRAW_CAP);
+  const rejectedVis = layers.rejected ? a.objects.filter((o) => o.deleted && inView(o)) : [];
   const sel1 = selection.length === 1 ? live.find((o) => o.id === selection[0]) : null;
 
   return (
@@ -541,6 +554,9 @@ export function Viewer() {
           <ReferenceGridPreviewLayer scale={scale} />
           <ChamberPreviewLayer scale={scale} />
           <ReferencePointsLayer scale={scale} />
+          {!hide && layers.rawBigfish && <RawLayer items={rawVisible('bigfish')} engine="bigfish" scale={scale} />}
+          {!hide && layers.rawSpotiflow && <RawLayer items={rawVisible('spotiflow')} engine="spotiflow" scale={scale} />}
+          {!hide && layers.rejected && <RejectedLayer objects={rejectedVis} scale={scale} />}
           {!hide && (
             <g data-testid="objects-layer">
               <ObjectsLayer
@@ -550,6 +566,7 @@ export function Viewer() {
                 showLabels={showLabels}
                 showReview={true}
                 dragOverride={objDrag}
+                consensus={layers.consensus}
               />
               {visPrev.length > 0 && (
                 <g data-testid="preview-layer">

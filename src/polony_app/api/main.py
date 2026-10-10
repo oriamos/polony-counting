@@ -21,12 +21,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import polony_app
 from polony_app.export import exporter, lab
 from polony_app.review import engine
+from polony_app.review import consensus as consensus_mod
 from polony_app.review.counts import compute_counts, review_queue
 from polony_app.review.state import AnalysisState, ReviewError
 from polony_app.schemas import (
     Analysis,
     ChannelRole,
     DetectionRequest,
+    EngineName,
     JobStatus,
     Region,
     ReportingMode,
@@ -107,6 +109,16 @@ class AutoChamberBody(BaseModel):
     rim_px: int = 40
 
 
+class PrepareModelBody(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    model_name: str = "general"
+
+
+class QcSampleBody(BaseModel):
+    fraction: float = 0.05
+    seed: int = 0
+
+
 class CsvMapBody(BaseModel):
     color_mapping: Optional[Literal["red", "green", "yellow"]] = None
 
@@ -157,6 +169,33 @@ def _sig(a: Analysis, st: AnalysisState) -> str:
         "align": st.alignment,
     }
     return hashlib.sha256(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _detector_kwargs(fn, aid: str, a: Analysis) -> dict:
+    """Optional context the (two-engine) pipeline accepts; passed only if its signature takes it, so an
+    older/simpler run_detection keeps working."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    accepts_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    want = {"analysis_id": aid, "image_sha256": dict(a.image.sha256) if a.image else {}}
+    return {k: v for k, v in want.items() if k in params or accepts_kw}
+
+
+def _engine_warnings(runs: list, notes: list[str]) -> list[str]:
+    """Human-readable warnings for the job message: failed/skipped engine runs + pipeline notes."""
+    out: list[str] = []
+    for r in runs:
+        if getattr(r, "status", "ok") in ("failed", "skipped"):
+            role = f" ({r.channel_role})" if getattr(r, "channel_role", None) else ""
+            out.append(f"WARNING: {r.engine.value} run {r.status} on page {r.page}{role}: {r.error or 'no detail'}")
+    for n in notes:
+        if isinstance(n, str) and ("warn" in n.lower() or "fail" in n.lower()) and n not in out:
+            out.append(n if n.lower().startswith("warn") else f"WARNING: {n}")
+    return out
 
 
 def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
@@ -639,10 +678,13 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             with store.view(aid) as st:
                 red, green = images.raw_pair(st)
             progress(0.02, "images loaded")
-            res = pipeline.run_detection(red, green, regions, body, progress, cancelled, alignment=align)
+            res = pipeline.run_detection(red, green, regions, body, progress, cancelled, alignment=align,
+                                         **extra_kw)
             if cancelled():
                 finish(None)
                 return "cancelled"
+            runs = list(getattr(res, "engine_runs", None) or [])
+            raws = list(getattr(res, "raw_detections", None) or [])
             with store.edit(aid) as st:
                 if _sig(st.analysis, st) != start_sig:
                     raise RuntimeError(
@@ -657,9 +699,15 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                     st.analysis.detection_request = body
                 engine.apply_detection_result(
                     st, list(res.objects), body, dict(res.package_versions), list(res.notes),
-                    cancelled=cancelled,
+                    engine_name=body.engine.value, cancelled=cancelled,
                 )
-            return f"{len(res.objects)} objects detected"
+            # Raw engine output is audit data: appended (never replacing earlier runs) AFTER the analysis
+            # commit and outside the Analysis JSON. A failed engine run is stored too (status=failed).
+            if runs or raws:
+                store.save_engine_results(aid, runs, raws)
+            warns = _engine_warnings(runs, list(res.notes))
+            msg = f"{len(res.objects)} objects detected"
+            return msg + ("; " + " | ".join(warns) if warns else "")
 
         def finish(job):
             try:
@@ -682,6 +730,12 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                          if st.analysis.detection_request is not None else None)
             regions = [r.model_copy(deep=True) for r in st.analysis.regions]
             align = (int(st.analysis.alignment_dy), int(st.analysis.alignment_dx))
+            try:
+                from polony_app.detection import pipeline as _pl
+
+                extra_kw = _detector_kwargs(_pl.run_detection, aid, st.analysis)
+            except Exception:  # noqa: BLE001  (the job itself reports an import problem)
+                extra_kw = {}
             try:
                 job = runner.submit(aid, work, finish)
             except RuntimeError:
@@ -715,6 +769,129 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
     @api.post("/jobs/{jid}/cancel")
     def cancel_job(jid: str):
         return _json(runner.cancel(jid))
+
+    # ------------------------------------------------------------- engines (two-engine architecture)
+    def _spotiflow_adapter():
+        """Lazy: importing the adapter must never be needed for the default Big-FISH path."""
+        try:
+            import importlib
+
+            return importlib.import_module("polony_app.engines.spotiflow_adapter"), None
+        except Exception as e:  # noqa: BLE001  module missing or spotiflow/torch import problem
+            return None, f"{type(e).__name__}: {e}"
+
+    def _model_dir() -> Path:
+        env = os.environ.get("POLONY_MODEL_DIR")
+        if env:
+            return Path(env)
+        from polony_app.config import home_dir
+
+        return home_dir() / "models" / "spotiflow"
+
+    @api.get("/engines")
+    def get_engines():
+        try:
+            bf = metadata.version("big-fish")
+        except metadata.PackageNotFoundError:
+            bf = None
+        out = [{"name": "bigfish", "available": True, "reason": "", "version": bf,
+                "device": {"cuda": False, "mps": False, "cpu": True}, "models": []}]
+        ad, why = _spotiflow_adapter()
+        sp = {"name": "spotiflow", "available": False, "reason": why or "", "version": None,
+              "device": {"cuda": False, "mps": False, "cpu": False}, "models": []}
+        if ad is None:
+            sp["reason"] = f"Spotiflow adapter is not installed ({why})"
+        else:
+            try:
+                cls = getattr(ad, "SpotiflowEngine", None)
+                if not hasattr(ad, "available") and cls is not None:
+                    d = cls().describe()    # adapter's own report: availability, version, device, cached models
+                    sp.update({"available": bool(d.get("available")), "reason": str(d.get("reason") or ""),
+                               "version": d.get("version") or None,
+                               "device": {**sp["device"], **(d.get("device") or {})},
+                               "models": list(d.get("models") or [])})
+                    out.append(sp)
+                    return out
+                ok = ad.available()
+                if isinstance(ok, tuple):
+                    sp["available"], sp["reason"] = bool(ok[0]), str(ok[1] or "")
+                else:
+                    sp["available"] = bool(ok)
+                    sp["reason"] = "" if ok else "Spotiflow or torch is not installed"
+                for fn, key in (("version", "version"), ("device_info", "device"), ("list_models", "models")):
+                    f = getattr(ad, fn, None)
+                    if callable(f):
+                        try:
+                            v = f()
+                            if key == "device" and isinstance(v, dict):
+                                sp[key] = {**sp[key], **v}
+                            elif key == "models":
+                                sp[key] = [m if isinstance(m, dict) else
+                                           {k: getattr(m, k, None) for k in ("name", "cached", "version", "checksum_sha256")}
+                                           for m in (v or [])]
+                            elif key == "version":
+                                sp[key] = v
+                        except Exception:  # noqa: BLE001  informational only
+                            pass
+            except Exception as e:  # noqa: BLE001
+                sp["available"], sp["reason"] = False, f"{type(e).__name__}: {e}"
+        out.append(sp)
+        return out
+
+    @api.post("/engines/spotiflow/prepare")
+    def post_prepare_spotiflow(body: PrepareModelBody):
+        """Download/load a Spotiflow model once (cached afterwards; never re-downloaded) as a Job."""
+        ad, why = _spotiflow_adapter()
+        if ad is None or not hasattr(ad, "ensure_model"):
+            return err(409, "engine_unavailable", f"Spotiflow is not available in this installation ({why})")
+        name = body.model_name.strip()
+        if not name or len(name) > 200:
+            return err(422, "invalid_model_name", "model_name must be a non-empty name")
+
+        def work(progress, cancelled):
+            cache = ad.model_cache_dir() if hasattr(ad, "model_cache_dir") else _model_dir()
+            info = ad.ensure_model(name, cache, progress)
+            cached = getattr(info, "cached", None)
+            return (f"model '{name}' ready" + (" (already cached)" if cached else " (downloaded)")
+                    + (f", sha256 {getattr(info, 'checksum_sha256', '')[:12]}" if getattr(info, "checksum_sha256", None) else ""))
+
+        try:
+            job = runner.submit("engine-spotiflow", work)
+        except RuntimeError:
+            raise ReviewError("job_in_progress", "a model preparation job is already running", 409)
+        return _json(job)
+
+    @api.get("/analyses/{aid}/engine-runs")
+    def get_engine_runs(aid: str):
+        aid_ok(aid)
+        if not store.exists(aid):
+            raise NotFound("analysis", aid)
+        return [json.loads(r.model_dump_json()) for r in store.get_engine_runs(aid)]
+
+    @api.get("/analyses/{aid}/raw-detections")
+    def get_raw_detections(aid: str, engine: Optional[EngineName] = None, page: Optional[int] = None,
+                           run_id: Optional[str] = None, valid: Optional[bool] = None,
+                           limit: int = 5000, offset: int = 0):
+        aid_ok(aid)
+        if not store.exists(aid):
+            raise NotFound("analysis", aid)
+        if not 1 <= limit <= 200_000 or offset < 0:
+            return err(422, "invalid_param", "limit must be in 1..200000 and offset >= 0")
+        rows = store.get_raw_detections(aid, engine=engine, page=page, run_id=run_id, valid=valid,
+                                        limit=limit, offset=offset)
+        total = store.count_raw_detections(aid, engine=engine, page=page, run_id=run_id, valid=valid)
+        return Response("[" + ",".join(r.model_dump_json() for r in rows) + "]", media_type="application/json",
+                        headers={"X-Total-Count": str(total)})
+
+    @api.get("/analyses/{aid}/consensus/summary")
+    def get_consensus_summary(aid: str):
+        with store.view(aid_ok(aid)) as st:
+            return consensus_mod.consensus_summary(st)
+
+    @api.post("/analyses/{aid}/consensus/qc-sample")
+    def post_qc_sample(aid: str, body: QcSampleBody):
+        with store.edit(aid_ok(aid)) as st:
+            return consensus_mod.mark_qc_sample(st, body.fraction, body.seed)
 
     # ------------------------------------------------------------- review
     @api.get("/analyses/{aid}/counts")
@@ -790,9 +967,10 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             elif kind == "history":
                 body, mt = exporter.objects_history_csv(a).encode("utf-8"), "text/csv"
             elif kind == "provenance":
-                body, mt = exporter.provenance_json(st, od).encode("utf-8"), "application/json"
+                body, mt = exporter.provenance_json(st, od, store.get_engine_runs(aid)).encode("utf-8"), "application/json"
             else:
-                body, mt = exporter.bundle_zip(st, od), "application/zip"
+                body, mt = exporter.bundle_zip(st, od, store.get_engine_runs(aid),
+                                               store.get_raw_detections(aid)), "application/zip"
             status = exporter.status_label(a)
         return Response(body, media_type=mt, headers={
             "Content-Disposition": f'attachment; filename="{fn}"', "X-Export-Status": status})

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { api, ApiError, type DisplayParams } from '../api/client';
+import { api, ApiError, RAW_LIMIT, type DisplayParams } from '../api/client';
+import type { EngineFilter } from '../lib/consensus';
 import type {
   ActionType,
   Analysis,
@@ -8,6 +9,11 @@ import type {
   CsvImport,
   DetectedObject,
   DetectionRequest,
+  ConsensusSummaryResponse,
+  EngineInfo,
+  EngineName,
+  EngineRunInfo,
+  RawDetection,
   ImageView,
   Job,
   ObjectClass,
@@ -34,6 +40,23 @@ export interface Toast {
   kind: 'error' | 'info' | 'success';
   text: string;
 }
+
+export interface EngineLayers {
+  /** consensus styling of candidates by channel-evidence status */
+  consensus: boolean;
+  rawBigfish: boolean;
+  rawSpotiflow: boolean;
+  /** raw detections outside the valid counting area / excluded regions */
+  rawExcluded: boolean;
+  /** objects the user rejected (deleted) */
+  rejected: boolean;
+}
+export interface RawSlot {
+  items: RawDetection[];
+  /** true when the server returned the cap, i.e. more may exist */
+  capped: boolean;
+}
+export const rawKey = (engine: EngineName, page: number, excluded: boolean) => `${engine}|${page}|${excluded ? 'all' : 'valid'}`;
 
 export type RightTab = 'review' | 'regions' | 'detect' | 'totals' | 'finish';
 
@@ -76,6 +99,15 @@ export interface AppState {
   previewBusy: boolean;
   detReq: DetectionRequest | null;
   job: Job | null;
+  engines: EngineInfo[] | null;
+  enginesError: string | null;
+  prepareJob: Job | null;
+  engineRuns: EngineRunInfo[];
+  consensusSummary: ConsensusSummaryResponse | null;
+  layers: EngineLayers;
+  rawCache: Record<string, RawSlot>;
+  rawError: string | null;
+  reviewFilter: EngineFilter;
   regionErrors: Record<string, string>;
   csvImports: CsvImport[];
   /** grid-field generator preview polygons (not yet applied) */
@@ -134,6 +166,11 @@ export interface AppState {
   finalize: () => Promise<void>;
   refreshCsv: () => Promise<void>;
   loadReference: (id: string) => Promise<void>;
+  loadEngines: () => Promise<void>;
+  prepareModel: (name: string) => Promise<void>;
+  setLayer: (p: Partial<EngineLayers>) => void;
+  loadRaw: () => Promise<void>;
+  qcSample: (fraction: number, seed: number) => Promise<void>;
 }
 
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
@@ -182,6 +219,15 @@ export const useApp = create<AppState>((set, get) => ({
   previewBusy: false,
   detReq: null,
   job: null,
+  engines: null,
+  enginesError: null,
+  prepareJob: null,
+  engineRuns: [],
+  consensusSummary: null,
+  layers: { consensus: true, rawBigfish: false, rawSpotiflow: false, rawExcluded: false, rejected: false },
+  rawCache: {},
+  rawError: null,
+  reviewFilter: 'all',
   regionErrors: {},
   csvImports: [],
   gridPreview: null,
@@ -273,6 +319,11 @@ export const useApp = create<AppState>((set, get) => ({
       refPlane: null,
       refGridPreview: null,
       chamberPreview: null,
+      engineRuns: [],
+      consensusSummary: null,
+      rawCache: {},
+      rawError: null,
+      reviewFilter: 'all',
     });
     try {
       const a = await api.getAnalysis(id);
@@ -312,6 +363,17 @@ export const useApp = create<AppState>((set, get) => ({
       if (get().current?.id === id) set({ counts, queue });
     } catch {
       /* counts/queue are derived; failure shows as empty state */
+    }
+    // two-engine data is optional: an older backend simply has none of it
+    try {
+      const [runs, summary] = await Promise.all([api.engineRuns(id), api.consensusSummary(id)]);
+      if (get().current?.id !== id) return;
+      const sig = (r: EngineRunInfo[]) => r.map((x) => x.run_id).join(',');
+      const changed = sig(runs) !== sig(get().engineRuns);
+      set({ engineRuns: runs, consensusSummary: summary, ...(changed ? { rawCache: {} } : {}) });
+      if (changed) void get().loadRaw();
+    } catch {
+      if (get().current?.id === id) set({ engineRuns: [], consensusSummary: null });
     }
   },
 
@@ -461,6 +523,71 @@ export const useApp = create<AppState>((set, get) => ({
       await api.cancelJob(j.id);
     } catch (e) {
       get().toast('error', `cancel: ${errText(e)}`);
+    }
+  },
+
+  loadEngines: async () => {
+    try {
+      set({ engines: await api.engines(), enginesError: null });
+    } catch (e) {
+      set({ engines: null, enginesError: errText(e) });
+    }
+  },
+
+  prepareModel: async (name) => {
+    try {
+      let job = await api.prepareSpotiflow(name);
+      set({ prepareJob: job });
+      while (job.status === 'queued' || job.status === 'running') {
+        await new Promise((r) => setTimeout(r, 500));
+        job = await api.job(job.id);
+        set({ prepareJob: job });
+      }
+      await get().loadEngines();
+      if (job.status === 'done') get().toast('success', `Spotiflow model "${name}" is ready`);
+      else get().toast('error', `Model preparation ${job.status}: ${job.error ?? ''}`);
+    } catch (e) {
+      set({ prepareJob: { id: '', analysis_id: '', status: 'failed', progress: 0, message: '', error: errText(e), started_at: null, finished_at: null } });
+    }
+  },
+
+  setLayer: (p) => {
+    set((s) => ({ layers: { ...s.layers, ...p } }));
+    void get().loadRaw();
+  },
+
+  /** Lazily fetch raw detections, only for toggled engines, one capped request per engine and page. */
+  loadRaw: async () => {
+    const { current: a, layers, rawCache } = get();
+    if (!a?.image) return;
+    const pages = [...new Set(a.image.channels.filter((c) => c.role !== 'ignore').map((c) => c.page))];
+    const want: EngineName[] = [];
+    if (layers.rawBigfish) want.push('bigfish');
+    if (layers.rawSpotiflow) want.push('spotiflow');
+    const id = a.id;
+    for (const eng of want)
+      for (const pg of pages) {
+        const k = rawKey(eng, pg, layers.rawExcluded);
+        if (get().rawCache[k] || rawCache[k]) continue;
+        try {
+          const items = await api.rawDetections(id, { engine: eng, page: pg, valid: layers.rawExcluded ? undefined : true, limit: RAW_LIMIT });
+          if (get().current?.id !== id) return;
+          set((s) => ({ rawCache: { ...s.rawCache, [k]: { items, capped: items.length >= RAW_LIMIT } }, rawError: null }));
+        } catch (e) {
+          set({ rawError: errText(e) });
+        }
+      }
+  },
+
+  qcSample: async (fraction, seed) => {
+    const a = get().current;
+    if (!a) return;
+    try {
+      const r = await api.qcSample(a.id, fraction, seed);
+      get().toast('info', `${r.marked} agreement candidate${r.marked === 1 ? '' : 's'} marked for QC review`);
+      await get().refreshDerived();
+    } catch (e) {
+      get().toast('error', `QC sample: ${errText(e)}`);
     }
   },
 

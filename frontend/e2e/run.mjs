@@ -804,7 +804,154 @@ async function referenceSuite() {
   await reset();
 }
 
-const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite, referenceSuite];
+// ============================================================= 8. two-engine UI
+async function engineSuite() {
+  await reset();
+  // --- Detect tab: selector, model prep, notes
+  await openAnalysis('demo');
+  await tid('tab-detect').click();
+  await tid('engine-section').waitFor();
+  check('engine default is Big-FISH', (await tid('engine-bigfish').getAttribute('class')).includes('on'));
+  const notes = await tid('engine-notes').innerText();
+  check('engine notes: CPU time, GPU, unchanged threshold', /30 s per page/.test(notes) && /GPU is used automatically/.test(notes) && /default threshold is unchanged/.test(notes), notes.slice(0, 80));
+  check('no Spotiflow fields while Big-FISH only', (await tid('spotiflow-model').count()) === 0 && (await tid('consensus-tol').count()) === 0);
+  await tid('engine-hybrid').click();
+  await tid('spotiflow-model').waitFor();
+  check('hybrid shows model select + consensus tolerance', (await tid('consensus-tol').inputValue()) === '4' && (await tid('spotiflow-model').inputValue()) === 'general');
+  check('consensus tolerance help text', /paired one-to-one/.test(await tid('engine-section').innerText()));
+  await tid('spotiflow-model').selectOption('hybiss');
+  await tid('prepare-model').click();
+  await page.waitForSelector('[data-testid=prepare-job][data-status=running], [data-testid=prepare-job][data-status=done]');
+  await page.waitForSelector('[data-testid=prepare-job][data-status=done]');
+  check('prepare model reports progress then ready', /ready/.test(await tid('spotiflow-model').innerText()), await tid('spotiflow-model').innerText());
+  // run hybrid with a model whose run fails => Big-FISH result stays valid
+  await tid('spotiflow-model').selectOption('smfish_3d');
+  await tid('run-detection').click();
+  await page.waitForSelector('[data-testid=job][data-status=done]', { timeout: 10000 });
+  await tid('engine-run-error').first().waitFor();
+  const et = await tid('engine-runs').innerText();
+  check('failed Spotiflow run: error + Big-FISH still valid', /checksum mismatch/.test(et) && /Big-FISH result is still valid/.test(et));
+  check('failed run row marked', (await page.locator('[data-testid=engine-runs] tr[data-status=failed]').count()) === 2);
+  await shot('engine-run-failed');
+  // successful hybrid run
+  await tid('spotiflow-model').selectOption('general');
+  await tid('run-detection').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid=job]')?.dataset.status === 'done' && document.querySelectorAll('[data-testid=engine-runs] tr[data-status=ok]').length === 4, null, { timeout: 12000 });
+  const rt = await tid('engine-runs').innerText();
+  check('engine runs table: engine, model+version, checksum, page, device, time', /Spotiflow/.test(rt) && /general v1\.0/.test(rt) && /c0ffee12/.test(rt) && /cpu/.test(rt) && /31 s/.test(rt) && /Big-FISH/.test(rt), rt.replace(/\s+/g, ' ').slice(0, 160));
+  await shot('engine-runs');
+  // unavailable Spotiflow
+  await fetch(`${BASE}/api/__mock/spotiflow`, { method: 'POST', body: JSON.stringify({ available: false }) });
+  await openAnalysis('demo');
+  await tid('tab-detect').click();
+  await tid('spotiflow-unavailable').waitFor();
+  check('Spotiflow unavailable: reason + optional note, selector disabled', /not installed/.test(await tid('spotiflow-unavailable').innerText()) && /Spotiflow is optional; Big-FISH keeps working/.test(await tid('spotiflow-unavailable').innerText()) && (await tid('engine-hybrid').isDisabled()) && (await tid('engine-bigfish').isEnabled()));
+  await reset();
+
+  // --- hybrid analysis: summary, filters, queue order, inspector
+  await openAnalysis('hybrid');
+  await tid('summary-total').waitFor();
+  const tot = await tid('summary-total').innerText();
+  check('summary total line', /Both engines 4 · Big-FISH only 3 · Spotiflow only 1 · Human added 0 · Confirmed 0 · Rejected 0 · Unresolved 8/.test(tot), tot);
+  const p0 = await tid('summary-page-0').innerText();
+  check('summary is per page with confirmed role (not merged)', /Page 0/.test(p0) && /confirmed role: red/.test(p0) && (await tid('summary-page-1').count()) === 1, p0.replace(/\n/g, ' '));
+  const firstQ = await page.locator('[data-testid^="queue-o-"]').first().innerText();
+  check('queue: disagreement first (server order)', /Big-FISH only|Spotiflow only/.test(firstQ), firstQ.replace(/\n/g, ' '));
+  await tid('engine-filter-select').selectOption('spotiflow_only');
+  check('filter Spotiflow only', (await page.locator('[data-testid^="queue-o-"]').count()) === 1 && (await tid('queue-o-0002').count()) === 1);
+  await tid('engine-filter-select').selectOption('agreement');
+  check('filter Agreement lists unqueued agreements', (await page.locator('[data-testid^="queue-o-"]').count()) === 3);
+  await tid('engine-filter-select').selectOption('disagreements');
+  check('filter Disagreements only', (await page.locator('[data-testid^="queue-o-"]').count()) === 3);
+  await tid('engine-filter-select').selectOption('human_added');
+  check('filter empty state', (await tid('filter-empty').count()) === 1);
+  await tid('engine-filter-select').selectOption('all');
+  await tid('queue-o-0002').click();
+  await tid('engine-provenance').waitFor();
+  const ins = await tid('inspector').innerText();
+  check('inspector: model score + LoG response labels', /model score/.test(ins) && /LoG response \(noise units\)/.test(ins), ins.slice(0, 200).replace(/\n/g, ' | '));
+  check('inspector: no percent / confidence wording', !/%|confiden/i.test(ins));
+  check('inspector: Spotiflow-only has no Big-FISH coordinates', /Spotiflow only/.test(ins) && /–/.test(await tid('prov-green').innerText()));
+  await tid('engine-filter-select').selectOption('agreement');
+  await tid('queue-o-0003').click();
+  const ag = await tid('engine-provenance').innerText();
+  check('agreement: both coordinates and match distance', /matched, 1\.44 px apart/.test(ag) && /101\.20, 99\.20|301\.20, 249\.20/.test(ag), ag.replace(/\s+/g, ' ').slice(0, 200));
+  check('agreement info popover', (await tid('agreement-info').count()) >= 1);
+  await tid('engine-filter-select').selectOption('all');
+
+  // --- overlay layers
+  const before = (await (await fetch(`${BASE}/api/__mock/raw-requests`)).json()).length;
+  check('no raw-detections fetched until toggled', before === 0, String(before));
+  await tid('engine-layers').locator('summary.btn').click();
+  check('legend lists patterns + wording', /long-dash/.test(await tid('layer-legend').innerText()) && /dotted/.test(await tid('layer-legend').innerText()) && /double ring/.test(await tid('layer-legend').innerText()));
+  await tid('layer-raw-bigfish').check();
+  await page.waitForSelector('[data-testid=raw-bigfish]');
+  check('raw Big-FISH: valid only by default', (await tid('raw-bigfish').getAttribute('data-count')) === '7', await tid('raw-bigfish').getAttribute('data-count'));
+  let reqs = await (await fetch(`${BASE}/api/__mock/raw-requests`)).json();
+  check('raw fetch is per engine+page, capped, valid=true, lazy', reqs.length === 2 && reqs.every((u) => /engine=bigfish/.test(u) && /valid=true/.test(u) && /limit=5000/.test(u)), reqs.join(' '));
+  await tid('layer-raw-spotiflow').check();
+  await page.waitForFunction(() => document.querySelector('[data-testid=raw-spotiflow]')?.dataset.count === '5');
+  check('raw Spotiflow layer', true);
+  await tid('layer-raw-excluded').check();
+  await page.waitForFunction(() => document.querySelector('[data-testid=raw-bigfish]')?.dataset.count === '9' && document.querySelector('[data-testid=raw-spotiflow]')?.dataset.count === '7');
+  check('show excluded adds faint invalid points', (await page.locator('[data-testid=raw-bigfish] g[data-valid="0"]').count()) === 2);
+  check('raw shapes: hollow circle vs triangle', (await page.locator('[data-testid=raw-bigfish] circle').count()) > 0 && (await page.locator('[data-testid=raw-spotiflow] path').count()) > 0);
+  await shot('engine-layers');
+  await setHidden(true);
+  check('H hides raw layers too', (await tid('raw-bigfish').count()) === 0);
+  await setHidden(false);
+  await tid('layer-raw-bigfish').uncheck();
+  await tid('layer-raw-spotiflow').uncheck();
+  check('raw layers removable', (await tid('raw-bigfish').count()) === 0);
+  const kinds = await page.evaluate(() => [...document.querySelectorAll('[data-consensus]')].map((g) => g.dataset.consensus));
+  check('consensus rings for each status', ['agreement', 'bigfish_only', 'spotiflow_only'].every((k) => kinds.includes(k)), kinds.join(','));
+  const dashes = await page.evaluate(() => {
+    const d = {};
+    for (const g of document.querySelectorAll('[data-consensus]')) d[g.dataset.consensus] = g.querySelector('circle:last-of-type')?.getAttribute('stroke-dasharray') ?? 'solid';
+    return d;
+  });
+  check('status rings differ by pattern, not only colour', new Set(Object.values(dashes)).size >= 3, JSON.stringify(dashes));
+  await tid('layer-consensus').uncheck();
+  check('consensus styling toggle', (await page.locator('[data-consensus]').count()) === 0);
+  await tid('layer-consensus').check();
+
+  // --- reject / approve mapped to delete / confirm, rejected layer
+  await page.locator('[data-testid=engine-layers] summary.btn').click();
+  await tid('queue-o-0002').click();
+  check('Approve / Reject buttons', (await tid('confirm').innerText()).startsWith('Approve') && (await tid('inspector-delete').innerText()).startsWith('Reject'));
+  await tid('inspector-delete').click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid=queue-o-0002]'));
+  let an = await (await fetch(`${BASE}/api/analyses/hybrid`)).json();
+  check('Reject = existing delete action', an.objects.find((o) => o.id === 'o-0002').deleted === true);
+  await page.waitForFunction(() => /Rejected 1/.test(document.querySelector('[data-testid=summary-total]')?.innerText ?? ''));
+  check('summary counts rejected', true);
+  check('rejected hidden by default', (await tid('rejected-layer').count()) === 0);
+  await tid('engine-layers').locator('summary.btn').click();
+  await tid('layer-rejected').check();
+  await tid('rejected-layer').waitFor();
+  check('Show rejected draws the deleted candidate', (await tid('rejected-layer').getAttribute('data-count')) === '1');
+  await shot('engine-rejected');
+  await tid('layer-rejected').uncheck();
+  await page.locator('[data-testid=engine-layers] summary.btn').click();
+  await tid('queue-o-0004').click();
+  await tid('confirm').click();
+  await page.waitForFunction(() => /Confirmed 2/.test(document.querySelector('[data-testid=summary-total]')?.innerText ?? ''));
+  check('Approve = confirm; summary Confirmed', true);
+
+  // --- QC sample
+  await page.locator('[data-testid=qc-sample] summary').click();
+  check('QC explains agreement is not ground truth', /Agreement is not ground truth/.test(await tid('qc-sample').innerText()));
+  await tid('qc-fraction').fill('0.5');
+  await tid('qc-seed').fill('7');
+  await tid('qc-run').click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid^="queue-o-"]').length > 0 && /QC sample/.test(document.querySelector('[data-testid=review-tab]').innerText));
+  reqs = await (await fetch(`${BASE}/api/__mock/raw-requests`)).json();
+  check('QC sample posts fraction + seed, queue gains QC items', reqs.some((u) => u.startsWith('qc') && /"fraction":0.5/.test(u) && /"seed":7/.test(u)));
+  await shot('engine-review');
+  await reset();
+}
+
+const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite, referenceSuite, engineSuite];
 for (const s of suites) {
   try {
     await s();

@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { useApp } from '../state/store';
-import type { DetectedObject, EmbeddedRoi, Region } from '../api/types';
+import type { ConsensusStatus, DetectedObject, EmbeddedRoi, RawDetection, Region } from '../api/types';
+import { objectStatus, triangleD } from '../lib/consensus';
 import { glyphFor, glyphPath, ringRadiusImage } from '../lib/glyph';
 import { polygonBounds } from '../lib/geometry';
 
@@ -118,6 +119,87 @@ export const HaloText = memo(function HaloText({
   );
 });
 
+/** Pattern per engine status (readable without colour): solid ring, long dashes, dots, double ring. */
+export const STATUS_STYLE: Record<Exclude<ConsensusStatus, 'human_rejected'>, { tint: string; mark: string; name: string }> = {
+  agreement: { tint: '#9ad1ff', mark: '=', name: 'both engines (solid ring)' },
+  bigfish_only: { tint: '#5ec8ff', mark: 'B', name: 'Big-FISH only (long-dash ring)' },
+  spotiflow_only: { tint: '#ffb86b', mark: 'S', name: 'Spotiflow only (dotted ring)' },
+  human_added: { tint: '#e5a8ff', mark: '+', name: 'human added (double ring)' },
+};
+
+/** Outer ring + letter badge around an object glyph showing which engine(s) proposed the candidate. */
+export const ConsensusMark = memo(function ConsensusMark({ x, y, status, scale, compact }: { x: number; y: number; status: ConsensusStatus; scale: number; compact?: boolean }) {
+  if (status === 'human_rejected') return null;
+  const st = STATUS_STYLE[status];
+  const k = 1 / scale;
+  const r = ringRadiusImage(scale, 4, compact) + 4.5 * k;
+  const dash = status === 'bigfish_only' ? `${6 * k} ${3.4 * k}` : status === 'spotiflow_only' ? `${1.1 * k} ${2.6 * k}` : undefined;
+  const ring = (rr: number) => (
+    <>
+      <circle cx={x} cy={y} r={rr} fill="none" stroke={DARK} strokeWidth={(compact ? 2.6 : 3.6) * k} strokeDasharray={dash} strokeLinecap={status === 'spotiflow_only' ? 'round' : undefined} />
+      <circle cx={x} cy={y} r={rr} fill="none" stroke="#fff" strokeWidth={(compact ? 1 : 1.5) * k} strokeDasharray={dash} strokeLinecap={status === 'spotiflow_only' ? 'round' : undefined} />
+    </>
+  );
+  return (
+    <g data-consensus={status} pointerEvents="none">
+      {ring(r)}
+      {status === 'human_added' && ring(r + 3 * k)}
+      {!compact && <HaloText x={x - r - 8 * k} y={y + r + 6 * k} scale={scale} size={9} fill={st.tint} text={st.mark} />}
+    </g>
+  );
+});
+
+/** Human-rejected candidates (deleted by a user): grey dashed circle with a cross. Only drawn on request. */
+export const RejectedLayer = memo(function RejectedLayer({ objects, scale }: { objects: DetectedObject[]; scale: number }) {
+  const k = 1 / scale;
+  const r = 5 * k;
+  return (
+    <g data-testid="rejected-layer" data-count={objects.length} pointerEvents="none">
+      {objects.map((o) => {
+        const d = `M${o.x - r * 0.7} ${o.y - r * 0.7}L${o.x + r * 0.7} ${o.y + r * 0.7}M${o.x - r * 0.7} ${o.y + r * 0.7}L${o.x + r * 0.7} ${o.y - r * 0.7}`;
+        return (
+          <g key={o.id} data-rejected={o.id}>
+            <circle cx={o.x} cy={o.y} r={r} fill="none" stroke={DARK} strokeWidth={3.6 * k} strokeDasharray={`${2 * k} ${2 * k}`} />
+            <circle cx={o.x} cy={o.y} r={r} fill="none" stroke="#c9ced8" strokeWidth={1.3 * k} strokeDasharray={`${2 * k} ${2 * k}`} />
+            <path d={d} stroke={DARK} strokeWidth={3.4 * k} fill="none" />
+            <path d={d} stroke="#c9ced8" strokeWidth={1.3 * k} fill="none" />
+          </g>
+        );
+      })}
+    </g>
+  );
+});
+
+export const RAW_COLOR = { bigfish: '#5ec8ff', spotiflow: '#ffb86b' } as const;
+
+/** Raw engine output: Big-FISH = small hollow circle, Spotiflow = small hollow triangle. Excluded (invalid) points are faint. */
+export const RawLayer = memo(function RawLayer({ items, engine, scale }: { items: RawDetection[]; engine: 'bigfish' | 'spotiflow'; scale: number }) {
+  const k = 1 / scale;
+  const r = 3.4 * k;
+  const color = RAW_COLOR[engine];
+  return (
+    <g data-testid={`raw-${engine}`} data-count={items.length} pointerEvents="none">
+      {items.map((d) => {
+        const op = d.valid ? 1 : 0.5;
+        if (engine === 'bigfish')
+          return (
+            <g key={d.id} opacity={op} data-valid={d.valid ? '1' : '0'}>
+              <circle cx={d.x} cy={d.y} r={r} fill="none" stroke={DARK} strokeWidth={3 * k} />
+              <circle cx={d.x} cy={d.y} r={r} fill="none" stroke={color} strokeWidth={1.3 * k} strokeDasharray={d.valid ? undefined : `${1.5 * k} ${1.5 * k}`} />
+            </g>
+          );
+        const tri = triangleD(d.x, d.y, r * 1.25);
+        return (
+          <g key={d.id} opacity={op} data-valid={d.valid ? '1' : '0'}>
+            <path d={tri} fill="none" stroke={DARK} strokeWidth={3 * k} strokeLinejoin="round" />
+            <path d={tri} fill="none" stroke={color} strokeWidth={1.3 * k} strokeLinejoin="round" strokeDasharray={d.valid ? undefined : `${1.5 * k} ${1.5 * k}`} />
+          </g>
+        );
+      })}
+    </g>
+  );
+});
+
 interface ObjectsProps {
   objects: DetectedObject[];
   scale: number;
@@ -126,9 +208,10 @@ interface ObjectsProps {
   showReview: boolean;
   preview?: boolean;
   dragOverride?: { id: string; x: number; y: number } | null;
+  consensus?: boolean;
 }
 
-export const ObjectsLayer = memo(function ObjectsLayer({ objects, scale, selection, showLabels, showReview, preview, dragOverride }: ObjectsProps) {
+export const ObjectsLayer = memo(function ObjectsLayer({ objects, scale, selection, showLabels, showReview, preview, dragOverride, consensus }: ObjectsProps) {
   const sel = new Set(selection);
   const labels = showLabels === 'on' || (showLabels === 'auto' && scale >= 3 && objects.length < 1500);
   const compact = scale < 1 || objects.length > 500;
@@ -142,6 +225,10 @@ export const ObjectsLayer = memo(function ObjectsLayer({ objects, scale, selecti
         return (
           <g key={o.id}>
             <Glyph o={pos} scale={scale} compact={compact && !selected} selected={selected} reviewed={o.reviewed} showReview={showReview && !preview} preview={preview} />
+            {consensus && !preview && (() => {
+              const st = objectStatus(o);
+              return st ? <ConsensusMark x={pos.x} y={pos.y} status={st} scale={scale} compact={compact && !selected} /> : null;
+            })()}
             {(labels || selected) && <HaloText x={pos.x + r + 4 * k} y={pos.y + r + 9 * k} scale={scale} text={shortId(o.id)} />}
           </g>
         );

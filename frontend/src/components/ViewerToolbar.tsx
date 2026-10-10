@@ -2,6 +2,7 @@ import type { ImageView, ObjectClass } from '../api/types';
 import { CLASS_KEY, CLASS_LABEL, CLASS_ORDER, glyphFor, glyphPath } from '../lib/glyph';
 import { liveObjects, useApp, type Tool } from '../state/store';
 import { useCursor } from './Viewer';
+import { EngineLayersMenu } from './EngineLayers';
 
 const VIEWS: { id: ImageView; label: string; key: string }[] = [
   { id: 'red', label: 'Raw red', key: '1' },
@@ -90,6 +91,7 @@ export function ViewerToolbar() {
         >
           Hide overlays <kbd>H</kbd>
         </button>
+        <EngineLayersMenu />
         <select
           className="input sm"
           value={s.showLabels}

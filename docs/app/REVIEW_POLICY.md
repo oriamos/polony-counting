@@ -70,3 +70,37 @@
   cover partly is counted over the remaining area only and flagged in the Notes sheet; a field
   that is covered completely is left blank and flagged. Counting regions without a `field_index`
   are not in the lab export (warned).
+
+## Two-engine review (Big-FISH + Spotiflow)
+
+Contract: `TWO_ENGINE_CONTRACT.md`. **Agreement is not truth; a model score is not a probability;
+nothing is ever auto-rejected or auto-deleted because one engine missed it.**
+
+* **Candidate status** lives on the channel evidence (`ChannelEvidence.consensus_status`):
+  `agreement | bigfish_only | spotiflow_only | human_added`. `human_added` is set on the channel
+  evidence of EVERY manual `add` (red -> red evidence, green -> green, yellow -> both), whichever
+  engine ran, because it is simply true; `detected` stays false (no engine saw it).
+  `human_rejected` is **derived**, never stored: a candidate whose object was soft-deleted with the
+  `delete` action (tombstone, `AnalysisState.user_deleted`). Deletions caused by merge/split are not
+  rejections. Undoing the delete removes the derived rejection.
+* **Queue order** (`review/counts.py`, lower first): ambiguous_match 0, saturated 1,
+  **bigfish_only / spotiflow_only 2**, weak_signal / near_threshold 3, debris_like 4, dense_cluster 5,
+  suspicious_shape 6, near_edge 7, **qc_sample 8**. Unflagged agreements are not queued.
+* **QC sample** `POST /consensus/qc-sample {fraction, seed}`: eligible = counted, non-deleted,
+  unreviewed objects with at least one detected channel whose every detected channel evidence is
+  `agreement`. An object is sampled iff `sha256("<seed>:<object id>")` (first 8 bytes / 2^64) is
+  `< fraction` - a pure function of (seed, id): independent of object order, process and RNG state.
+  It only ADDS `ReviewReason.qc_sample` (idempotent; the response reports `marked` = size of the
+  sample, `newly_marked`, `eligible`). One undoable action, logged as `region_edit` with
+  `payload.event == "qc_sample"` (no new ActionType).
+* **Summary** `GET /consensus/summary` -> `{pages:[ConsensusSummary per red/green page], total}`.
+  Per channel: the four status counts are LIVE candidates; `human_rejected` = `rejected` = user-deleted
+  candidates (their original engine status is not counted again); `confirmed` = live and reviewed
+  (class not uncertain); `unresolved` = live and (unreviewed or uncertain). Candidates are channel
+  evidence that an engine detected or a human added, so status-less legacy evidence counts in
+  confirmed/unresolved only. `total` is the plain sum; channels are never merged silently.
+* **Audit**: engine runs and raw detections are stored outside the Analysis JSON, appended per detect
+  job and never deleted by re-detection (`GET /engine-runs`, `GET /raw-detections`). A failed Spotiflow
+  run in hybrid mode is stored (`status=failed`, error) and surfaced as a WARNING in the job message;
+  the job still succeeds with the Big-FISH result. Staleness is derived from the whole
+  `DetectionRequest` (engine choice, Spotiflow params incl. model name, consensus tolerance).

@@ -24,8 +24,10 @@ from polony_app.schemas import (
     Analysis,
     AnalysisStatus,
     CsvImport,
+    EngineRunInfo,
     Job,
     JobStatus,
+    RawDetection,
     ReviewAction,
 )
 
@@ -41,6 +43,16 @@ CREATE TABLE IF NOT EXISTS jobs (
   message TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS csv_imports (
   id TEXT PRIMARY KEY, created_at TEXT, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS engine_runs (
+  analysis_id TEXT NOT NULL, run_id TEXT NOT NULL, engine TEXT, page INTEGER, data TEXT NOT NULL,
+  PRIMARY KEY (analysis_id, run_id));
+CREATE INDEX IF NOT EXISTS engine_runs_aid_idx ON engine_runs (analysis_id, engine, page);
+CREATE TABLE IF NOT EXISTS raw_detections (
+  analysis_id TEXT NOT NULL, run_id TEXT NOT NULL, id TEXT NOT NULL, engine TEXT, page INTEGER,
+  valid INTEGER, data TEXT NOT NULL,
+  PRIMARY KEY (analysis_id, run_id, id));
+CREATE INDEX IF NOT EXISTS raw_det_aid_idx ON raw_detections (analysis_id, engine, page, valid);
+CREATE INDEX IF NOT EXISTS raw_det_run_idx ON raw_detections (analysis_id, run_id);
 """
 
 
@@ -244,9 +256,74 @@ class Store:
                 self._exec("DELETE FROM analyses WHERE id=?", (aid,))
                 self._exec("DELETE FROM actions WHERE analysis_id=?", (aid,))
                 self._exec("DELETE FROM jobs WHERE analysis_id=?", (aid,))
+                self._exec("DELETE FROM engine_runs WHERE analysis_id=?", (aid,))
+                self._exec("DELETE FROM raw_detections WHERE analysis_id=?", (aid,))
             self._cache.pop(aid, None)
             self._saved_log_len.pop(aid, None)
             shutil.rmtree(self.originals_dir(aid), ignore_errors=True)
+
+    # ----------------------------------------------------------- engine results (audit, append-only)
+    def save_engine_results(self, aid: str, runs: list[EngineRunInfo],
+                            detections: list[RawDetection]) -> None:
+        """Append the engine runs + raw detections of one detect job. Runs of earlier jobs are never
+        touched (audit); only an identical run_id is replaced (idempotent retry). Kept outside the
+        Analysis JSON on purpose (it can hold 100k+ points)."""
+        if not self.exists(aid):
+            raise NotFound("analysis", aid)
+        run_ids = [r.run_id for r in runs]
+        with self._dblock:
+            self._exec("BEGIN")
+            try:
+                for rid in run_ids:
+                    self._exec("DELETE FROM raw_detections WHERE analysis_id=? AND run_id=?", (aid, rid))
+                    self._exec("DELETE FROM engine_runs WHERE analysis_id=? AND run_id=?", (aid, rid))
+                for r in runs:
+                    self._exec(
+                        "INSERT INTO engine_runs (analysis_id,run_id,engine,page,data) VALUES (?,?,?,?,?)",
+                        (aid, r.run_id, r.engine.value, r.page, r.model_dump_json()))
+                self._db.executemany(
+                    "INSERT OR REPLACE INTO raw_detections (analysis_id,run_id,id,engine,page,valid,data)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    [(aid, d.run_id, d.id, d.engine.value, d.page, 1 if d.valid else 0, d.model_dump_json())
+                     for d in detections])
+                self._exec("COMMIT")
+            except Exception:
+                self._exec("ROLLBACK")
+                raise
+
+    def get_engine_runs(self, aid: str) -> list[EngineRunInfo]:
+        with self._dblock:
+            rows = self._exec("SELECT data FROM engine_runs WHERE analysis_id=? ORDER BY rowid", (aid,)).fetchall()
+        return [EngineRunInfo.model_validate_json(r["data"]) for r in rows]
+
+    @staticmethod
+    def _det_where(aid, engine, page, run_id, valid) -> tuple[str, list]:
+        where, args = ["analysis_id=?"], [aid]
+        for col, v in (("engine", engine), ("page", page), ("run_id", run_id)):
+            if v is not None:
+                where.append(f"{col}=?")
+                args.append(getattr(v, "value", v))
+        if valid is not None:
+            where.append("valid=?")
+            args.append(1 if valid else 0)
+        return " AND ".join(where), args
+
+    def get_raw_detections(self, aid: str, engine=None, page: int | None = None, run_id: str | None = None,
+                           valid: bool | None = None, limit: int | None = None, offset: int = 0) -> list[RawDetection]:
+        w, args = self._det_where(aid, engine, page, run_id, valid)
+        sql = f"SELECT data FROM raw_detections WHERE {w} ORDER BY rowid"
+        if limit is not None or offset:
+            sql += " LIMIT ? OFFSET ?"
+            args += [-1 if limit is None else int(limit), int(offset)]
+        with self._dblock:
+            rows = self._exec(sql, tuple(args)).fetchall()
+        return [RawDetection.model_validate_json(r["data"]) for r in rows]
+
+    def count_raw_detections(self, aid: str, engine=None, page: int | None = None, run_id: str | None = None,
+                             valid: bool | None = None) -> int:
+        w, args = self._det_where(aid, engine, page, run_id, valid)
+        with self._dblock:
+            return int(self._exec(f"SELECT count(*) AS n FROM raw_detections WHERE {w}", tuple(args)).fetchone()["n"])
 
     # ----------------------------------------------------------- jobs
     def create_job(self, aid: str) -> Job:

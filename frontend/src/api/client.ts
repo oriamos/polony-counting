@@ -10,6 +10,11 @@ import type {
   ReferenceInfo,
   CountsResponse,
   CsvImport,
+  ConsensusSummaryResponse,
+  EngineInfo,
+  EngineName,
+  EngineRunInfo,
+  RawDetection,
   DetectionRequest,
   HealthResponse,
   Job,
@@ -71,6 +76,9 @@ async function request<T>(method: string, path: string, body?: unknown, form?: F
   return (text ? JSON.parse(text) : (undefined as unknown)) as T;
 }
 
+/** per page and engine cap for lazily fetched raw detections */
+export const RAW_LIMIT = 5000;
+
 export const api = {
   health: () => request<HealthResponse>('GET', '/health'),
   listAnalyses: () => request<AnalysisSummary[]>('GET', '/analyses'),
@@ -104,6 +112,14 @@ export const api = {
   compareFields: (id: string, plane: number | null, countType: CompareCountType) =>
     request<CompareResponse>('GET', `/analyses/${id}/fields/compare?${plane != null ? `plane=${plane}&` : ''}count_type=${countType}`),
   autoChamber: (id: string, rim_px: number) => request<AutoChamberResponse>('POST', `/analyses/${id}/regions/auto-chamber`, { rim_px }),
+  engines: () => request<EngineInfo[]>('GET', '/engines'),
+  prepareSpotiflow: (model_name: string) => request<Job>('POST', '/engines/spotiflow/prepare', { model_name }),
+  engineRuns: (id: string) => request<EngineRunInfo[]>('GET', `/analyses/${id}/engine-runs`),
+  rawDetections: (id: string, q: { engine: EngineName; page: number; valid?: boolean; limit?: number }) =>
+    request<RawDetection[]>('GET', `/analyses/${id}/raw-detections?engine=${q.engine}&page=${q.page}${q.valid != null ? `&valid=${q.valid}` : ''}&limit=${q.limit ?? RAW_LIMIT}`),
+  consensusSummary: (id: string) => request<ConsensusSummaryResponse>('GET', `/analyses/${id}/consensus/summary`),
+  qcSample: (id: string, fraction: number, seed: number) =>
+    request<{ marked: number }>('POST', `/analyses/${id}/consensus/qc-sample`, { fraction, seed }),
   listCsv: () => request<CsvImport[]>('GET', '/csv-imports'),
   uploadCsv: (file: File) => {
     const fd = new FormData();

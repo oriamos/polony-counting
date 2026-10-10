@@ -222,6 +222,9 @@ function objFromSpot(s, prefix = 'o') {
 const noEv = () => ({ detected: false, x: null, y: null, peak_intensity: null, local_background: null, snr: null, saturated: false, spot_id: null });
 
 const store = {
+  engine: new Map(), // analysis id -> { runs, raws }
+  sfAvailable: true,
+  sfCached: new Set(['general']),
   analyses: new Map(),
   jobs: new Map(),
   csv: new Map(),
@@ -229,6 +232,7 @@ const store = {
   redo: new Map(),
   seq: 100,
   failNext: null,
+  rawRequests: [],
 };
 
 function baseImage(kind, roles, extra = {}) {
@@ -289,6 +293,10 @@ function emptyAnalysis(id, name, image, status) {
 
 function seed() {
   store.analyses.clear();
+  store.engine.clear();
+  store.rawRequests = [];
+  store.sfAvailable = true;
+  store.sfCached = new Set(['general']);
   store.jobs.clear();
   store.csv.clear();
   store.undo.clear();
@@ -308,6 +316,13 @@ function seed() {
   });
   demo.provenance.detection_ran_at = now();
   store.analyses.set('demo', demo);
+  // 1a: hybrid (two-engine) review
+  const hy = clone(demo);
+  hy.id = 'hybrid';
+  hy.name = 'Hybrid slide (two engines)';
+  hy.detection_request = { ...hy.detection_request, engine: 'hybrid', spotiflow: { model_name: 'general', prob_thresh: null, min_distance: 1, exclude_border: false, subpix: null, n_tiles: null, max_tile_size: null, normalizer: 'auto', device: 'auto' }, consensus_tolerance_px: 4 };
+  store.analyses.set('hybrid', hy);
+  applyEngines(hy, hy.detection_request);
   // 1b: researcher reference (GenePix-like 635 stack: suggested roles, embedded points + grid)
   const rs = clone(demo);
   rs.id = 'refslide';
@@ -465,8 +480,117 @@ function counts(a) {
 function queue(a) {
   return live(a)
     .filter((o) => !o.reviewed && (o.review_reasons.length || o.cls === 'uncertain'))
-    .map((o) => ({ object_id: o.id, reasons: o.review_reasons, priority: (o.cls === 'uncertain' ? 10 : 0) + o.review_reasons.length, x: o.x, y: o.y }))
+    .map((o) => ({ object_id: o.id, reasons: o.review_reasons, priority: (o.cls === 'uncertain' ? 10 : 0) + o.review_reasons.length + (o.review_reasons.some((r) => r === 'bigfish_only' || r === 'spotiflow_only') ? 50 : 0), x: o.x, y: o.y }))
     .sort((p, q) => q.priority - p.priority || p.object_id.localeCompare(q.object_id));
+}
+
+
+// ---- two-engine (hybrid) mock: statuses per SPOT key; shapes follow docs/app/TWO_ENGINE_CONTRACT.md
+const ENGINE_STATUS = { 1: 'agreement', 2: 'spotiflow_only', 3: 'agreement', 4: 'bigfish_only', 5: 'agreement', 6: 'bigfish_only' };
+const SF_MODELS = ['general', 'hybiss', 'smfish_3d'];
+function chanPages(a) {
+  return a.image.channels.map((c) => ({ page: c.page, role: c.role_confirmed ? c.role : null, which: c.index === 0 ? 'r' : 'g' }));
+}
+function runInfo(a, engine, ch, status, model, error) {
+  const sf = engine === 'spotiflow';
+  return {
+    run_id: `run-${engine}-${ch.page}-${++store.seq}`,
+    analysis_id: a.id,
+    image_sha256: a.image.sha256,
+    engine,
+    engine_version: sf ? '0.3.1-mock' : '0.6.2-mock',
+    model_name: sf ? model : null,
+    model_version: sf ? '1.0' : null,
+    model_checksum: sf ? 'c0ffee12'.repeat(8) : null,
+    page: ch.page,
+    channel_role: ch.role,
+    params: {},
+    preprocessing: {},
+    started_at: now(),
+    finished_at: now(),
+    device: sf ? 'cpu' : 'cpu',
+    duration_s: sf ? 31.4 : 1.2,
+    status,
+    error: error || null,
+    n_raw: status === 'ok' ? 7 : 0,
+    n_valid: status === 'ok' ? 6 : 0,
+    notes: [],
+  };
+}
+function applyEngines(a, req) {
+  store.engine.delete(a.id);
+  if (!a.image?.channels.every((c) => c.role_confirmed)) return;
+  const pages = chanPages(a);
+  const runs = [];
+  const raws = [];
+  const hybrid = req.engine === 'hybrid' || req.engine === 'spotiflow';
+  const model = req.spotiflow?.model_name || 'general';
+  const failSf = hybrid && model === 'smfish_3d';
+  for (const ch of pages) {
+    const bf = runInfo(a, 'bigfish', ch, 'ok');
+    runs.push(bf);
+    const sfr = hybrid ? (failSf ? runInfo(a, 'spotiflow', ch, 'failed', model, 'Spotiflow model "smfish_3d" failed to load: checksum mismatch (mock failure).') : runInfo(a, 'spotiflow', ch, 'ok', model)) : null;
+    if (sfr) runs.push(sfr);
+    for (const sp of SPOTS) {
+      if (!(ch.which === 'r' ? sp.r : sp.g)) continue;
+      const st = ENGINE_STATUS[sp.key];
+      if (st !== 'spotiflow_only')
+        raws.push({ id: `bf-${ch.page}-${sp.key}`, run_id: bf.run_id, analysis_id: a.id, engine: 'bigfish', page: ch.page, channel_role: ch.role, x: sp.x, y: sp.y, score: 20 + sp.key * 3.3, score_kind: 'bigfish_log_response_noise_units', valid: true, region_id: 'reg-1', excluded_reason: null });
+      if (sfr && sfr.status === 'ok' && st !== 'bigfish_only')
+        raws.push({ id: `sf-${ch.page}-${sp.key}`, run_id: sfr.run_id, analysis_id: a.id, engine: 'spotiflow', page: ch.page, channel_role: ch.role, x: sp.x + (st === 'agreement' ? 1.2 : 0), y: sp.y - 0.8, score: 0.5 + sp.key * 0.07, score_kind: 'spotiflow_prob_raw', valid: true, region_id: 'reg-1', excluded_reason: null });
+    }
+    // one raw point of each engine inside the exclusion mask (invalid)
+    raws.push({ id: `bf-${ch.page}-ex`, run_id: bf.run_id, analysis_id: a.id, engine: 'bigfish', page: ch.page, channel_role: ch.role, x: 6, y: 6, score: 9.1, score_kind: 'bigfish_log_response_noise_units', valid: false, region_id: null, excluded_reason: 'exclusion region' });
+    if (sfr && sfr.status === 'ok') raws.push({ id: `sf-${ch.page}-ex`, run_id: sfr.run_id, analysis_id: a.id, engine: 'spotiflow', page: ch.page, channel_role: ch.role, x: 8, y: 9, score: 0.55, score_kind: 'spotiflow_prob_raw', valid: false, region_id: null, excluded_reason: 'exclusion region' });
+  }
+  store.engine.set(a.id, { runs, raws });
+  if (hybrid && !failSf) {
+    for (const o of a.objects) {
+      const m = /^o-0*(\d+)$/.exec(o.id);
+      const key = m ? +m[1] : 0;
+      const st = ENGINE_STATUS[key];
+      if (!st || o.origin !== 'auto') continue;
+      for (const w of ['red', 'green']) {
+        const e = o[w];
+        if (!e.detected) continue;
+        e.consensus_status = st;
+        const bf = st !== 'spotiflow_only';
+        const sf = st !== 'bigfish_only';
+        e.bigfish_x = bf ? e.x : null;
+        e.bigfish_y = bf ? e.y : null;
+        e.bigfish_score = bf ? 20 + key * 3.3 : null;
+        e.spotiflow_x = sf ? e.x + (st === 'agreement' ? 1.2 : 0) : null;
+        e.spotiflow_y = sf ? e.y - 0.8 : null;
+        e.spotiflow_score = sf ? 0.5 + key * 0.07 : null;
+        e.match_distance_px = st === 'agreement' ? 1.44 : null;
+      }
+      if (st !== 'agreement' && !o.review_reasons.includes(st)) o.review_reasons.push(st);
+    }
+  }
+}
+function consensusSummary(a) {
+  const pages = chanPages(a).map((ch) => {
+    const w = ch.which === 'r' ? 'red' : 'green';
+    const c = { page: ch.page, channel_role: ch.role, agreement: 0, bigfish_only: 0, spotiflow_only: 0, human_added: 0, human_rejected: 0, confirmed: 0, rejected: 0, unresolved: 0 };
+    for (const o of a.objects) {
+      const st = o[w].consensus_status || (o.origin === 'manual' && o[w].detected ? 'human_added' : null);
+      if (!st) continue;
+      if (o.deleted) {
+        c.rejected++;
+        c.human_rejected++;
+        continue;
+      }
+      c[st]++;
+      if (o.reviewed) c.confirmed++;
+      else c.unresolved++;
+    }
+    return c;
+  });
+  const total = pages.reduce((t, p) => {
+    for (const k of Object.keys(t)) if (k !== 'page' && k !== 'channel_role') t[k] += p[k];
+    return t;
+  }, { page: null, channel_role: null, agreement: 0, bigfish_only: 0, spotiflow_only: 0, human_added: 0, human_rejected: 0, confirmed: 0, rejected: 0, unresolved: 0 });
+  return { pages, total };
 }
 
 function applyAction(a, type, p) {
@@ -647,6 +771,7 @@ function runJob(a, req) {
       const changed = new Set([...a.objects.filter((o) => !keptIds.has(o.id)).map((o) => o.region_id), ...fresh.map((o) => o.region_id)]);
       snapshot(a);
       a.objects = [...kept, ...fresh];
+      applyEngines(a, req);
       changed.forEach((r) => unapproveRegion(a, r));
       a.provenance.detection_ran_at = now();
       a.provenance.stale_detection = false;
@@ -722,6 +847,41 @@ async function handle(req, res) {
   const m = req.method;
   let mt;
   if (route === '/health') return send(res, 200, { ok: true, version: 'mock-0.1', bigfish_version: '0.6.2-mock' });
+  if (route === '/engines' && m === 'GET')
+    return send(res, 200, [
+      { name: 'bigfish', available: true, reason: null, version: '0.6.2-mock', device: { cuda: false, mps: false, cpu: true }, models: [] },
+      {
+        name: 'spotiflow',
+        available: store.sfAvailable,
+        reason: store.sfAvailable ? null : 'the spotiflow package is not installed (pip install spotiflow)',
+        version: store.sfAvailable ? '0.3.1-mock' : null,
+        device: { cuda: false, mps: false, cpu: true },
+        models: SF_MODELS.map((n) => ({ name: n, cached: store.sfCached.has(n), version: '1.0', checksum: store.sfCached.has(n) ? 'c0ffee12'.repeat(8) : null })),
+      },
+    ]);
+  if (route === '/__mock/spotiflow' && m === 'POST') {
+    store.sfAvailable = !!JSON.parse((await readBody(req)).toString() || '{}').available;
+    return send(res, 200, { ok: true });
+  }
+  if (route === '/__mock/raw-requests' && m === 'GET') return send(res, 200, store.rawRequests);
+  if (route === '/engines/spotiflow/prepare' && m === 'POST') {
+    const body = JSON.parse((await readBody(req)).toString() || '{}');
+    if (!store.sfAvailable) throw new HttpError(409, 'engine_unavailable', 'Spotiflow is not installed.');
+    const id = `job-${++store.seq}`;
+    const job = { id, analysis_id: '', status: 'running', progress: 0, message: `downloading ${body.model_name}`, error: null, started_at: now(), finished_at: null };
+    store.jobs.set(id, job);
+    const t = setInterval(() => {
+      job.progress = Math.min(1, job.progress + 0.25);
+      if (job.progress >= 1) {
+        clearInterval(t);
+        store.sfCached.add(body.model_name);
+        job.status = 'done';
+        job.message = 'ready';
+        job.finished_at = now();
+      }
+    }, 250);
+    return send(res, 200, job);
+  }
   if (route === '/__mock/reset' && m === 'POST') {
     seed();
     return send(res, 200, { ok: true });
@@ -894,6 +1054,27 @@ async function handle(req, res) {
       return send(res, 200, { polygon, area_px2: area(polygon), rim_px: rim, method: 'mock-inset', warnings: ['mock: chamber found by inset, not by image content'], suggested_exclusions: [rect(W - rim - 50, rim, W - rim, rim + 40)] });
     }
     if (sub === 'counts' && m === 'GET') return send(res, 200, counts(a));
+    if (sub === 'engine-runs' && m === 'GET') return send(res, 200, store.engine.get(a.id)?.runs ?? []);
+    if (sub === 'raw-detections' && m === 'GET') {
+      const q = url.searchParams;
+      let r = store.engine.get(a.id)?.raws ?? [];
+      if (q.get('engine')) r = r.filter((d) => d.engine === q.get('engine'));
+      if (q.get('page') != null) r = r.filter((d) => d.page === +q.get('page'));
+      if (q.get('valid') != null) r = r.filter((d) => String(d.valid) === q.get('valid'));
+      store.rawRequests.push(req.url);
+      return send(res, 200, r.slice(0, +(q.get('limit') || 1000)));
+    }
+    if (sub === 'consensus/summary' && m === 'GET') return send(res, 200, consensusSummary(a));
+    if (sub === 'consensus/qc-sample' && m === 'POST') {
+      if (!(body.fraction > 0 && body.fraction <= 1)) throw new HttpError(422, 'bad_fraction', 'fraction must be in (0, 1]');
+      const pool = live(a).filter((o) => !o.reviewed && [o.red.consensus_status, o.green.consensus_status].includes('agreement') && !o.review_reasons.includes('qc_sample')).sort((x, y) => x.id.localeCompare(y.id));
+      const n = Math.ceil(pool.length * body.fraction);
+      const off = pool.length ? Math.abs(body.seed | 0) % pool.length : 0;
+      const pick = pool.map((_, i) => pool[(i + off) % pool.length]).slice(0, n);
+      pick.forEach((o) => o.review_reasons.push('qc_sample'));
+      store.rawRequests.push('qc ' + JSON.stringify(body));
+      return send(res, 200, { marked: pick.length });
+    }
     if (sub === 'review-queue' && m === 'GET') return send(res, 200, queue(a));
     if (sub === 'actions' && m === 'POST') {
       await delay(40);
