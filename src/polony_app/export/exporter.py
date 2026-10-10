@@ -128,7 +128,8 @@ def regions_csv(a: Analysis) -> str:
         "region_id", "name", "kind", "area_px2",
         "red_only", "green_only", "yellow", "uncertain",
         "red_positive_incl_yellow", "green_positive_incl_yellow", "yellow_overlap",
-        "total_objects_exclusive", "reporting_mode", "inspected", "approval_status", "approved_at", "status",
+        "total_objects_exclusive", "red_positive_excl_debris", "green_positive_excl_debris",
+        "reporting_mode", "inspected", "approval_status", "approved_at", "status",
     ]
     rows = []
     for r in a.regions:
@@ -138,12 +139,13 @@ def regions_csv(a: Analysis) -> str:
             rows.append([
                 r.id, r.name, r.kind.value, area, c.red_only, c.green_only, c.yellow, c.uncertain,
                 c.red_positive, c.green_positive, c.yellow, c.total_objects_exclusive,
+                c.red_positive_excl_debris, c.green_positive_excl_debris,
                 a.reporting_mode.value, _b(r.inspected),
                 "approved" if r.approved else "not_approved", r.approved_at, status,
             ])
         else:
             rows.append([r.id, r.name, r.kind.value, area, None, None, None, None, None, None, None,
-                         None, a.reporting_mode.value, None, "n/a", None, status])
+                         None, None, None, a.reporting_mode.value, None, "n/a", None, status])
     return _csv(header, rows)
 
 
@@ -222,7 +224,8 @@ def slide_csv(a: Analysis) -> str:
     header = [
         "slide_id", "analysis_id", "reporting_mode", "red_only", "green_only", "yellow", "uncertain",
         "red_positive_incl_yellow", "green_positive_incl_yellow", "yellow_overlap",
-        "total_objects_exclusive", "n_counting_regions", "n_regions_approved", "counting_area_px2",
+        "total_objects_exclusive", "red_positive_excl_debris", "green_positive_excl_debris",
+        "n_counting_regions", "n_regions_approved", "counting_area_px2",
         "pixel_size_um", "sample_volume_ul", "concentration_factor", "field_area", "grid_area",
         "lab_series", "n_field_regions",
     ]
@@ -235,7 +238,8 @@ def slide_csv(a: Analysis) -> str:
     ]
     row = [
         a.slide.slide_id, a.id, a.reporting_mode.value, c.red_only, c.green_only, c.yellow, c.uncertain,
-        c.red_positive, c.green_positive, c.yellow, c.total_objects_exclusive, len(regs),
+        c.red_positive, c.green_positive, c.yellow, c.total_objects_exclusive,
+        c.red_positive_excl_debris, c.green_positive_excl_debris, len(regs),
         sum(1 for r in regs if r.approved), counting_area_px2(a), pix, a.slide.sample_volume_ul,
         a.slide.concentration_factor, a.slide.field_area, a.slide.grid_area,
         "|".join(f"{x.name}={x.count_type.value}" for x in a.slide.lab_series),
@@ -404,6 +408,8 @@ CONVENTIONS
       inclusive : red_positive_incl_yellow = red_only + yellow,
                   green_positive_incl_yellow = green_only + yellow, yellow_overlap = yellow
     The analysis' selected reporting mode is "{a.reporting_mode.value}".
+  * red_positive_excl_debris / green_positive_excl_debris: convenience count; objects flagged debris_like remain counted elsewhere
+    (= the positive count minus non-deleted positive objects whose review reasons include debris_like; nothing is removed).
   * Soft-deleted objects are not exported. Objects outside every counting region (or inside
     an exclusion) have counted=false and are not in any count.
   * Channel colours come only from the user-confirmed channel mapping (see provenance.json).

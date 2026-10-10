@@ -20,7 +20,7 @@ from typing import Optional
 import numpy as np
 import tifffile
 
-from ..schemas import ChannelInfo, EmbeddedRoi, ImageKind, ImageMeta
+from ..schemas import ChannelInfo, ChannelRole, EmbeddedRoi, ImageKind, ImageMeta
 from .io import IngestError, read_stack
 
 __all__ = ["ingest_files", "IngestError", "parse_info_label_hint", "channel_stats"]
@@ -266,6 +266,14 @@ def _ingest_single(st, arr, meta, warnings):
                 hint = hint0
             chans.append(ChannelInfo(index=k, source_file=name, page=k, label_hint=hint,
                                      min=mn, max=mx, saturated_fraction=sf))
+        if meta["is_imagej"] and hint0 and "635" in hint0 and not (labels and len(labels) == 2):
+            # suggestion only: role stays None / role_confirmed False
+            chans[0].suggested_role = ChannelRole.red
+            chans[1].suggested_role = ChannelRole.green
+            warnings.append(
+                "Suggested from 8 validated GenePix stacks; confirm with your scanner settings. "
+                "RGB composites are clipped; do not use for detection."
+            )
         if hint0 and not (labels and len(labels) == 2):
             warnings.append(
                 f"The file carries one metadata label ('{hint0}') for the whole stack; it is shown as a hint on "

@@ -1,6 +1,7 @@
 import type { Counts, ReportingMode } from '../api/types';
 import { api } from '../api/client';
 import { useApp } from '../state/store';
+import { CompareSection } from './ReferencePanel';
 import { GlyphIcon } from './ViewerToolbar';
 
 export function DraftBadge({ final }: { final: boolean }) {
@@ -70,8 +71,10 @@ export function TotalsTab() {
           ) : (
             <div className="empty small">No per-region counts yet (draw counting regions).</div>
           )}
+          <ConvenienceCounts counts={counts} regions={a.regions} />
         </>
       )}
+      <CompareSection />
       {nUnresolved > 0 && !final && (
         <div className="notice warn small" role="status" data-testid="uncertain-block">
           <strong>{nUnresolved} uncertain object{nUnresolved > 1 ? 's' : ''} unresolved.</strong> They are not included in any colour total, and while any remain the affected regions cannot be
@@ -142,6 +145,38 @@ function CountsTable({ title, rows, mode }: { title: string; rows: { label: stri
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** Secondary convenience counts: flagged (debris-like) objects are NOT removed from the main counts above. */
+function ConvenienceCounts({ counts, regions }: { counts: { slide: Counts; regions: Counts[] }; regions: { id: string; name: string }[] }) {
+  if (counts.slide.red_positive_excl_debris == null && counts.slide.green_positive_excl_debris == null) return null;
+  const rows = [{ label: 'All counting regions', c: counts.slide }, ...counts.regions.map((c) => ({ label: regions.find((r) => r.id === c.scope)?.name ?? c.scope, c }))];
+  return (
+    <div className="tbl-wrap secondary" data-testid="convenience-counts">
+      <table className="tbl totals-tbl">
+        <caption>
+          Convenience counts <span className="muted">· secondary</span>
+        </caption>
+        <thead>
+          <tr>
+            <th></th>
+            <th className="num">red-positive excl. debris-like</th>
+            <th className="num">green-positive excl. debris-like</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.c.scope}>
+              <th scope="row">{r.label}</th>
+              <td className="num mono">{r.c.red_positive_excl_debris ?? '–'}</td>
+              <td className="num mono">{r.c.green_positive_excl_debris ?? '–'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="muted small">convenience count – flagged objects are not removed from the counts above.</div>
     </div>
   );
 }

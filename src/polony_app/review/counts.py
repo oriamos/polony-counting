@@ -28,15 +28,21 @@ UNCERTAIN_PRIORITY = 0
 
 def _tally(objs, scope: str, analysis: Analysis) -> Counts:
     r = g = y = u = 0
+    rd = gd = 0   # debris_like objects among red-/green-positive (convenience counts only)
     for o in objs:
         if o.deleted:
             continue
+        deb = ReviewReason.debris_like in o.review_reasons
         if o.cls == ObjectClass.red:
             r += 1
+            rd += deb
         elif o.cls == ObjectClass.green:
             g += 1
+            gd += deb
         elif o.cls == ObjectClass.yellow:
             y += 1
+            rd += deb
+            gd += deb
         else:
             u += 1
     return Counts(
@@ -48,6 +54,8 @@ def _tally(objs, scope: str, analysis: Analysis) -> Counts:
         red_positive=r + y,
         green_positive=g + y,
         total_objects_exclusive=r + g + y,
+        red_positive_excl_debris=r + y - rd,
+        green_positive_excl_debris=g + y - gd,
         reporting_mode=analysis.reporting_mode,
         is_final=analysis.finalized_at is not None,
     )

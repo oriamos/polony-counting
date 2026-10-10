@@ -1470,3 +1470,22 @@ input.num {
 .input.invalid {
   border-color: #ffb020;
 }
+
+/* ---- researcher reference ---- */
+.plane-list { margin: 4px 0; padding-left: 18px; font-size: 12px; }
+.refimport { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.refsec .tag { margin-left: 6px; }
+.compare { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.tbl td.dpos { color: #2563eb; }
+.tbl td.dneg { color: #b45309; }
+.tbl td.dzero, .tbl td.dnone { color: var(--muted); }
+:root[data-theme='dark'] .tbl td.dpos { color: #7aa8ff; }
+:root[data-theme='dark'] .tbl td.dneg { color: #f0b45a; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .tbl td.dpos { color: #7aa8ff; }
+  :root:not([data-theme='light']) .tbl td.dneg { color: #f0b45a; }
+}
+.tbl-wrap.secondary { opacity: 0.9; margin-top: 8px; }
+.presets { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.radio.suggested { outline: 2px dashed var(--accent); outline-offset: 1px; }
+.suggest-note { color: var(--accent); margin-top: 4px; }

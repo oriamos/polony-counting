@@ -308,6 +308,19 @@ function seed() {
   });
   demo.provenance.detection_ran_at = now();
   store.analyses.set('demo', demo);
+  // 1b: researcher reference (GenePix-like 635 stack: suggested roles, embedded points + grid)
+  const rs = clone(demo);
+  rs.id = 'refslide';
+  rs.name = 'Reference slide (researcher marks)';
+  rs.regions = [];
+  rs.objects.forEach((o) => (o.region_id = null));
+  rs.image.channels.forEach((c, i) => {
+    c.suggested_role = i === 0 ? 'red' : 'green';
+    c.role = null;
+    c.role_confirmed = false;
+  });
+  rs.status = 'needs_channel_mapping';
+  store.analyses.set('refslide', rs);
   // 2: needs mapping
   store.analyses.set('unmapped', emptyAnalysis('unmapped', 'Fresh upload (needs mapping)', baseImage('raw_separate_files', null), 'needs_channel_mapping'));
   // 3: composite only
@@ -355,6 +368,46 @@ const getA = (id) => {
   if (!a) throw new HttpError(404, 'not_found', `analysis ${id} not found`);
   return a;
 };
+// ---- researcher reference (mock): 7 x 4 grid of 60 px cells at (20,20); fields numbered row-major
+const REF_ORIGIN = [20, 20];
+const REF_CELL = [60, 60];
+const REF_COLS = 7;
+const REF_ROWS = 4;
+const REF_POINTS = [
+  { x: 100, y: 100, counter: 1, plane: 0, field: 2 },
+  { x: 105, y: 110, counter: 2, plane: 0, field: 2 },
+  { x: 200, y: 150, counter: 1, plane: 1, field: 12 },
+  { x: 300, y: 250, counter: 1, plane: 0, field: 19 },
+  { x: 305, y: 255, counter: 1, plane: 1, field: 19 },
+  { x: 60, y: 320, counter: 3, plane: 0, field: 22 },
+];
+function refCells() {
+  const cells = [];
+  for (let r = 0; r < REF_ROWS; r++)
+    for (let c = 0; c < REF_COLS; c++) {
+      const x0 = REF_ORIGIN[0] + c * REF_CELL[0],
+        y0 = REF_ORIGIN[1] + r * REF_CELL[1];
+      cells.push({ field: r * REF_COLS + c + 1, polygon: rect(x0, y0, x0 + REF_CELL[0], y0 + REF_CELL[1]) });
+    }
+  return cells;
+}
+function refInfo(a) {
+  if (a.id !== 'refslide') return { available: false, source_file: null, points: [], grid: null, reference_counts: {}, planes: [], warnings: [] };
+  const rc = {};
+  for (const p of REF_POINTS) {
+    rc[p.field] = rc[p.field] || { plane0: 0, plane1: 0 };
+    rc[p.field]['plane' + p.plane]++;
+  }
+  return {
+    available: true,
+    source_file: 'slide_A.tif',
+    points: REF_POINTS,
+    grid: { source: 'overlay', origin: REF_ORIGIN, cell: REF_CELL, cols: REF_COLS, rows: REF_ROWS, cells: refCells() },
+    reference_counts: rc,
+    planes: [0, 1].map((page) => ({ page, point_count: REF_POINTS.filter((p) => p.plane === page).length })),
+    warnings: ['Plane meaning is not recorded in the file.'],
+  };
+}
 const live = (a) => a.objects.filter((o) => !o.deleted);
 
 function refresh(a) {
@@ -397,6 +450,8 @@ function countsFor(a, scopeId, regionIds, isFinal) {
     uncertain,
     red_positive: red_only + yellow,
     green_positive: green_only + yellow,
+    red_positive_excl_debris: objs.filter((o) => (o.cls === 'red' || o.cls === 'yellow') && !o.review_reasons.includes('debris_like')).length,
+    green_positive_excl_debris: objs.filter((o) => (o.cls === 'green' || o.cls === 'yellow') && !o.review_reasons.includes('debris_like')).length,
     total_objects_exclusive: red_only + green_only + yellow,
     reporting_mode: a.reporting_mode,
     is_final: isFinal,
@@ -779,6 +834,64 @@ async function handle(req, res) {
       if (!w) throw new HttpError(422, 'no_window', 'preview_window required');
       const objs = SPOTS.filter((s) => s.x >= w[0] && s.x <= w[2] && s.y >= w[1] && s.y <= w[3]).map((s) => ({ ...objFromSpot(s, 'p'), region_id: null }));
       return send(res, 200, { objects: objs, notes: [`mock preview: ${objs.length} candidates in window`] });
+    }
+    if (sub === 'reference' && m === 'GET') return send(res, 200, refInfo(a));
+    if (sub === 'fields/import' && m === 'POST') {
+      const info = refInfo(a);
+      if (!info.available) throw new HttpError(422, 'no_grid', 'This analysis has no researcher grid to import.');
+      const existing = a.regions.filter((r) => /^Field-/.test(r.name));
+      if (existing.length && !body.replace) throw new HttpError(409, 'fields_exist', 'Field-* regions already exist; set replace to overwrite them.');
+      const [dx, dy] = body.shift || [0, 0];
+      const plane = body.plane == null ? 0 : body.plane;
+      const counted = new Set(Object.entries(info.reference_counts).filter(([, v]) => v['plane' + plane] > 0).map(([k]) => Number(k)));
+      snapshot(a);
+      a.regions = a.regions.filter((r) => !/^Field-/.test(r.name));
+      for (const c of info.grid.cells) {
+        if (body.mode === 'counted' && !counted.has(c.field)) continue;
+        a.regions.push({ id: `reg-ref-${c.field}`, kind: 'counting', name: `Field-${c.field}`, polygon: c.polygon.map(([x, y]) => [x + dx, y + dy]), approved: false, approved_at: null, approval_fingerprint: null, inspected: false, field_index: c.field });
+      }
+      a.objects.forEach((o) => (o.region_id = regionOf(a, o.x, o.y)));
+      if (a.objects.length) a.provenance.stale_detection = true;
+      return send(res, 200, refresh(a));
+    }
+    if (sub === 'fields/compare' && m === 'GET') {
+      const info = refInfo(a);
+      const plane = url.searchParams.get('plane') == null ? 0 : Number(url.searchParams.get('plane'));
+      const ct = url.searchParams.get('count_type') || 'red_positive';
+      const cts = ['red_positive', 'green_positive', 'red_only', 'green_only', 'yellow'];
+      if (!cts.includes(ct)) throw new HttpError(422, 'bad_count_type', `count_type must be one of ${cts.join(', ')}`);
+      const rows = a.regions
+        .filter((r) => r.kind === 'counting' && r.field_index != null)
+        .map((r) => {
+          const c = countsFor(a, r.id, [r.id], false)[ct];
+          const rc = info.reference_counts[r.field_index];
+          const ref = rc ? rc['plane' + plane] : 0;
+          return { field: r.field_index, reference_count: ref, app_count: c, delta: c - ref };
+        })
+        .sort((p, q) => p.field - q.field);
+      const n = rows.length;
+      const xs = rows.map((r) => r.reference_count), ys = rows.map((r) => r.app_count);
+      const mean = (v) => v.reduce((s, x) => s + x, 0) / (v.length || 1);
+      const mx = mean(xs), my = mean(ys);
+      const sxx = xs.reduce((s, x) => s + (x - mx) ** 2, 0), syy = ys.reduce((s, y) => s + (y - my) ** 2, 0);
+      const sxy = xs.reduce((s, x, i) => s + (x - mx) * (ys[i] - my), 0);
+      return send(res, 200, {
+        rows,
+        summary: {
+          n_fields: n,
+          pearson_r: n > 1 && sxx > 0 && syy > 0 ? sxy / Math.sqrt(sxx * syy) : null,
+          slope: n > 1 && sxx > 0 ? sxy / sxx : null,
+          mae: n ? mean(rows.map((r) => Math.abs(r.delta))) : null,
+          total_reference: xs.reduce((s, x) => s + x, 0),
+          total_app: ys.reduce((s, y) => s + y, 0),
+        },
+      });
+    }
+    if (sub === 'regions/auto-chamber' && m === 'POST') {
+      const rim = Number(body.rim_px ?? 40);
+      if (!(rim >= 0) || rim * 2 >= Math.min(W, H)) throw new HttpError(422, 'bad_rim', 'rim_px too large for this image.');
+      const polygon = rect(rim, rim, W - rim, H - rim);
+      return send(res, 200, { polygon, area_px2: area(polygon), rim_px: rim, method: 'mock-inset', warnings: ['mock: chamber found by inset, not by image content'], suggested_exclusions: [rect(W - rim - 50, rim, W - rim, rim + 40)] });
     }
     if (sub === 'counts' && m === 'GET') return send(res, 200, counts(a));
     if (sub === 'review-queue' && m === 'GET') return send(res, 200, queue(a));

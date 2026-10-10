@@ -155,6 +155,13 @@ function ParamTable({ req, set, disabled }: { req: DetectionRequest; set: (r: De
   );
 }
 
+/** Sets the automatic-threshold multiplier on both channels (back to Auto mode). */
+export const withScale = (req: DetectionRequest, scale: number): DetectionRequest => ({
+  ...req,
+  red: { ...req.red, threshold: null, threshold_scale: scale },
+  green: { ...req.green, threshold: null, threshold_scale: scale },
+});
+
 export function DetectTab() {
   const a = useApp((s) => s.current)!;
   const req = useApp((s) => s.detReq);
@@ -199,6 +206,20 @@ export function DetectTab() {
         </div>
       )}
       <ParamTable req={req} set={setReq} disabled={locked} />
+      <div className="presets" data-testid="sensitivity-presets">
+        <div className="row wrap">
+          <span className="small">Sensitivity preset:</span>
+          <button className="btn sm" disabled={locked} onClick={() => setReq(withScale(req, 1))} data-testid="preset-default">
+            Default sensitivity
+          </button>
+          <button className="btn sm" disabled={locked} onClick={() => setReq(withScale(req, 0.5))} data-testid="preset-sensitive">
+            More sensitive (threshold ×0.5)
+          </button>
+        </div>
+        <div className="muted small" data-testid="preset-note">
+          On the 8 validated slides the default threshold counted 18–33% fewer polonies than the researcher; ×0.5 recovered most but adds false positives — check the review queue (debris-like flagged). Not yet validated beyond these slides.
+        </div>
+      </div>
       <div className="hint-strong" data-testid="radius-hint">
         <strong>Count depends strongly on spot radius</strong> (real example: radius 5 → 108 objects, 3 → 207, 2 → 331). Choose it from the visible blob size using Preview, don't rely on the default.
       </div>

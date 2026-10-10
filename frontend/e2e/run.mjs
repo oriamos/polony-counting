@@ -646,6 +646,7 @@ async function labSuite() {
   await page.waitForTimeout(150);
   check('2.5056 chip fills', (await tid('slide-volume').inputValue()) === '2.5056');
   await tid('chip-areas').click();
+  await page.waitForTimeout(150);
   check('area chip fills 2.9 / 0.1', (await tid('slide-field-area').inputValue()) === '2.9' && (await tid('slide-grid-area').inputValue()) === '0.1');
   await tid('slide-factor').fill('1');
   await tid('series-add').click();
@@ -702,7 +703,108 @@ async function themeSuite() {
   await page.emulateMedia({ colorScheme: 'light' });
 }
 
-const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite];
+
+// ============================================================= 9. researcher reference
+async function referenceSuite() {
+  await reset();
+  await openAnalysis('refslide').catch(() => undefined);
+  await page.waitForSelector('[data-testid=mapping-dialog]');
+  const md = await tid('mapping-dialog').innerText();
+  check('mapping: suggested role text shown', /Suggested from validated GenePix stacks – confirm/.test(md));
+  check('mapping: suggested option highlighted but NOT selected', (await page.locator('[data-testid=mapping-dialog] [data-suggested="1"]').count()) === 2 && (await page.locator('[data-testid=mapping-dialog] input[type=radio]:checked').count()) === 0);
+  check('mapping: confirm still needs explicit selection', await tid('confirm-mapping').isDisabled());
+  await tid('role-0-red').check();
+  await tid('role-1-green').check();
+  await tid('confirm-mapping').click();
+  await page.waitForSelector('[data-testid=mapping-dialog]', { state: 'detached' });
+
+  // detect presets
+  await tid('tab-detect').click();
+  check('preset note text', /18–33% fewer polonies than the researcher/.test(await tid('preset-note').innerText()) && /Not yet validated beyond these slides/.test(await tid('preset-note').innerText()));
+  await tid('preset-sensitive').click();
+  const scales = await page.locator('[data-testid=detect-tab] input[type=number]').evaluateAll((els) => els.map((e) => e.value));
+  check('sensitive preset sets auto scale 0.5 on both channels', scales.filter((v) => v === '0.5').length === 2, scales.join(','));
+  await tid('preset-default').click();
+  const scales2 = await page.locator('[data-testid=detect-tab] input[type=number]').evaluateAll((els) => els.map((e) => e.value));
+  check('default preset resets auto scale to 1', scales2.filter((v) => v === '1').length >= 2, scales2.join(','));
+
+  // reference section
+  await tid('tab-regions').click();
+  await tid('reference-section').waitFor();
+  const planesTxt = await tid('reference-planes').innerText();
+  check('planes listed with point counts, role only as suggested', /page 0: 4 points/.test(planesTxt) && /page 1: 2 points/.test(planesTxt) && /suggested channel role: red/.test(planesTxt) && !/\bred plane|\bgreen plane/i.test(planesTxt), planesTxt.replace(/\n/g, ' | '));
+  check('reference points hidden by default', (await tid('reference-points').count()) === 0);
+  await setChecked('ref-show', true);
+  check('reference points drawn (all planes)', (await tid('reference-points').getAttribute('data-count')) === '6');
+  await tid('ref-plane-view').selectOption('0');
+  check('plane filter for display', (await tid('reference-points').getAttribute('data-count')) === '4');
+  await shot('reference-points');
+
+  // import dialog + live preview
+  await tid('ref-import-toggle').click();
+  check('ambiguity explanation shown', /Fields with no researcher points are ambiguous: not counted or counted as zero\. Choose\./.test(await tid('ref-ambiguity').innerText()));
+  await tid('ref-plane').selectOption('0');
+  await page.waitForSelector('[data-testid=ref-grid-preview]');
+  const inc = () => page.locator('[data-testid=ref-grid-preview] g[data-included="1"]').count();
+  check('preview: counted-only shows 3 included cells (plane 0)', (await inc()) === 3, String(await inc()));
+  await tid('ref-mode').selectOption('all');
+  check('preview: all mode includes 28 cells', (await inc()) === 28);
+  await tid('ref-mode').selectOption('counted');
+  const firstPoly = () => page.locator('[data-testid=ref-grid-preview] g[data-included="1"] polygon').first().getAttribute('points');
+  const p0 = await firstPoly();
+  await tid('ref-dx').fill('7');
+  await tid('ref-dy').fill('3');
+  await page.waitForTimeout(150);
+  const p1 = await firstPoly();
+  const x0 = +p0.split(' ')[0].split(',')[0], x1 = +p1.split(' ')[0].split(',')[0];
+  check('preview follows grid shift live', x1 - x0 === 7, `${p0} -> ${p1}`);
+  await shot('reference-import-preview');
+  await tid('ref-import-apply').click();
+  await page.waitForSelector('[data-testid=ref-import]', { state: 'detached' });
+  let an = await (await fetch(`${BASE}/api/analyses/refslide`)).json();
+  const f2 = an.regions.find((r) => r.name === 'Field-2');
+  check('imported 3 counted fields with shift', an.regions.filter((r) => r.field_index != null).length === 3 && f2 && f2.polygon[0][0] === 87 && f2.polygon[0][1] === 23, JSON.stringify(f2?.polygon[0]));
+  check('preview cleared after import', (await tid('ref-grid-preview').count()) === 0);
+  await tid('ref-import-toggle').click();
+  check('re-import needs replace confirmation checkbox', await tid('ref-import-apply').isDisabled());
+  await tid('ref-replace').check();
+  page.once('dialog', (d) => d.accept());
+  await tid('ref-import-apply').click();
+  await page.waitForSelector('[data-testid=ref-import]', { state: 'detached' });
+  check('replace import works', (await (await fetch(`${BASE}/api/analyses/refslide`)).json()).regions.filter((r) => r.field_index != null).length === 3);
+
+  // auto chamber
+  check('rim default 40', (await tid('chamber-rim').inputValue()) === '40');
+  await tid('chamber-run').click();
+  await page.waitForSelector('[data-testid=chamber-preview]');
+  check('chamber preview drawn with suggested exclusion', (await page.locator('[data-testid=chamber-preview] polygon').count()) === 4 && /1 suggested exclusion/.test(await tid('chamber-info').innerText()));
+  await shot('chamber-preview');
+  await tid('chamber-apply').click();
+  await page.waitForSelector('[data-testid=chamber-preview]', { state: 'detached' });
+  an = await (await fetch(`${BASE}/api/analyses/refslide`)).json();
+  check('chamber applied as counting region + exclusion', an.regions.some((r) => r.name === 'Chamber' && r.kind === 'counting') && an.regions.some((r) => r.kind === 'exclusion'));
+  await tid('chamber-rim').fill('400');
+  await tid('chamber-run').click();
+  await tid('chamber-error').waitFor();
+  check('auto-chamber error shown', /rim_px too large/.test(await tid('chamber-error').innerText()));
+
+  // totals: compare + convenience counts
+  await tid('tab-totals').click();
+  await tid('cmp-table').waitFor();
+  const note = await tid('cmp-note').innerText();
+  check('compare: agreement-not-accuracy sentence', /Reference = the researcher's embedded marks for this plane; agreement is not the same as accuracy\./.test(note));
+  check('compare: rows + summary', (await tid('cmp-table').locator('tbody tr').count()) === 3 && /Pearson r/.test(await tid('cmp-summary').innerText()) && /MAE/.test(await tid('cmp-summary').innerText()));
+  check('compare: no accuracy percentage', !/accuracy\s*[:=]?\s*\d|%/.test(await tid('compare-section').innerText().then((t) => t.replace(/not the same as accuracy/, ''))));
+  await tid('cmp-type').selectOption('green_positive');
+  await tid('cmp-plane').selectOption('1');
+  await page.waitForTimeout(300);
+  check('compare: selectors re-query', (await tid('cmp-table').locator('tbody tr').count()) === 3);
+  check('convenience counts labelled', /excl\. debris-like/.test(await tid('convenience-counts').innerText()) && /flagged objects are not removed/.test(await tid('convenience-counts').innerText()));
+  await shot('compare');
+  await reset();
+}
+
+const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite, referenceSuite];
 for (const s of suites) {
   try {
     await s();

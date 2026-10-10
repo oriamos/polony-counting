@@ -16,6 +16,7 @@ import {
   type StartCorner,
 } from '../lib/labgrid';
 import { NumInput } from './DetectTab';
+import { ChamberSection, ReferenceSection } from './ReferencePanel';
 import { regionStatus, STATUS_COLOR } from './Overlay';
 
 export function StatusBadge({ region }: { region: Region }) {
@@ -73,6 +74,8 @@ export function RegionsTab() {
       </div>
       <FieldSummary />
       {!locked && <GridGenerator />}
+      <ReferenceSection />
+      {!locked && <ChamberSection />}
       {a.regions.length === 0 && (
         <div className="empty">
           No regions yet. With no counting region the whole image is detected, but at least one counting region is required to finalize. Use the toolbar to draw one.

@@ -116,7 +116,7 @@ export function MappingDialog() {
               </dl>
               <div className="radio-row" role="radiogroup" aria-label={`Role of channel ${c.index}`}>
                 {(['red', 'green', 'ignore'] as ChannelRole[]).map((r) => (
-                  <label key={r} className={`radio ${choice[c.index] === r ? 'on' : ''} role-${r}`}>
+                  <label key={r} className={`radio ${choice[c.index] === r ? 'on' : ''} role-${r} ${c.suggested_role === r && choice[c.index] !== r ? 'suggested' : ''}`} data-suggested={c.suggested_role === r ? '1' : undefined}>
                     <input
                       type="radio"
                       name={`ch-${c.index}`}
@@ -129,6 +129,11 @@ export function MappingDialog() {
                   </label>
                 ))}
               </div>
+              {c.suggested_role && (
+                <div className="small suggest-note" data-testid={`suggest-note-${c.index}`}>
+                  Suggested from validated GenePix stacks – confirm ({c.suggested_role}). Nothing is selected for you.
+                </div>
+              )}
             </fieldset>
           ))}
           {chans.length === 0 && <div className="empty">No channels were found in this image.</div>}

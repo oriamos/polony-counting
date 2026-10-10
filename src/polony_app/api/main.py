@@ -95,6 +95,18 @@ class LabExportBody(BaseModel):
     format: Literal["xlsx", "csv", "zip"] = "xlsx"
 
 
+class FieldsImportBody(BaseModel):
+    mode: Literal["counted", "all"]
+    shift: tuple[float, float] = (0.0, 0.0)
+    plane: Optional[int] = None
+    replace: bool = False
+    numbering: Literal["index", "ordinal"] = "index"
+
+
+class AutoChamberBody(BaseModel):
+    rim_px: int = 40
+
+
 class CsvMapBody(BaseModel):
     color_mapping: Optional[Literal["red", "green", "yellow"]] = None
 
@@ -495,6 +507,74 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
         with store.edit(aid_ok(aid)) as st:
             engine.set_regions(st, body.regions)
             return _respond(st)
+
+    # ------------------------------------------------------------- lab fields / reference marks
+    def _reference(st: AnalysisState):
+        from polony_app.fields.reference import load_reference
+
+        return load_reference(store.originals_dir(st.analysis.id), st.analysis.image)
+
+    @api.get("/analyses/{aid}/reference")
+    def get_reference(aid: str):
+        with store.view(aid_ok(aid)) as st:
+            return _reference(st).to_dict()
+
+    @api.post("/analyses/{aid}/fields/import")
+    def post_fields_import(aid: str, body: FieldsImportBody):
+        from polony_app.fields import service as fields
+
+        with store.edit(aid_ok(aid)) as st:
+            engine.guard_editable(st)
+            im = st.analysis.image
+            ref = _reference(st)
+            if im is None or not ref.available or ref.grid is None:
+                return err(422, "no_grid", (ref.reason if not ref.available else None)
+                           or "This image has no counting-grid overlay to build fields from.")
+            planned, warns = fields.plan_fields(ref, body.mode, body.shift, body.plane, body.numbering,
+                                                im.width, im.height)
+            regions = fields.apply_fields(st.analysis, planned, body.replace, new_id)
+            engine.set_regions(st, regions)
+            out = json.loads(st.analysis.model_dump_json())
+            out["field_import"] = {"mode": body.mode, "shift": list(body.shift), "plane": body.plane,
+                                   "numbering": body.numbering, "created": [p["name"] for p in planned],
+                                   "warnings": warns + ref.warnings}
+            return JSONResponse(out)
+
+    @api.get("/analyses/{aid}/fields/compare")
+    def get_fields_compare(aid: str, plane: int = 0, count_type: str = "red_positive",
+                           numbering: Literal["index", "ordinal"] = "index"):
+        from polony_app.fields import service as fields
+
+        if plane < 0:
+            return err(422, "invalid_param", "plane must be 0 or greater")
+        with store.view(aid_ok(aid)) as st:
+            return fields.compare(st.analysis, _reference(st), plane, count_type, numbering)
+
+    @api.post("/analyses/{aid}/regions/auto-chamber")
+    def post_auto_chamber(aid: str, body: AutoChamberBody):
+        from polony_app.imaging import chamber, io as imio
+
+        if not 0 <= body.rim_px <= 500:
+            return err(422, "invalid_param", "rim_px must be in 0..500")
+        with store.view(aid_ok(aid)) as st:
+            im = st.analysis.image
+            if im is None:
+                return err(409, "no_image", "analysis has no image")
+            _need_originals(st)
+            if im.kind.value == "rgb_composite":
+                return err(422, "chamber_unsupported", "Automatic chamber detection needs the raw two-channel image, "
+                           "not an RGB composite.")
+            od = store.originals_dir(aid)
+            chans = [imio.load_channel(im, od, c.index) for c in im.channels]
+            nonzero_align = bool(st.analysis.alignment_dy or st.analysis.alignment_dx)
+        try:
+            res = chamber.auto_chamber(chans, body.rim_px)
+        except chamber.ChamberError as e:
+            return err(422, "chamber_not_found", str(e))
+        if nonzero_align:
+            res["warnings"].append("A green alignment shift is set; the polygon is in the unshifted raw frame "
+                                   "of the detected channel - check it against the red image.")
+        return res
 
     @api.put("/analyses/{aid}/settings")
     def put_settings(aid: str, body: SettingsBody, raw: Any = Depends(_raw_body)):
