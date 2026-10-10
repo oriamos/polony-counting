@@ -754,3 +754,54 @@ def _read_only(root: Path) -> None:
 def load_crop(data_dir: str | Path, version: str, crop: CropRecord) -> tuple[np.ndarray, np.ndarray]:
     root = snapshot_path(data_dir, version)
     return tifffile.imread(str(root / crop.path_tif)), read_labels_csv(root / crop.path_csv)
+
+
+# ====================================================================== split report / test lock
+def split_report(data_dir: str | Path, version: str) -> dict:
+    m = load_manifest(data_dir, version)
+    groups: dict[str, dict] = {}
+    for s in m.sources:
+        if s.group_id:
+            g = groups.setdefault(s.group_id, {"split": s.split, "analyses": [], "crops": 0, "positives": 0})
+            g["analyses"].append(s.analysis_id)
+    for c in m.crops:
+        g = groups.setdefault(c.group_id, {"split": c.split, "analyses": [], "crops": 0, "positives": 0})
+        g["crops"] += 1
+        g["positives"] += c.n_positive
+    return {"version": m.version, "seed": m.splits.get("seed"), "level": m.splits.get("level"),
+            "fractions": m.splits.get("fractions"), "groups": dict(sorted(groups.items())),
+            "warnings": [w for w in m.warnings], "unconfirmed_identity": m.splits.get("unconfirmed_identity", False),
+            "locked": m.test_lock}
+
+
+def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, reason: str = "",
+                  allow_unconfirmed_identity: bool = False) -> dict:
+    """Freeze the test groups of snapshot ``version`` (``test_lock.json``)."""
+    from .splits import SourceInfo, _record, group_key, write_lock
+
+    m = load_manifest(data_dir, version)
+    problems = verify_snapshot(data_dir, version)
+    if problems:
+        raise MLError(f"snapshot {version} is damaged ({'; '.join(problems[:3])}); cannot lock it")
+    test_crops = [c for c in m.crops if c.split == "test"]
+    if not test_crops:
+        raise MLError(f"snapshot {version} has no test crops; nothing to lock (build with enough independent groups)")
+    if m.splits.get("unconfirmed_identity") and not allow_unconfirmed_identity:
+        raise MLError("the test groups of this snapshot rest on UNCONFIRMED (file-name-inferred) identities; confirm "
+                      "them (--identity-map) and rebuild, or pass --allow-unconfirmed-identity to lock anyway")
+    if m.test_lock and not replace:
+        raise MLError(f"snapshot {version} was itself built on a locked test set ({m.test_lock.get('snapshot')}); "
+                      "to re-lock use --replace-lock --reason ...")
+    imgs = []
+    for s in m.sources:
+        if s.split != "test" or not s.group_id:
+            continue
+        info = SourceInfo(analysis_id=s.analysis_id, name=s.name, sha256=hash_obj(s.tiff_sha256),
+                          file_names=sorted(s.tiff_sha256))
+        rec = _record(info, s.identity or {"source": "unknown", "confirmed": False}, None)
+        imgs.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": rec.sha256, "group": s.group_id,
+                     "keys": {"specimen": group_key(rec, "specimen"), "slide": group_key(rec, "slide"),
+                              "source_image": group_key(rec, "source_image")}})
+    groups = sorted({c.group_id for c in test_crops})
+    return write_lock(data_dir, snapshot=version, test_content_sha256=test_content_hash(m.crops), groups=groups, images=imgs,
+                      level=m.splits.get("level") or "auto", seed=int(m.splits.get("seed") or 0), replace=replace, reason=reason)

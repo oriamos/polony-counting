@@ -885,7 +885,7 @@ async function engineSuite() {
   await tid('engine-layers').locator('summary.btn').click();
   check('legend lists patterns + wording', /long-dash/.test(await tid('layer-legend').innerText()) && /dotted/.test(await tid('layer-legend').innerText()) && /double ring/.test(await tid('layer-legend').innerText()));
   await tid('layer-raw-bigfish').check();
-  await page.waitForSelector('[data-testid=raw-bigfish]');
+  await page.waitForFunction(() => document.querySelector('[data-testid=raw-bigfish]')?.dataset.count === '7');
   check('raw Big-FISH: valid only by default', (await tid('raw-bigfish').getAttribute('data-count')) === '7', await tid('raw-bigfish').getAttribute('data-count'));
   let reqs = await (await fetch(`${BASE}/api/__mock/raw-requests`)).json();
   check('raw fetch is per engine+page, capped, valid=true, lazy', reqs.length === 2 && reqs.every((u) => /engine=bigfish/.test(u) && /valid=true/.test(u) && /limit=5000/.test(u)), reqs.join(' '));

@@ -237,8 +237,13 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     engine_runs: list[EngineRunInfo] = []
     raw_dets: list[RawDetection] = []
     consensus_summaries: list[ConsensusSummary] = []
-    span_bf = 0.4 if choice == EngineChoice.bigfish else 0.1
+    # progress layout: Big-FISH alone as before; hybrid gives Spotiflow (the slow engine) the larger share:
+    # bf red .02-.07, sf red .07-.40, bf green .40-.45, sf green .45-.78 (association etc. from .88)
+    span_bf = 0.4 if choice == EngineChoice.bigfish else 0.05
     span_sf = 0.33 if choice == EngineChoice.hybrid else 0.4
+    bf_bases = (0.05, 0.45) if choice == EngineChoice.bigfish else (0.02, 0.40) if choice == EngineChoice.hybrid \
+        else (0.05, 0.45)
+    sf_bases = (0.07, 0.45) if choice == EngineChoice.hybrid else (0.05, 0.45)
     sf_eng = None
     sf_dead: Optional[str] = None    # unavailable-reason once Spotiflow is known not to run
 
@@ -247,7 +252,7 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
     infos = {}
     spot_info: dict[int, SpotInfo] = {}
     for k, (name, arr, params) in enumerate((("red", red, request.red), ("green", green, request.green))):
-        base = 0.05 + span_bf * k if choice != EngineChoice.hybrid else 0.02 + 0.1 * k
+        base = bf_bases[k]
 
         def sub(f, msg, base=base, name=name, span=span_bf):
             progress(base + span * f, f"{name}: {msg}")
@@ -327,7 +332,7 @@ def run_detection(red: np.ndarray, green: np.ndarray, regions: list[Region], req
                 rect = np.zeros((h, w), bool)
                 rect[sl] = True
                 sf_valid = valid_c & rect
-            sbase = (0.22 + span_sf * k) if choice == EngineChoice.hybrid else (0.05 + span_sf * k)
+            sbase = sf_bases[k]
 
             def sub_sf(f, msg, sbase=sbase, name=name):
                 progress(sbase + span_sf * f, f"{name}: {msg}")

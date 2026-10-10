@@ -308,6 +308,9 @@ export const RegionLabelsLayer = memo(function RegionLabelsLayer({ regions, scal
         const st = regionStatus(r);
         const b = polygonBounds(r.polygon);
         const above = b.y0 - 8 * k > 0;
+        // zoomed far out the labels collide: show only the field number (no status text)
+        const low = scale < 0.4;
+        const short = r.field_index != null ? String(r.field_index) : (/(\d+)\s*$/.exec(r.name)?.[1] ?? r.name);
         return (
           <HaloText
             key={r.id}
@@ -316,7 +319,7 @@ export const RegionLabelsLayer = memo(function RegionLabelsLayer({ regions, scal
             scale={scale}
             size={11}
             fill={STATUS_COLOR[st]}
-            text={r.kind === 'exclusion' ? `${r.name} (excluded)` : `${r.name} · ${st}`}
+            text={low ? (r.kind === 'exclusion' ? 'x' : short) : r.kind === 'exclusion' ? `${r.name} (excluded)` : `${r.name} · ${st}`}
           />
         );
       })}

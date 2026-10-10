@@ -130,7 +130,7 @@ kbd {
 /* layout */
 .app {
   display: grid;
-  grid-template-columns: 270px minmax(0, 1fr) 372px;
+  grid-template-columns: 270px minmax(0, 1fr) minmax(0, 372px);
   grid-template-rows: 40px minmax(0, 1fr);
   height: 100%;
 }
@@ -1570,4 +1570,44 @@ input.num {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+/* right panel never outgrows its column: tabs stay put, wide content scrolls inside the tab body */
+.right {
+  min-width: 0;
+  overflow-x: hidden;
+}
+.tabs {
+  flex-wrap: wrap;
+}
+.tabbody {
+  min-width: 0;
+  overflow-x: auto;
+}
+.tabbody > * {
+  min-width: 0;
+}
+.tabbody .seg.full {
+  flex-wrap: wrap;
+}
+.tabbody .tbl-wrap,
+.tabbody .tbl {
+  max-width: 100%;
+}
+.tabbody .tbl-wrap {
+  overflow-x: auto;
+}
+/* the generic .right{margin-left:auto} (topbar helper) made the grid item shrink-to-fit its widest content */
+aside.right {
+  margin-left: 0;
+  width: 100%;
+}
+.tabbody table.tbl,
+.tabbody table.ptable {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.tabbody .tbl th {
+  white-space: normal;
 }
