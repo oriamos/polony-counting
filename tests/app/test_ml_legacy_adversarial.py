@@ -1825,3 +1825,14 @@ def test_smaller_provenance_must_be_internally_consistent(tmp_path):
     assert any("positive" in b for b in bad_with(pos, n_positive=0))
     assert any("source_sha256" in b for b in bad_with(pos, source_sha256="0" * 64))
     assert any("source_tiff" in b for b in bad_with(pos, source_tiff=""))
+
+
+def test_F10_same_specimen_with_two_different_assays_is_refused(tmp_path):
+    import json
+    from polony_app.ml import legacy_bridge as lb
+    rows = [{"file": "a.tif", "specimen_id": "AM", "slide_id": "AM_A", "assay": "T7_AB", "confirmed": True},
+            {"file": "b.tif", "specimen_id": "am", "slide_id": "AM_B", "assay": "T7_OTHER", "confirmed": True}]
+    p = tmp_path / "ids.json"
+    p.write_text(json.dumps({"rows": rows}))
+    with pytest.raises(lb.MLError, match="different assays"):
+        lb.load_identity_map(p)

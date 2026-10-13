@@ -882,7 +882,10 @@ def load_identity_map(path: str | Path, *, level: str = "auto") -> IdentityTable
                           "its replicate slides would land in different groups. Fill in the same assay on every row of the specimen "
                           "(or clear it everywhere).")
         if len(assays - {None}) > 1:
-            notes.append(f"specimen '{rs[0]['specimen_id']}' appears with different assays {sorted(assays)}: kept as separate groups")
+            raise MLError(f"identity map {p}: specimen '{rs[0]['specimen_id']}' appears with different assays {sorted(assays)}; if "
+                          "these slides come from the same sample, give every row the same assay (otherwise replicates of one "
+                          "sample could land in different splits: leakage); if the code is reused for different samples, give "
+                          "them distinct specimen ids.")
     return IdentityTable(p, sha256_bytes(raw), out, notes)
 
 
