@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, batchLabExport, type LabFormat, type LabStyle } from '../api/client';
 import type { AnalysisStatus, CsvImport } from '../api/types';
 import { useApp } from '../state/store';
+import { BatchPanel } from './BatchPanel';
 
 export const STATUS_LABEL: Record<AnalysisStatus, string> = {
   created: 'created',
@@ -20,6 +21,7 @@ export function LeftRail() {
   return (
     <aside className="left" aria-label="Analyses">
       <AnalysesList />
+      <BatchPanel />
       <LabBatchPanel />
       <CsvPanel />
     </aside>

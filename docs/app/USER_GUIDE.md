@@ -178,6 +178,10 @@ For finalized slides, **Lab export** (or `GET /api/analyses/{id}/lab-export?seri
 * A **Notes** sheet (and `lab_export_notes.txt` in zips) lists the series mapping, analysis ids, SHA-256 of the original images, the field-to-region table and warnings (fields partly covered by an exclusion are counted over the remaining area only; uncertain objects; regions without a field number).
 * Refused with a clear message: unfinalized analyses, field number > 24 or duplicated, missing metadata (the exact list is returned).
 
+## 14b. Batch upload (many TIFFs at once)
+
+Left rail > **Batch upload** > *Open*. Choose several multi-channel TIFFs (one file = one analysis). Pick the detector (Big-FISH, or Hybrid if the AI extra is installed), keep or drop the automatic chamber as counting region, and tick the **one confirmation** that TIFF page 0 is red and page 1 is green for *all* files (colours are never inferred; a file that does not fit fails and is listed). *Run* then creates the analyses, sets the mapping, and runs detection file by file; *Stop after this file* cancels the rest. When done, **Download summary CSV** gives one row per file (red-only, green-only, yellow, uncertain, red/green-positive, notes). Everything is **DRAFT**: no region is inspected or approved, uncertain objects are not in the colour totals, and nothing is validated. Open each analysis from the list to review it; `bundle (DRAFT)` downloads its full export. Not included: per-region/field comparison with the researcher's marks (do that per analysis in Regions > Researcher reference and Totals > Compare).
+
 ## 15. CSV import
 
 The left rail can import a researcher CSV (e.g. `T7A_15-09-2026.csv`) for viewing: blank cells are shown distinct from 0, the colour mapping of a CSV (which column set is red/green/yellow) must be chosen explicitly and is never inferred from names such as T7A/T7B.
