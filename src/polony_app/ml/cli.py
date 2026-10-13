@@ -50,8 +50,8 @@ def _p(*a):
 
 
 # Command groups that live in their own modules (each exposes ``COMMANDS``, ``register(subparsers)`` and
-# ``run(args, data_dir) -> int``): ``cli_legacy`` = import-legacy, ``cli_devices`` = gpu-smoke.
-_EXTENSIONS = ("cli_legacy", "cli_devices")
+# ``run(args, data_dir) -> int``): ``cli_legacy`` = import-legacy, ``cli_devices`` = gpu-smoke, ``cli_preflight`` = preflight.
+_EXTENSIONS = ("cli_legacy", "cli_devices", "cli_preflight")
 
 
 def _extension_modules() -> list:
