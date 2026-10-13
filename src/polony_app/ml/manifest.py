@@ -73,6 +73,9 @@ class CropRecord(BaseModel):
     frozen_from: Optional[str] = None    # snapshot version the (locked) test crop was copied from
     path_tif: str = ""
     path_csv: str = ""
+    # source-specific provenance that the app path does not have (e.g. ImageJ position / counter / grid cell of a
+    # historical crop, label status, coordinate frame). Empty for crops built from reviewed analyses.
+    provenance: dict = {}
 
 
 class SnapshotManifest(BaseModel):
@@ -93,10 +96,19 @@ class SnapshotManifest(BaseModel):
     files: dict[str, str] = {}           # relative path -> sha256 (points.csv, regions.jsonl, crops)
     warnings: list[str] = []
     unresolved_assumptions: list[str] = []
+    # summary of a bridge import (e.g. ``ml import-legacy``): files discovered / accepted / rejected / deduplicated, pages,
+    # fields and annotations by status, estimates. Empty for snapshots built from reviewed analyses.
+    import_summary: dict = {}
     excluded_from_hash: list[str] = Field(default_factory=lambda: list(VERSION_EXCLUDES))
 
     def hash_payload(self) -> dict:
         d = self.model_dump(mode="json")
         for k in VERSION_EXCLUDES:
             d.pop(k, None)
+        # fields added after the first snapshots existed: omitted while empty so older snapshots keep their version hash
+        if not d.get("import_summary"):
+            d.pop("import_summary", None)
+        for c in d.get("crops", []):
+            if not c.get("provenance"):
+                c.pop("provenance", None)
         return d
