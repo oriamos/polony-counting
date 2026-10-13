@@ -272,12 +272,13 @@ def test_invalid_points_are_dropped_with_a_reason_never_clamped_never_labels(tmp
            (good[0][0] + 0.2, good[0][1] + 0.2, 0, 1),   # within 1 px of an earlier point -> duplicate
            # plane-less marks sit in an UNMARKED cell: inside an examined cell they would make that cell a conflict (F2)
            (*cell_xy(2, 2, 0.3, 0.3), 0, 0),        # position 0 -> plane unspecified
-           (*cell_xy(2, 2, 0.7, 0.7), 0, 7)]        # position beyond the number of planes -> unspecified
+           (*cell_xy(2, 2, 0.7, 0.7), 0, 7)]        # position beyond the number of planes -> plane_out_of_range
     root = make_one(tmp_path, marks=good + bad)
     out = go(tmp_path, root, im=None, allow_unconfirmed_identity=True)
     a = out.plan.summary["annotations"]
     assert a["points_total"] == 8 and a["labels_exported"] == 3
-    assert a["dropped_by_reason"] == {"duplicate": 1, "out_of_bounds": 1, "outside_grid": 1, "plane_unspecified": 2}
+    assert a["dropped_by_reason"] == {"duplicate": 1, "out_of_bounds": 1, "outside_grid": 1, "plane_unspecified": 1,
+                                         "plane_out_of_range": 1}
     (c,) = out.result.manifest.crops
     assert c.n_positive == 3
     rows = points_rows(tmp_path / "data", out.result.version)

@@ -256,6 +256,7 @@ class SourceScan:
     y: Optional[np.ndarray] = None
     counter: Optional[np.ndarray] = None                   # -1 = none
     page: Optional[np.ndarray] = None                      # -1 = unspecified
+    position: Optional[np.ndarray] = None                  # ImageJ position as stored (-1 = none); tells 'beyond the planes' from 'missing'
     pstatus: Optional[np.ndarray] = None                   # 0 ok, 1 duplicate, 2 out_of_bounds
     cell: Optional[np.ndarray] = None                      # -1 = outside the grid / unusable
     object_ids: list = field(default_factory=list)
@@ -440,6 +441,7 @@ def _scan_one(rel: str, path: Path, sha: str, source_id: str, opts: BridgeOption
     sc.y = np.array([p.y for p in pts], float)
     sc.counter = np.array([-1 if p.counter is None else int(p.counter) for p in pts], np.int32)
     sc.page = np.array([-1 if p.page is None else int(p.page) for p in pts], np.int32)
+    sc.position = np.array([-1 if p.position is None else int(p.position) for p in pts], np.int32)
     sc.pstatus = np.array([_PSTATUS[p.status.value] for p in pts], np.int8)
     sc.cell = pixel_footprint_cells(sc.x, sc.y, sc.xs, sc.ys, sc.pstatus)
     sc.object_ids = [f"{p.roi_index}:{p.point_index}" for p in pts]
@@ -1272,7 +1274,8 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
         elif cl < 0:
             reason = "outside_grid"
         elif pg < 0:
-            reason = "plane_unspecified"
+            # the importer leaves page unset for a position beyond the planes as well as for a missing / zero one
+            reason = "plane_out_of_range" if int(sc.position[i]) > sc.n_planes else "plane_unspecified"
         elif pg >= sc.n_planes:
             reason = "plane_out_of_range"
         elif pg not in role_of:
