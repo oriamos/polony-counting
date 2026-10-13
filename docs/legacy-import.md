@@ -46,3 +46,7 @@ from polony_app.legacy_import.exports import score_detections, export_spotiflow,
 * Review sessions: `to_review_seed(ds, image_id, page)` -> regions + unclassified manual objects.
 
 Train only inside the counted fields; the rest of the image is unlabelled, not background.
+
+## 5. Training on the historical annotations
+
+For Spotiflow fine-tuning use `python -m polony_app.ml import-legacy` (it reads the TIFFs directly, keeps only fields the researcher examined per page, and builds a snapshot for the ML lifecycle): [app/LEGACY_FINETUNING.md](app/LEGACY_FINETUNING.md). `export-spotiflow` above is the older, lower-level export and does not provide snapshots, the locked test set or the examined-field evidence.

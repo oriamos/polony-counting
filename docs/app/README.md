@@ -42,7 +42,7 @@ Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` 
 | [INSTALL.md](INSTALL.md), [SHARED_DATABASE.md](SHARED_DATABASE.md), [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md) | one-command install, optional shared Postgres, Vercel feasibility (paused) |
 | [LAB_EXPORT.md](LAB_EXPORT.md), [FIELDS.md](FIELDS.md) | lab-format export and field/reference handling |
 | [TWO_ENGINE.md](TWO_ENGINE.md), [TWO_ENGINE_CONTRACT.md](TWO_ENGINE_CONTRACT.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md) | Big-FISH + Spotiflow, consensus, contracts |
-| [FINE_TUNING.md](FINE_TUNING.md), [EVALUATION.md](EVALUATION.md), [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md) | dataset snapshots, controlled fine-tuning, evaluation |
+| [FINE_TUNING.md](FINE_TUNING.md), [LEGACY_FINETUNING.md](LEGACY_FINETUNING.md), [EVALUATION.md](EVALUATION.md), [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md) | dataset snapshots, controlled fine-tuning, fine-tuning on the historical ImageJ TIFFs, evaluation |
 | [REVIEW_POLICY.md](REVIEW_POLICY.md), [RERUN_POLICY.md](RERUN_POLICY.md), [CONTRACTS.md](CONTRACTS.md) | approval/finalize rules, re-detection merge rules, API contracts |
 
 ## Principles
