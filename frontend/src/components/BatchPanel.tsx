@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, exportUrl } from '../api/client';
 import type { EngineChoice, EngineInfo } from '../api/types';
 import { useApp } from '../state/store';
-import { isTiff, newRow, runBatch, summaryCsv, type BatchRow } from '../lib/batch';
+import { comparisonCsv, isTiff, newRow, runBatch, summaryCsv, type BatchRow } from '../lib/batch';
 
 const STAGE_LABEL: Record<BatchRow['stage'], string> = {
   queued: 'queued',
@@ -35,6 +35,7 @@ export function BatchPanel() {
   const [engine, setEngine] = useState<EngineChoice>('bigfish');
   const [chamber, setChamber] = useState(true);
   const [rim, setRim] = useState(40);
+  const [compare, setCompare] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -66,7 +67,7 @@ export function BatchPanel() {
     setErr('');
     const result = await runBatch(
       files,
-      { engine, autoChamber: chamber, rimPx: rim },
+      { engine, autoChamber: chamber, rimPx: rim, compare },
       api,
       (i, row) => setRows((r) => r.map((x, k) => (k === i ? row : x))),
       () => stop.current,
@@ -111,6 +112,10 @@ export function BatchPanel() {
                 Counting region = automatic chamber, rim
                 <input className="input sm" style={{ width: 54, marginLeft: 4 }} type="number" min={0} max={500} value={rim} disabled={busy || !chamber} onChange={(e) => setRim(Math.max(0, Math.min(500, Number(e.target.value) || 0)))} />
                 px
+              </label>
+              <label className="chk small">
+                <input type="checkbox" checked={compare} disabled={busy} onChange={(e) => setCompare(e.target.checked)} data-testid="batch-compare" />
+                Compare with the researcher's marks embedded in each TIFF (imports her fields as regions)
               </label>
               <label className="chk small">
                 <input type="checkbox" checked={confirmed} disabled={busy} onChange={(e) => setConfirmed(e.target.checked)} data-testid="batch-confirm" />
@@ -164,6 +169,16 @@ export function BatchPanel() {
                       </a>
                     )}
                   </div>
+                  {r.compare.length > 0 && (
+                    <ul className="small mono batch-cmp">
+                      {r.compare.map((c) => (
+                        <li key={`${c.plane}-${c.countType}`}>
+                          page {c.plane} · {c.countType}: app {c.totalApp} vs ref {c.totalReference} ({c.nFields} fields, r {c.pearsonR == null ? '–' : c.pearsonR.toFixed(2)}, MAE {c.mae == null ? '–' : c.mae.toFixed(1)})
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {r.stage === 'done' && r.refStatus === 'no marks' && <div className="muted small">no researcher marks in this TIFF</div>}
                   {r.error && <div className="notice err small">{r.error}</div>}
                   {r.notes.length > 0 && (
                     <details className="small muted">
@@ -178,9 +193,21 @@ export function BatchPanel() {
             </ul>
           )}
           {finished && (
-            <button className="btn primary" onClick={() => download(`polony_batch_summary_DRAFT.csv`, summaryCsv(rows, engine))} data-testid="batch-download">
-              Download summary CSV ({okCount}/{rows.length} done)
-            </button>
+            <>
+              <button className="btn primary" onClick={() => download(`polony_batch_summary_DRAFT.csv`, summaryCsv(rows, engine))} data-testid="batch-download">
+                Download summary CSV ({okCount}/{rows.length} done)
+              </button>
+              {rows.some((r) => r.compare.length > 0) && (
+                <button className="btn" onClick={() => download(`polony_batch_vs_researcher_DRAFT.csv`, comparisonCsv(rows))} data-testid="batch-download-compare">
+                  Download comparison with researcher marks CSV
+                </button>
+              )}
+              {compare && (
+                <div className="muted small">
+                  The summary counts the whole chamber; the researcher counted only her fields. Compare per field (second file), not the slide totals. Agreement with her marks is not accuracy.
+                </div>
+              )}
+            </>
           )}
         </>
       )}

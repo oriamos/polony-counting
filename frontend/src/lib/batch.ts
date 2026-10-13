@@ -1,9 +1,21 @@
-import type { Analysis, Counts, CountsResponse, DetectionRequest, EngineChoice, Job, Region } from '../api/types';
+import type { Analysis, CompareCountType, CompareResponse, Counts, CountsResponse, DetectionRequest, EngineChoice, FieldImportRequest, Job, ReferenceInfo, Region } from '../api/types';
 import { DEFAULT_SPOTIFLOW } from '../api/types';
 
 /** Batch upload: one analysis per TIFF (each file is a multi-channel scan), run in sequence. */
 
 export type BatchStage = 'queued' | 'uploading' | 'mapping' | 'region' | 'detecting' | 'counting' | 'done' | 'failed' | 'cancelled';
+
+/** Agreement of the app's per-field counts with the researcher's embedded marks for one plane / count type. */
+export interface CompareLine {
+  plane: number;
+  countType: CompareCountType;
+  nFields: number;
+  pearsonR: number | null;
+  slope: number | null;
+  mae: number | null;
+  totalReference: number;
+  totalApp: number;
+}
 
 export interface BatchRow {
   file: string;
@@ -11,6 +23,9 @@ export interface BatchRow {
   analysisId: string | null;
   progress: number; // 0..1 of the detection job
   counts: Counts | null;
+  compare: CompareLine[];
+  /** 'off' | 'no marks' | 'fields imported' | error text */
+  refStatus: string;
   regionNote: string;
   notes: string[];
   error: string;
@@ -20,6 +35,8 @@ export interface BatchOptions {
   engine: EngineChoice;
   autoChamber: boolean;
   rimPx: number;
+  /** import the researcher's fields (when the TIFF carries them) and compare per field */
+  compare: boolean;
 }
 
 /** The slice of the API client the batch needs (injected so the flow is testable). */
@@ -32,12 +49,15 @@ export interface BatchApi {
   job: (id: string) => Promise<Job>;
   getAnalysis: (id: string) => Promise<Analysis>;
   counts: (id: string) => Promise<CountsResponse>;
+  reference: (id: string) => Promise<ReferenceInfo>;
+  importFields: (id: string, body: FieldImportRequest) => Promise<Analysis>;
+  compareFields: (id: string, plane: number | null, countType: CompareCountType) => Promise<CompareResponse>;
 }
 
 export const isTiff = (name: string) => /\.tiff?$/i.test(name);
 
 export const newRow = (file: string): BatchRow => ({
-  file, stage: 'queued', analysisId: null, progress: 0, counts: null, regionNote: '', notes: [], error: '',
+  file, stage: 'queued', analysisId: null, progress: 0, counts: null, compare: [], refStatus: 'off', regionNote: '', notes: [], error: '',
 });
 
 /** Strip the extension for the analysis name. */
@@ -49,6 +69,12 @@ export function batchRequest(engine: EngineChoice): DetectionRequest {
   if (engine !== 'bigfish') req.spotiflow = { ...DEFAULT_SPOTIFLOW, downscale: 4, normalizer: 'valid_unsaturated' };
   return req as DetectionRequest;
 }
+
+/** Plane (TIFF page) -> app count types compared against the marks of that plane. */
+const COMPARE_PLAN: [number, CompareCountType[]][] = [
+  [0, ['red_positive', 'yellow']],
+  [1, ['green_positive', 'yellow']],
+];
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -99,6 +125,21 @@ export async function runBatch(
           set(i, { regionNote: 'none', notes: [...rows[i].notes, `automatic chamber failed (${errText(e)}); no counting region set, count not restricted`] });
         }
       }
+      let hasFields = false;
+      if (opts.compare) {
+        try {
+          const ref = await api.reference(id);
+          if (ref.available && ref.grid) {
+            await api.importFields(id, { mode: 'counted', shift: [0, 0], plane: null, replace: false });
+            hasFields = true;
+            set(i, { refStatus: 'fields imported', notes: [...rows[i].notes, ...ref.warnings] });
+          } else {
+            set(i, { refStatus: 'no marks' });
+          }
+        } catch (e) {
+          set(i, { refStatus: `reference failed: ${errText(e)}` });
+        }
+      }
       set(i, { stage: 'detecting', progress: 0 });
       let job = await api.detect(id, batchRequest(opts.engine));
       while (job.status === 'queued' || job.status === 'running') {
@@ -114,7 +155,22 @@ export async function runBatch(
         an = await api.getAnalysis(id);
       }
       const c = await api.counts(id);
-      set(i, { stage: 'done', counts: c.slide });
+      const lines: CompareLine[] = [];
+      if (hasFields) {
+        // page 0 / page 1 are the red / green channels the user confirmed for the batch
+        for (const [plane, types] of COMPARE_PLAN) {
+          for (const t of types) {
+            try {
+              const cmp = await api.compareFields(id, plane, t);
+              const sm = cmp.summary;
+              lines.push({ plane, countType: t, nFields: sm.n_fields, pearsonR: sm.pearson_r, slope: sm.slope, mae: sm.mae, totalReference: sm.total_reference, totalApp: sm.total_app });
+            } catch (e) {
+              set(i, { notes: [...rows[i].notes, `compare plane ${plane} ${t}: ${errText(e)}`] });
+            }
+          }
+        }
+      }
+      set(i, { stage: 'done', counts: c.slide, compare: lines });
     } catch (e) {
       set(i, { stage: 'failed', error: errText(e) });
     }
@@ -130,7 +186,7 @@ const csvCell = (v: unknown) => {
 export const SUMMARY_HEADER = [
   'file', 'analysis_id', 'state', 'export_status', 'engine', 'counting_region',
   'red_only', 'green_only', 'yellow', 'uncertain', 'red_positive', 'green_positive',
-  'total_objects_exclusive', 'red_positive_excl_debris', 'green_positive_excl_debris', 'notes', 'error',
+  'total_objects_exclusive', 'red_positive_excl_debris', 'green_positive_excl_debris', 'researcher_marks', 'notes', 'error',
 ] as const;
 
 /** One CSV row per file. Always DRAFT: nothing here has been reviewed or approved. */
@@ -143,9 +199,31 @@ export function summaryCsv(rows: BatchRow[], engine: EngineChoice): string {
         r.file, r.analysisId ?? '', r.stage, 'DRAFT', engine, r.regionNote,
         c?.red_only, c?.green_only, c?.yellow, c?.uncertain, c?.red_positive, c?.green_positive,
         c?.total_objects_exclusive, c?.red_positive_excl_debris, c?.green_positive_excl_debris,
-        r.notes.join(' | '), r.error,
+        r.refStatus, r.notes.join(' | '), r.error,
       ].map(csvCell).join(','),
     );
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+export const COMPARE_HEADER = [
+  'file', 'analysis_id', 'export_status', 'reference_plane', 'app_count_type', 'fields_compared',
+  'total_reference', 'total_app', 'delta_total', 'pearson_r', 'slope', 'mae',
+] as const;
+
+/** Long format: one row per file x plane x count type. Agreement with the researcher's marks, not accuracy. */
+export function comparisonCsv(rows: BatchRow[]): string {
+  const lines = [COMPARE_HEADER.join(',')];
+  for (const r of rows) {
+    for (const c of r.compare) {
+      lines.push(
+        [
+          r.file, r.analysisId ?? '', 'DRAFT', c.plane, c.countType, c.nFields,
+          c.totalReference, c.totalApp, c.totalApp - c.totalReference,
+          c.pearsonR == null ? '' : c.pearsonR.toFixed(3), c.slope == null ? '' : c.slope.toFixed(3), c.mae == null ? '' : c.mae.toFixed(2),
+        ].map(csvCell).join(','),
+      );
+    }
   }
   return lines.join('\r\n') + '\r\n';
 }
