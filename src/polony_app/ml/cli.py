@@ -213,6 +213,51 @@ def main(argv: Optional[list[str]] = None) -> int:
     except MLError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr, flush=True)
         return 2
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001 - narrowed below; anything not an I/O / data-format failure is a real bug and propagates
+        msg = _environment_error(exc)
+        if msg is None:
+            raise
+        print(f"REFUSED: {msg}", file=sys.stderr, flush=True)
+        return 2
+
+
+def _environment_error(exc: BaseException) -> Optional[str]:
+    """Operator-facing text of a failure that comes from the file system or from the data (not from a bug): an OSError (ENOSPC,
+    EFBIG, EACCES, ENOTDIR, EIO ...), an unreadable / truncated source (IngestError), undecodable text, malformed JSON, a corrupt
+    manifest. None for anything else (a programming error keeps its traceback)."""
+    import errno
+    from pydantic import ValidationError
+    try:
+        from polony_app.imaging.io import IngestError
+    except Exception:  # pragma: no cover
+        IngestError = ()  # type: ignore[assignment]
+    if isinstance(exc, OSError):
+        where = f" ({exc.filename})" if getattr(exc, "filename", None) else ""
+        why = exc.strerror or str(exc)
+        hint = ""
+        if exc.errno in (errno.ENOSPC, errno.EFBIG, errno.EDQUOT):
+            hint = (" Nothing was published; the work done so far is kept in the staging directory and resumes when you rerun the "
+                    "same command after freeing space (or use --data-dir on a larger volume).")
+        elif exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+            hint = " Check the permissions of that path (read access to the sources, write access to --data-dir)."
+        elif exc.errno in (errno.ENOTDIR, errno.ENOENT):
+            hint = (" File or directory not found: check that the path exists and that every parent of it is a directory; a source "
+                    "file that vanished while the import was running must be restored (the staging directory resumes).")
+        elif exc.errno == errno.EIO:
+            hint = " The storage reported an I/O error; check the disk / share and rerun (the staging directory resumes)."
+        return f"cannot access the file system: {type(exc).__name__}: {why}{where}.{hint}"
+    if IngestError and isinstance(exc, IngestError):
+        return (f"a source image could not be read: {exc}. If a file was deleted, truncated or replaced while the import was "
+                "running, make sure nothing writes to the input directory and rerun.")
+    if isinstance(exc, UnicodeError):
+        return f"text that is not valid UTF-8 was met ({type(exc).__name__}: {exc}); file names and mapping files must be UTF-8"
+    if isinstance(exc, json.JSONDecodeError):
+        return f"a JSON file is malformed: {exc}"
+    if isinstance(exc, ValidationError):
+        return f"a manifest / data file does not have the expected structure: {exc.error_count()} problem(s); first: {exc.errors()[0].get('msg')}"
+    return None
 
 
 def _run(a, data_dir: str) -> int:

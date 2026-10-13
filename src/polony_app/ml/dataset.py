@@ -13,12 +13,14 @@ real spots would teach the model that spots are background.
 """
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import json
 import os
 import re
 import shutil
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +60,8 @@ from .common import (
     pretty_json,
     rect_of,
     sha256_bytes,
+    staging_lock_path,
+    try_file_lock,
     sha256_file,
     utc_now,
 )
@@ -768,16 +772,28 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
 
     stage: Optional[Path]
     resume = bool(resume_key) and will_write
+    lock_stack = contextlib.ExitStack()      # holds the lock of the staging directory until this function ends
     if not will_write:
         stage = None
-    elif resume:
-        stage = datasets_dir(data_dir) / f".staging-{safe_id(str(resume_key))}"
     else:
-        stage = datasets_dir(data_dir) / f".staging-{uuid.uuid4().hex[:10]}"
-    if stage is not None:
-        stage.mkdir(parents=True, exist_ok=True)
+        stage = None
+        if resume:
+            cand = datasets_dir(data_dir) / f".staging-{safe_id(str(resume_key))}"
+            if lock_stack.enter_context(try_file_lock(staging_lock_path(data_dir, cand.name))):
+                stage = cand
+            else:
+                say(f"another import of the identical plan is running right now (lock {staging_lock_path(data_dir, cand.name)}): "
+                    "this run writes a private, non-resumable copy so that neither run can disturb the other; the first one to "
+                    "publish wins, the other ends with a clear message")
+                resume = False
+        if stage is None:
+            stage = datasets_dir(data_dir) / f".staging-{uuid.uuid4().hex[:10]}"
+            lock_stack.enter_context(try_file_lock(staging_lock_path(data_dir, stage.name)))
     published = False
     try:
+        if stage is not None:
+            reclaim_staging(data_dir, keep=stage.name, say=say, superseded=False)
+            stage.mkdir(parents=True, exist_ok=True)
         crops: list[CropRecord] = []
 
         def make_rec(e, c, split, tsha, csha) -> CropRecord:
@@ -995,8 +1011,8 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
                 rlines.append(json.dumps(dict(rec, crops=role_crops), sort_keys=True, ensure_ascii=False))
         regions_text = "\n".join(rlines) + ("\n" if rlines else "")
         if stage is not None:
-            (stage / "points.csv").write_text(points_text, encoding="utf-8", newline="")
-            (stage / "regions.jsonl").write_text(regions_text, encoding="utf-8", newline="")
+            atomic_write_text(stage / "points.csv", points_text)
+            atomic_write_text(stage / "regions.jsonl", regions_text)
         files = {"points.csv": sha256_bytes(points_text.encode("utf-8")),
                  "regions.jsonl": sha256_bytes(regions_text.encode("utf-8"))}
         for c in crops:
@@ -1095,12 +1111,28 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
         atomic_write_text(stage / "manifest.json", pretty_json(manifest.model_dump(mode="json")))
         if resume:
             shutil.rmtree(stage / ".done", ignore_errors=True)
-        os.rename(stage, final)
+        try:
+            os.rename(stage, final)
+        except OSError as exc:
+            if final.exists():            # a concurrent identical import published first (rename onto a non-empty directory)
+                shutil.rmtree(stage, ignore_errors=True)
+                raise MLError(f"snapshot {version} already exists at {final}: an identical snapshot was published by another run "
+                              "while this one was writing. Snapshots are immutable and are never overwritten; nothing was changed "
+                              "and this run's staging copy was removed.") from exc
+            raise
         published = True
         _read_only(final)
     finally:
         if stage is not None and stage.exists() and not published and not (resume and not dry_run):
             shutil.rmtree(stage, ignore_errors=True)
+        lock_stack.close()
+        if stage is not None and not stage.exists():
+            _drop_lock_file(data_dir, stage.name)
+    if published:
+        try:
+            reclaim_staging(data_dir, keep=stage.name, say=say, superseded=True)
+        except OSError:                   # housekeeping only: never turns a published snapshot into an error
+            pass
     say(f"created snapshot {version} at {final}")
     for sp in ("train", "val", "test"):
         d = label_counts["by_split"].get(sp, {"crops": 0, "positives": 0, "groups": 0})
@@ -1109,6 +1141,83 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
     for w in manifest.warnings:
         say(f"  WARNING: {w}")
     return BuildResult(version, final, manifest)
+
+
+STALE_STAGING_DAYS = 7
+
+
+def _stage_age_days(path: Path) -> float:
+    newest = path.stat().st_mtime
+    done = path / ".done"
+    try:
+        if done.is_dir():
+            newest = max([newest, done.stat().st_mtime] + [q.stat().st_mtime for q in done.iterdir()])
+    except OSError:
+        pass
+    return max(0.0, (time.time() - newest) / 86400.0)
+
+
+def _drop_lock_file(data_dir: str | Path, name: str) -> None:
+    """Delete the (now unneeded) lock file of a staging directory, and the ``.locks`` directory when it became empty."""
+    lp = staging_lock_path(data_dir, name)
+    try:
+        lp.unlink()
+    except OSError:
+        pass
+    try:
+        lp.parent.rmdir()
+    except OSError:
+        pass
+
+
+def remove_staging_if_free(data_dir: str | Path, name: str) -> bool:
+    """Delete ``datasets/<name>`` (a ``.staging-*`` directory) unless a live run holds its lock. True when it was removed."""
+    d = datasets_dir(data_dir) / name
+    if not name.startswith(".staging-") or not d.is_dir():
+        return False
+    lp = staging_lock_path(data_dir, name)
+    with try_file_lock(lp) as got:
+        if not got:
+            return False
+        shutil.rmtree(d, ignore_errors=True)
+    _drop_lock_file(data_dir, name)
+    return True
+
+
+def reclaim_staging(data_dir: str | Path, *, keep: str = "", say: Optional[Callable] = None, superseded: bool = False,
+                    max_age_days: float = STALE_STAGING_DAYS) -> list[str]:
+    """Remove leftover ``.staging-*`` directories nobody is using. NEVER a directory whose lock is held by a live run.
+
+    * always: older than ``max_age_days`` (default 7) and with a free lock;
+    * ``superseded=True`` (after a successful publish): every other ``.staging-*`` whose lock is free - it belongs to inputs
+      that were superseded (a crashed run whose inputs or options changed afterwards has another resume key and could never be
+      resumed by this plan);
+    plus lock files of directories that no longer exist. Returns the removed names."""
+    d = datasets_dir(data_dir)
+    removed: list[str] = []
+    if not d.is_dir():
+        return removed
+    for q in sorted(d.iterdir()):
+        if not q.name.startswith(".staging-") or q.name == keep or not q.is_dir():
+            continue
+        try:
+            old = _stage_age_days(q) > max_age_days
+        except OSError:
+            continue
+        if (superseded or old) and remove_staging_if_free(data_dir, q.name):
+            removed.append(q.name)
+    locks = Path(data_dir) / ".locks"
+    if locks.is_dir():
+        for lf in sorted(locks.glob("staging-*.lock")):
+            name = "." + lf.name[:-len(".lock")]
+            if name != keep and not (d / name).exists():
+                with try_file_lock(lf) as got:
+                    if got:
+                        _drop_lock_file(data_dir, name)
+    if removed and say is not None:
+        say(f"removed {len(removed)} stale staging director{'y' if len(removed) == 1 else 'ies'} of superseded or abandoned imports "
+            f"({', '.join(removed[:3])}{', ...' if len(removed) > 3 else ''})")
+    return removed
 
 
 def _dedupe(items: list[str]) -> list[str]:

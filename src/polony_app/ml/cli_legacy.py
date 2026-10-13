@@ -141,7 +141,7 @@ def format_report(out, data_dir) -> list[str]:
         ad("  (chamber detection reads the pixels: it runs at import time; files without a chamber fall back to the union of all "
            "grid cells and are recorded per source in import_summary.valid_mask)")
     for sk in s["tiffs"].get("skipped_links", []):
-        ad(f"  SKIPPED link {sk['path']}: {sk['reason']}")
+        ad(f"  SKIPPED {sk['path']}: {sk['reason']}")
     for k, v in s["input_files"].items():
         if v:
             for f in (v if isinstance(v, list) else [v]):

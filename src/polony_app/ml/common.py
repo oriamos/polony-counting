@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,16 +67,114 @@ def fnum(v: Optional[float]) -> str:
     return "" if v is None else repr(float(v))
 
 
+# ------------------------------------------------------------------ strict JSON (hand-written mapping / manifest files)
+MAX_JSON_FILE_BYTES = 8 * 1024 * 1024
+MAX_JSON_DEPTH = 32                    # the mapping files nest 5-6 levels; anything deeper is not one
+PAGE_KEY_RE = re.compile(r"[0-9]{1,4}")
+_JSON_TOKEN = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]', re.S)
+
+
+class DuplicateKeyError(ValueError):
+    """A JSON object that repeats a key (the standard parser would silently keep the last value)."""
+
+    def __init__(self, key):
+        super().__init__(f"duplicate key {key!r}")
+        self.key = key
+
+
+def reject_duplicate_pairs(pairs):
+    """``json.loads(..., object_pairs_hook=reject_duplicate_pairs)``: a repeated key is an error, never 'last one wins'."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            raise DuplicateKeyError(k)
+        out[k] = v
+    return out
+
+
+def check_json_depth(text: str, what: str, limit: int = MAX_JSON_DEPTH) -> None:
+    """Refuse absurdly nested JSON before the (recursive) parser sees it: bracket depth is scanned outside strings."""
+    depth = 0
+    for m in _JSON_TOKEN.finditer(text):
+        t = m.group()
+        if t == "[" or t == "{":
+            depth += 1
+            if depth > limit:
+                raise MLError(f"{what}: JSON nested deeper than {limit} levels - this is not a valid file of that kind")
+        elif t == "]" or t == "}":
+            depth -= 1
+
+
+def loads_strict(text: str, what: str) -> Any:
+    """Parse JSON text: bounded depth, duplicate keys refused. Every failure is an :class:`MLError` naming ``what``."""
+    check_json_depth(text, what)
+    try:
+        return json.loads(text, object_pairs_hook=reject_duplicate_pairs)
+    except DuplicateKeyError as exc:
+        raise MLError(f"{what}: the key {exc.key!r} appears more than once in one JSON object; refusing to guess which statement "
+                      "counts (a standard parser would silently keep the last one). Remove the duplicate.") from exc
+    except (RecursionError, MemoryError) as exc:
+        raise MLError(f"{what}: too deeply nested or too large to read") from exc
+    except ValueError as exc:
+        raise MLError(f"{what}: cannot be read as JSON ({exc})") from exc
+
+
+def read_json_strict(path: str | Path, what: str, *, max_bytes: int = MAX_JSON_FILE_BYTES) -> tuple[Any, bytes]:
+    """(parsed JSON, raw bytes) of a hand-written file: size-capped, UTF-8 (BOM allowed), depth-capped, duplicate keys refused.
+    Every failure is an :class:`MLError` that names the file."""
+    p = Path(path)
+    label = f"{what} {p}"
+    try:
+        size = p.stat().st_size
+        if size > max_bytes:
+            raise MLError(f"{label}: larger than {max_bytes // (1024 * 1024)} MB - not a mapping file")
+        raw = p.read_bytes()
+    except OSError as exc:
+        raise MLError(f"{label}: cannot be read ({exc.strerror or exc})") from exc
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise MLError(f"{label}: is not valid UTF-8 ({exc})") from exc
+    return loads_strict(text, label), raw
+
+
 # ------------------------------------------------------------------ files
+def utf8_name_problem(name: str) -> Optional[str]:
+    """None when ``name`` (a file / path text) survives a strict UTF-8 round trip, else why not (lone surrogates from
+    undecodable file-system bytes). Provenance names are written to UTF-8 files and must never be mangled or escaped."""
+    try:
+        name.encode("utf-8")
+        return None
+    except UnicodeEncodeError:
+        return "the name contains bytes that are not valid UTF-8 / not decodable in the file-system encoding"
+
+
+def printable_name(name: str) -> str:
+    """The name for messages: undecodable bytes are shown as \\x.. escapes instead of crashing the output."""
+    return name.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
 def atomic_write_text(path: str | Path, text: str) -> None:
     p = Path(path)
+    try:
+        data = text.encode("utf-8")           # strict: a lone surrogate would otherwise surface after the file was opened
+    except UnicodeEncodeError as exc:
+        raise MLError(f"cannot write {printable_name(str(p))}: the text contains characters that are not valid UTF-8 "
+                      f"({exc.reason}); file names of the sources must be valid UTF-8") from exc
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, p)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 @contextlib.contextmanager
@@ -123,7 +222,49 @@ def file_lock(path: str | Path, timeout: float = 30.0) -> Iterator[None]:
         os.close(fd)
 
 
+@contextlib.contextmanager
+def try_file_lock(path: str | Path) -> Iterator[bool]:
+    """Non-blocking variant of :func:`file_lock`: yields True when this process now holds the exclusive lock on ``path`` (kept
+    until the block ends), False when another live process holds it. A crashed holder never keeps the lock (the OS drops it)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(p), os.O_RDWR | os.O_CREAT, 0o644)
+    got = False
+    unlock = None
+    try:
+        try:
+            import fcntl  # POSIX
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                got = True
+                unlock = lambda: fcntl.flock(fd, fcntl.LOCK_UN)       # noqa: E731
+            except OSError:
+                pass
+        except ImportError:  # Windows
+            import msvcrt
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                got = True
+                unlock = lambda: msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)  # noqa: E731
+            except OSError:
+                pass
+        yield got
+    finally:
+        if got and unlock is not None:
+            try:
+                unlock()
+            except OSError:
+                pass
+        os.close(fd)
+
+
 # ------------------------------------------------------------------ paths
+def staging_lock_path(data_dir: str | Path, stage_name: str) -> Path:
+    """Lock file of a staging directory (``datasets/.staging-<x>``): kept OUTSIDE ``datasets/`` so that a leftover lock file is never
+    mistaken for (or counted as) a staging directory or a snapshot."""
+    return Path(data_dir) / ".locks" / f"{stage_name.lstrip('.')}.lock"
+
+
 def datasets_dir(data_dir: str | Path) -> Path:
     return Path(data_dir) / "datasets"
 

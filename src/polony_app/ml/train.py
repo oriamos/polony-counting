@@ -93,13 +93,13 @@ LOAD_MODES = ("auto", "eager", "lazy")
 
 
 def _check_examination_provenance(m: SnapshotManifest) -> str:
-    """Bridge imports (non-empty ``import_summary``) must prove that every crop was examined by the researcher.
+    """Bridge imports (``options.legacy_import`` or a non-empty ``import_summary`` or any crop with provenance) must prove that every crop was examined by the researcher.
     ``legacy_bridge.verify_examination_provenance`` re-checks the recorded provenance of every train / val / test crop; on top,
     ANY crop that carries provenance (or any crop of an import) must say ``researcher_examined == true``."""
-    is_import = bool(m.import_summary)
+    from . import legacy_bridge as lb
+    is_import = lb.is_legacy_import(m)
     problems: list[str] = []
     if is_import:
-        from . import legacy_bridge as lb
         problems += lb.verify_examination_provenance(m)
     for c in m.crops:
         prov = c.provenance or {}
@@ -112,6 +112,39 @@ def _check_examination_provenance(m: SnapshotManifest) -> str:
                       f"them would teach the model from unexamined cells. First problems: {'; '.join(problems[:5])}")
     return ("every crop of this bridge import carries researcher_examined provenance" if is_import
             else "no bridge-import provenance to verify (snapshot built from reviewed analyses)")
+
+
+VALID_SPLITS = ("train", "val", "test")
+
+
+def _check_manifest_sanity(m: SnapshotManifest) -> None:
+    """Structural gate on a (possibly hand-edited and re-sealed) manifest: split names, unique crop ids, finite page bounds,
+    consistent geometry. ``verify`` only proves the manifest matches its own hash, not that its content makes sense."""
+    import math
+    problems: list[str] = []
+    seen: dict[str, str] = {}
+    for c in m.crops:
+        if c.split not in VALID_SPLITS:
+            problems.append(f"crop {c.crop_id}: unknown split {c.split!r} (must be one of {', '.join(VALID_SPLITS)})")
+        if c.crop_id in seen:
+            problems.append(f"crop id {c.crop_id!r} appears more than once (splits {seen[c.crop_id]} and {c.split}): each crop "
+                            "must be unique, or it would be trained on twice / sit in train and validation")
+        seen.setdefault(c.crop_id, c.split)
+        if c.n_positive < 0:
+            problems.append(f"crop {c.crop_id}: negative n_positive {c.n_positive}")
+        sh, bx = c.shape_hw, c.box_xyxy
+        ok_shape = (len(sh) == 2 and all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in sh))
+        if not ok_shape:
+            problems.append(f"crop {c.crop_id}: shape_hw {sh} is not two positive integers (empty crop)")
+        elif len(bx) != 4 or (bx[3] - bx[1], bx[2] - bx[0]) != (sh[0], sh[1]):
+            problems.append(f"crop {c.crop_id}: shape_hw {sh} is inconsistent with box_xyxy {bx} (expected {[bx[3] - bx[1], bx[2] - bx[0]] if len(bx) == 4 else '4 values'})")
+        if c.split in ("train", "val") and c.normaliser != "none":
+            lo, hi = c.norm_lo, c.norm_hi
+            if lo is not None and hi is not None and not (math.isfinite(lo) and math.isfinite(hi) and lo < hi):
+                problems.append(f"crop {c.crop_id}: page lo/hi ({lo}, {hi}) are not finite with lo < hi")
+    if problems:
+        raise MLError(f"REFUSED: the manifest of snapshot {m.version} is inconsistent ({len(problems)} problem(s)); nothing was "
+                      f"trained. First problems: {'; '.join(problems[:5])}")
 
 
 def subsample_val(val: list, n: int) -> tuple[list, list]:
@@ -139,6 +172,7 @@ def plan_training(data_dir: str | Path, version: str, opts: TrainOptions) -> Tra
     if opts.load_mode not in LOAD_MODES:
         raise MLError(f"unknown --load-mode '{opts.load_mode}' (choose one of {', '.join(LOAD_MODES)})")
     checks.append(_check_examination_provenance(m))
+    _check_manifest_sanity(m)
     train = [c for c in m.crops if c.split == "train"]
     val = [c for c in m.crops if c.split == "val"]
     if not train:

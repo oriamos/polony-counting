@@ -154,8 +154,8 @@ class ExaminedManifest(BaseModel):
         seen = set()
         for f in self.files:
             for pg, ents in f.pages.items():
-                if not pg.isdigit():
-                    raise ValueError(f"{f.file}: page keys must be integers (0-based TIFF page), got {pg!r}")
+                if not re.fullmatch(r"[0-9]{1,4}", pg):
+                    raise ValueError(f"{f.file}: page keys must be 0-based integers of 1-4 ASCII digits (TIFF page), got {pg[:20]!r}")
                 for e in ents:
                     k = (f.file, int(pg), e.key())
                     if k in seen:
@@ -191,6 +191,12 @@ class ExaminedManifest(BaseModel):
         return out
 
 
+def _no_duplicate_keys(pairs):
+    """``object_pairs_hook`` shared with the mapping files of ``ml import-legacy`` (``ml.common.reject_duplicate_pairs``)."""
+    from polony_app.ml.common import reject_duplicate_pairs
+    return reject_duplicate_pairs(pairs)
+
+
 def _json_depth_ok(raw: str) -> None:
     """Reject absurdly nested JSON before the (recursive) parser sees it: scan bracket depth outside strings."""
     depth = 0
@@ -218,6 +224,7 @@ def load_manifest(path: str | Path) -> ExaminedManifest:
     with the mandatory evidence text passed in a ``# evidence: ...`` first line. Every failure is an
     :class:`ExaminedError` (file too large, undecodable, too deeply nested, wrong schema, wrong types, unknown keys)."""
     import hashlib
+    from polony_app.ml.common import DuplicateKeyError as _DuplicateKey      # lazy: ml imports this module
     p = Path(path)
     try:
         size = p.stat().st_size
@@ -232,9 +239,12 @@ def load_manifest(path: str | Path) -> ExaminedManifest:
             m = _from_csv(text)
         else:
             _json_depth_ok(text)
-            m = ExaminedManifest.model_validate(json.loads(text))
+            m = ExaminedManifest.model_validate(json.loads(text, object_pairs_hook=_no_duplicate_keys))
     except ExaminedError:
         raise
+    except _DuplicateKey as exc:
+        raise ExaminedError(f"{p}: not a valid examined-fields manifest: the key {exc.key!r} appears more than once in one JSON "
+                            "object (e.g. 'count' twice); refusing to guess which statement counts") from exc
     except (ValidationError, ValueError, KeyError, TypeError, AttributeError, csv.Error) as exc:
         raise ExaminedError(f"{p}: not a valid examined-fields manifest: {exc}") from exc
     except (RecursionError, MemoryError) as exc:

@@ -1489,11 +1489,15 @@ def test_F8_files_keys_and_rules_that_match_nothing_are_blockers_with_the_neares
     msg = str(e.value)
     assert msg.count("matches no scanned TIFF") == 4 and "nearest existing file: 'sub/odd.tif'" in msg and "rule 'typo'" in msg
     assert "files['a.tif']" not in msg                                              # an exact key is fine
-    dry = run_import(tmp_path, root, cmap=cmp_, allow_unconfirmed_identity=True, dry=True)
-    assert len([b for b in dry.blockers if "matches no scanned TIFF" in b]) == 4
+    # robustness pass: a `files` key that names no scanned TIFF is refused even in a dry run (exit 2); the read-only plan still lists
+    # all four texts as blockers (what the preflight reports)
+    with pytest.raises(MLError, match="matches no scanned TIFF"):
+        run_import(tmp_path, root, cmap=cmp_, allow_unconfirmed_identity=True, dry=True)
+    plan = lb.build_plan(root, lb.BridgeOptions(), channel_map=cmp_, dry_run=True, say=lambda *a: None)
+    assert len([b for b in plan.blockers if "matches no scanned TIFF" in b]) == 4
     code = main(["--data-dir", str(tmp_path / "dd"), "import-legacy", "--input", str(root), "--channel-map", str(cmp_),
                  "--allow-unconfirmed-identity", "--dry-run"])
-    assert code == 0
+    assert code == 2
     # a clean map with an exact key and a matching rule passes
     ok = tmp_path / "ok.json"
     ok.write_text(json.dumps(_doc(files={"sub/odd.tif": swapped}, rules=[{"id": "r", "match": {"glob": "a.tif"}, **swapped}])))

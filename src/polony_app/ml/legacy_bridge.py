@@ -70,8 +70,9 @@ from polony_app.legacy_import.identity import parse_identity
 from polony_app.legacy_import.schema import ImageKind, ImageRecord, PointStatus
 
 from . import dataset as ds
-from .common import (MLError, canonical_json, check_downscale, check_normaliser, hash_obj, page_bounds, pixel_box,
-                     sha256_bytes, DEFAULT_PERCENTILES, LO_HI_POLICY)
+from .common import (MLError, PAGE_KEY_RE, canonical_json, check_downscale, check_normaliser, hash_obj, loads_strict, page_bounds,
+                     pixel_box, printable_name, read_json_strict, sha256_bytes, utf8_name_problem, DEFAULT_PERCENTILES,
+                     LO_HI_POLICY)
 from .estimates import estimate_training
 from .manifest import SnapshotManifest
 from .splits import SourceInfo, assign_groups, load_lock, resolve_identity
@@ -112,6 +113,9 @@ R_MAP_PAGE = "channel_mapping_page_out_of_range"
 R_NO_PAGES = "no_mapped_pages"
 R_NO_ELIGIBLE = "no_eligible_fields"
 R_LOCKED = "locked_test_set"
+R_NAME = "filename_not_utf8"
+NAME_NOT_UTF8 = (f"{R_NAME}: the file name is not valid UTF-8 (undecodable bytes / non-ASCII under a C locale); it is skipped, never "
+                 "imported under a mangled name. Rename the file, or run with a UTF-8 locale (LC_ALL=C.UTF-8)")
 
 _ID_RE = re.compile(r"r(\d+)c(\d+)$")
 _PSTATUS = {"ok": 0, "duplicate": 1, "out_of_bounds": 2}
@@ -180,9 +184,16 @@ def sha256_stream(path: Path, chunk: int = 1 << 20) -> str:
 def discover_tiffs(root: Path, skipped: Optional[list] = None) -> list[tuple[str, Path]]:
     """[(relative posix path, path)] of every .tif/.tiff below ``root``: sorted, dot-directories and dot-files skipped,
     symlinked directories not followed, symlinked FILES whose target lies outside ``root`` skipped, archives never opened.
-    Every skipped link is appended to ``skipped`` (when given) as ``(relative path, reason)``."""
+    Every skipped link is appended to ``skipped`` (when given) as ``(relative path, reason)``. A file or directory whose name does
+    not survive a strict UTF-8 round trip (latin-1 bytes on a share, non-ASCII under a C locale) is skipped with the structured
+    reason ``filename_not_utf8`` (its path is shown with escaped bytes): source names are written to the manifest as UTF-8 and
+    are never mangled or escaped silently."""
     root = Path(root)
     if root.is_file():
+        if utf8_name_problem(root.name):
+            if skipped is not None:
+                skipped.append((printable_name(root.name), NAME_NOT_UTF8))
+            return []
         return [(root.name, root)] if root.suffix.lower() in (".tif", ".tiff") else []
     out: list[tuple[str, Path]] = []
     real_root = Path(os.path.realpath(root))
@@ -190,6 +201,10 @@ def discover_tiffs(root: Path, skipped: Optional[list] = None) -> list[tuple[str
         keep = []
         for d in sorted(dirnames):
             if d.startswith("."):
+                continue
+            if utf8_name_problem(d):
+                if skipped is not None:
+                    skipped.append((printable_name((Path(dirpath) / d).relative_to(root).as_posix()), NAME_NOT_UTF8))
                 continue
             if (Path(dirpath) / d).is_symlink():
                 if skipped is not None:
@@ -202,6 +217,10 @@ def discover_tiffs(root: Path, skipped: Optional[list] = None) -> list[tuple[str
             if fn.startswith(".") or Path(fn).suffix.lower() not in (".tif", ".tiff"):
                 continue
             if fn.lower().endswith((".tif.zip", ".tiff.zip")):
+                continue
+            if utf8_name_problem(fn):
+                if skipped is not None:
+                    skipped.append((printable_name((Path(dirpath) / fn).relative_to(root).as_posix()), NAME_NOT_UTF8))
                 continue
             p = Path(dirpath) / fn
             rel = p.relative_to(root).as_posix()
@@ -239,6 +258,8 @@ class SourceScan:
     sha256: str
     size: int
     mtime_ns: int
+    ino: int = 0                                           # identity of the file as scanned (st_ino / st_ctime_ns), see _PlaneCache
+    ctime_ns: int = 0
     alias_paths: list = field(default_factory=list)
     reasons: list = field(default_factory=list)            # [(code, message)] -> rejected when non-empty
     notes: list = field(default_factory=list)              # [(code, message)] informational
@@ -382,9 +403,15 @@ def pixel_of(v: float) -> int:
     return int(math.floor(float(v) + 0.5))
 
 
-def _scan_one(rel: str, path: Path, sha: str, source_id: str, opts: BridgeOptions) -> SourceScan:
-    st = path.stat()
-    sc = SourceScan(source_id=source_id, rel=rel, path=path, sha256=sha, size=int(st.st_size), mtime_ns=int(st.st_mtime_ns))
+def _stat_sig(st) -> tuple:
+    """What identifies the file version that was hashed: size, mtime, inode and ctime (ctime cannot be set back by a writer)."""
+    return (int(st.st_size), int(st.st_mtime_ns), int(getattr(st, "st_ino", 0) or 0), int(getattr(st, "st_ctime_ns", 0) or 0))
+
+
+def _scan_one(rel: str, path: Path, sha: str, source_id: str, opts: BridgeOptions, st=None) -> SourceScan:
+    st = st if st is not None else path.stat()
+    sc = SourceScan(source_id=source_id, rel=rel, path=path, sha256=sha, size=int(st.st_size), mtime_ns=int(st.st_mtime_ns),
+                    ino=int(getattr(st, "st_ino", 0) or 0), ctime_ns=int(getattr(st, "st_ctime_ns", 0) or 0))
     try:
         h = _header(path)
     except Exception as exc:  # noqa: BLE001 - tifffile raises many types
@@ -471,7 +498,11 @@ def scan_tree(root: Path, opts: BridgeOptions, say: Say = print, *, progress_eve
     aliases: dict[str, list] = {}
     ids: dict[str, str] = {}            # id -> sha256 (collision guard)
     for n, (rel, path) in enumerate(files, 1):
+        st0 = path.stat()
         sha = sha256_stream(path)
+        if _stat_sig(path.stat()) != _stat_sig(st0):
+            raise MLError(f"{rel} changed while it was being read (size / modification time / inode differ before and after "
+                          "hashing); nothing was written. Make sure nothing writes to the input directory and rerun")
         if sha in kept:
             kept[sha].alias_paths.append(rel)
             aliases.setdefault(kept[sha].rel, []).append(rel)
@@ -481,7 +512,7 @@ def scan_tree(root: Path, opts: BridgeOptions, say: Say = print, *, progress_eve
                 k += 4
             sid = f"img_{sha[:k]}"
             ids[sid] = sha
-            kept[sha] = _scan_one(rel, path, sha, sid, opts)
+            kept[sha] = _scan_one(rel, path, sha, sid, opts, st0)
         if progress_every and n % progress_every == 0:
             say(f"  scanned {n}/{len(files)} file(s)")
     sources = sorted(kept.values(), key=lambda s: s.rel)
@@ -527,8 +558,9 @@ def _pages_block(raw, where: str) -> dict:
     pages: dict[int, dict] = {}
     roles: dict[str, str] = {}
     for k, v in raw.items():
-        if not str(k).isdigit():
-            raise MLError(f"channel map: {where}: page keys are 0-based integers, got {k!r}")
+        if not isinstance(k, str) or not PAGE_KEY_RE.fullmatch(k):
+            raise MLError(f"channel map: {where}: page keys are 0-based integers of 1-4 ASCII digits (\"0\", \"1\", ...), got "
+                          f"{str(k)[:20]!r}")
         if not isinstance(v, dict):
             raise MLError(f"channel map: {where}: page {k} must be an object with 'role' and 'train'")
         _unknown_keys(v, _PAGE_KEYS, f"{where}: page {k}")
@@ -553,17 +585,16 @@ def _pages_block(raw, where: str) -> dict:
 
 def load_channel_map(path: str | Path) -> ChannelMap:
     p = Path(path)
-    try:
-        raw = p.read_bytes()
-        d = json.loads(raw.decode("utf-8-sig"))
-    except (OSError, ValueError) as exc:
-        raise MLError(f"channel map {p}: cannot be read as JSON ({exc})")
+    d, raw = read_json_strict(p, "channel map")
     if not isinstance(d, dict) or d.get("schema") != CHANNEL_SCHEMA:
-        raise MLError(f"channel map {p}: 'schema' must be '{CHANNEL_SCHEMA}'")
-    if d.get("version") != CHANNEL_VERSION:
-        raise MLError(f"channel map {p}: unsupported version {d.get('version')!r} (supported: {CHANNEL_VERSION})")
+        raise MLError(f"channel map {p}: must be a JSON object whose 'schema' is '{CHANNEL_SCHEMA}'")
+    if d.get("version") != CHANNEL_VERSION or isinstance(d.get("version"), bool):
+        raise MLError(f"channel map {p}: unsupported version {str(d.get('version'))[:30]!r} (supported: {CHANNEL_VERSION})")
     _unknown_keys(d, ("schema", "version", "confirmed_by", "confirmed_on", "source_of_truth", "defaults", "rules", "files"),
                   f"{p}", comments=True)
+    for k in ("confirmed_by", "confirmed_on", "source_of_truth"):
+        if d.get(k) is not None and not isinstance(d.get(k), str):
+            raise MLError(f"channel map {p}: '{k}' must be text")
     if not str(d.get("confirmed_by") or "").strip():
         raise MLError(f"channel map {p}: 'confirmed_by' is empty. A channel map is the researcher's statement of what each page "
                       "shows; fill in who confirmed this mapping and on what basis ('confirmed_by', 'confirmed_on', 'source_of_truth').")
@@ -573,6 +604,8 @@ def load_channel_map(path: str | Path) -> ChannelMap:
     defaults = []
     draw = d.get("defaults")
     if draw:
+        if not isinstance(draw, (list, dict)):
+            raise MLError(f"channel map {p}: 'defaults' must be an object {{\"pages\": ...}} or a list of such objects")
         items = draw if isinstance(draw, list) else [draw]
         for k, it in enumerate(items):
             if not isinstance(it, dict):
@@ -580,10 +613,14 @@ def load_channel_map(path: str | Path) -> ChannelMap:
             _unknown_keys(it, ("id", "pages"), f"defaults[{k}]")
             defaults.append((str(it.get("id") or f"default{k}"), _pages_block(it.get("pages"), f"defaults[{k}]")))
     rules, seen = [], set()
-    for k, r in enumerate(d.get("rules") or []):
-        if isinstance(r, dict):
-            _unknown_keys(r, ("id", "match", "pages"), f"rules[{k}]")
-        rid = str(r.get("id") or "").strip() if isinstance(r, dict) else ""
+    rraw = d.get("rules")
+    if rraw is not None and not isinstance(rraw, list):
+        raise MLError(f"channel map {p}: 'rules' must be a list of rule objects (got {type(rraw).__name__})")
+    for k, r in enumerate(rraw or []):
+        if not isinstance(r, dict):
+            raise MLError(f"channel map {p}: rules[{k}] must be an object with 'id', 'match' and 'pages'")
+        _unknown_keys(r, ("id", "match", "pages"), f"rules[{k}]")
+        rid = str(r.get("id") or "").strip()
         if not rid:
             raise MLError(f"channel map {p}: rules[{k}] needs a non-empty 'id' (it is recorded as the origin of the mapping)")
         if rid in seen:
@@ -591,17 +628,40 @@ def load_channel_map(path: str | Path) -> ChannelMap:
         seen.add(rid)
         match = r.get("match")
         if not isinstance(match, dict) or not match or set(match) - set(_MATCH_KEYS):
-            raise MLError(f"channel map {p}: rule '{rid}': 'match' must use only {list(_MATCH_KEYS)} (got {match!r})")
+            raise MLError(f"channel map {p}: rule '{rid}': 'match' must use only {list(_MATCH_KEYS)} (got {str(match)[:80]!r})")
+        if any(isinstance(v, (dict, list)) for v in match.values()):
+            raise MLError(f"channel map {p}: rule '{rid}': 'match' values must be text")
         rules.append((rid, {k2: str(v) for k2, v in match.items()}, _pages_block(r.get("pages"), f"rule '{rid}'")))
     files = {}
-    for k, v in (d.get("files") or {}).items():
-        if isinstance(v, dict):
-            _unknown_keys(v, ("pages",), f"files['{k}']")
-        files[str(k)] = _pages_block(v.get("pages") if isinstance(v, dict) else None, f"files['{k}']")
+    fraw = d.get("files")
+    if fraw is not None and not isinstance(fraw, dict):
+        raise MLError(f"channel map {p}: 'files' must be an object {{\"relative/path.tif\": {{\"pages\": ...}}}} (got "
+                      f"{type(fraw).__name__})")
+    for k, v in (fraw or {}).items():
+        why = _bad_map_path(k)
+        if why:
+            raise MLError(f"channel map {p}: files[{k[:80]!r}]: {why}")
+        if not isinstance(v, dict):
+            raise MLError(f"channel map {p}: files['{k}'] must be an object with 'pages'")
+        _unknown_keys(v, ("pages",), f"files['{k}']")
+        files[str(k)] = _pages_block(v.get("pages"), f"files['{k}']")
     if not (defaults or rules or files):
         raise MLError(f"channel map {p}: it defines no defaults, rules or files")
     return ChannelMap(p, sha256_bytes(raw), str(d["confirmed_by"]), str(d.get("confirmed_on") or ""),
                       str(d.get("source_of_truth") or ""), defaults, rules, files)
+
+
+def _bad_map_path(key) -> Optional[str]:
+    """Why a file key of a mapping file is not a relative posix path below --input (None = well-formed)."""
+    if not isinstance(key, str) or not key.strip():
+        return "the file key must be a non-empty relative path"
+    if "\x00" in key:
+        return "the file key contains a NUL character"
+    if key.startswith("/") or re.match(r"^[A-Za-z]:", key) or key.startswith("\\"):
+        return "absolute paths are not allowed: use the path relative to --input (posix separators)"
+    if any(part == ".." for part in key.replace("\\", "/").split("/")):
+        return "'..' leaves the --input directory: use the path relative to --input"
+    return None
 
 
 def _rule_matches(match: dict, sc: SourceScan) -> bool:
@@ -717,20 +777,65 @@ def _canonicalise(rows: list, key: str) -> list[str]:
     return notes
 
 
+_ID_ROW_KEYS = ("file", "specimen_id", "slide_id", "scan_session", "assay", "replicate", "confirmed", "inferred_from")
+_ID_TOP_KEYS = ("rows", "identities", "files")
+
+
+def _identity_rows(p: Path) -> tuple[list, bytes]:
+    """(rows, raw bytes) of an identity map (JSON or CSV); every malformed shape is an actionable :class:`MLError`."""
+    if p.suffix.lower() == ".csv":
+        try:
+            size = p.stat().st_size
+            if size > 64 * 1024 * 1024:
+                raise MLError(f"identity map {p}: larger than 64 MB - not an identity map")
+            raw = p.read_bytes()
+            text = raw.decode("utf-8-sig")
+        except OSError as exc:
+            raise MLError(f"identity map {p}: cannot be read ({exc.strerror or exc})")
+        except UnicodeDecodeError as exc:
+            raise MLError(f"identity map {p}: is not valid UTF-8 ({exc})")
+        try:
+            rd = csv.DictReader(text.splitlines())
+            unknown = [c for c in (rd.fieldnames or []) if c not in _ID_ROW_KEYS and c is not None]
+            if unknown:
+                raise MLError(f"identity map {p}: unknown column(s) {unknown}; allowed: {list(_ID_ROW_KEYS)}")
+            rows = list(rd)
+        except csv.Error as exc:
+            raise MLError(f"identity map {p}: not a valid CSV ({exc})")
+        if any(None in r for r in rows):
+            raise MLError(f"identity map {p}: a CSV row has more cells than the header")
+        return rows, raw
+    d, raw = read_json_strict(p, "identity map")
+    if isinstance(d, dict):
+        unknown = sorted(str(k) for k in d if k not in _ID_TOP_KEYS and not str(k).startswith("_"))
+        if unknown:
+            raise MLError(f"identity map {p}: unknown key(s) {unknown}; allowed: {list(_ID_TOP_KEYS)} (keys starting with '_' are "
+                          "comments)")
+        rows = d.get("rows") or d.get("identities") or d.get("files") or []
+    elif isinstance(d, list):
+        rows = d
+    else:
+        raise MLError(f"identity map {p}: must be a JSON object with 'rows' (or a list of rows), got {type(d).__name__}")
+    if isinstance(rows, dict):
+        if not all(isinstance(v, dict) for v in rows.values()):
+            raise MLError(f"identity map {p}: when 'rows' is an object, every value must be a row object "
+                          "{\"specimen_id\": ..., \"confirmed\": ...}")
+        rows = [dict(v, file=k) for k, v in rows.items()]
+    if not isinstance(rows, list):
+        raise MLError(f"identity map {p}: 'rows' must be a list of row objects (got {type(rows).__name__})")
+    for k, r in enumerate(rows):
+        if isinstance(r, dict):
+            bad = sorted(str(c) for c in r if c not in _ID_ROW_KEYS and not str(c).startswith("_"))
+            if bad:
+                raise MLError(f"identity map {p}: row {k + 1}: unknown key(s) {bad}; allowed: {list(_ID_ROW_KEYS)}")
+            if any(isinstance(v, (dict, list)) for v in r.values()):
+                raise MLError(f"identity map {p}: row {k + 1}: values must be text / true / false, not nested objects or lists")
+    return rows, raw
+
+
 def load_identity_map(path: str | Path, *, level: str = "auto") -> IdentityTable:
     p = Path(path)
-    try:
-        raw = p.read_bytes()
-        text = raw.decode("utf-8-sig")
-        if p.suffix.lower() == ".csv":
-            rows = list(csv.DictReader(text.splitlines()))
-        else:
-            d = json.loads(text)
-            rows = d if isinstance(d, list) else (d.get("rows") or d.get("identities") or d.get("files") or [])
-            if isinstance(rows, dict):
-                rows = [dict(v, file=k) for k, v in rows.items()]
-    except (OSError, ValueError) as exc:
-        raise MLError(f"identity map {p}: cannot be read ({exc})")
+    rows, raw = _identity_rows(p)
     out = []
     for k, r in enumerate(rows):
         if not isinstance(r, dict) or not str(r.get("file") or "").strip():
@@ -846,7 +951,7 @@ def _lab_series_map(spec: Optional[Sequence[str]]) -> dict:
             if not part:
                 continue
             name, sep, pg = part.partition("=")
-            if not sep or not name.strip() or not pg.strip().isdigit():
+            if not sep or not name.strip() or not PAGE_KEY_RE.fullmatch(pg.strip()):
                 raise MLError(f"--lab-series expects SERIES=PAGE (e.g. T7B=0,T7A=1), got {part!r}")
             if name.strip() in out and out[name.strip()] != int(pg):
                 raise MLError(f"--lab-series: series {name.strip()} is given two different pages")
@@ -902,15 +1007,18 @@ def lab_csv_manifest(csv_paths: Sequence[Path], series_spec: Optional[Sequence[s
     ev = ("lab CSV " + ", ".join(f"{c['name']} (sha256 {c['sha256'][:12]}, series {c['series']} = page {c['page']})"
                                  for c in info["csv_files"]) +
           ": blank = not counted, 0 = counted zero; field N = ImageJ counter N-1 (acknowledged by the operator)")
-    m = ex.ExaminedManifest(evidence=ev, source_kind=ex.SRC_SIDECAR_CSV, examined_by="lab CSV", recorded_on="",
-                            files=[ex.FileEntry(file=r, sha256=d["sha"], pages=d["pages"]) for r, d in sorted(files.items())],
-                            sha256=hash_obj(info["csv_files"]))
+    try:
+        m = ex.ExaminedManifest(evidence=ev, source_kind=ex.SRC_SIDECAR_CSV, examined_by="lab CSV", recorded_on="",
+                                files=[ex.FileEntry(file=r, sha256=d["sha"], pages=d["pages"]) for r, d in sorted(files.items())],
+                                sha256=hash_obj(info["csv_files"]))
+    except ValueError as exc:      # pydantic ValidationError: e.g. one slide listed twice in the CSV(s)
+        raise MLError(f"--lab-csv: the lab CSV(s) do not describe each (slide, series, field) exactly once: {exc}") from exc
     for k in ("ambiguous_rows", "unmatched_rows"):
         info[k] = sorted(set(info[k]))
     return m, info
 
 
-def manifest_entries_for(manifest: ex.ExaminedManifest, scans: list) -> tuple[dict, list]:
+def manifest_entries_for(manifest: ex.ExaminedManifest, scans: list, *, all_scans: Optional[list] = None) -> tuple[dict, list]:
     """{source_id: {page: {key: FieldEntry}}} and a list of problems. A manifest file entry names a source by relative path
     (or alias), else by base name when that name is unique; a recorded sha256 must match."""
     srcs = {s.source_id: s for s in scans}
@@ -919,6 +1027,8 @@ def manifest_entries_for(manifest: ex.ExaminedManifest, scans: list) -> tuple[di
     for s in scans:
         for r in [s.rel, *s.alias_paths]:
             by_base[Path(r).name].add(s.source_id)
+    known = {r for s in (all_scans if all_scans is not None else scans) for r in [s.rel, *s.alias_paths]}
+    known_base = {Path(r).name for r in known}
     out: dict[str, dict] = {}
     problems: list[str] = []
     for fe in manifest.files:
@@ -931,8 +1041,15 @@ def manifest_entries_for(manifest: ex.ExaminedManifest, scans: list) -> tuple[di
                               f"({', '.join(sorted(srcs[c].rel for c in cands))}); use the relative path")
             if cands:
                 s = srcs[next(iter(cands))]
+        if s is None and (f in known or ("/" not in f and f in known_base)):
+            problems.append(f"{fe.file}: listed in the examined-fields manifest but the file was rejected (see the rejected files)")
+            continue
         if s is None:
-            problems.append(f"{fe.file}: listed in the examined-fields manifest but not found among the TIFFs")
+            rels = sorted(known)
+            near = (difflib.get_close_matches(f, rels, n=1, cutoff=0.0) or difflib.get_close_matches(
+                Path(f).name, [Path(r).name for r in rels], n=1, cutoff=0.0)) if rels else []
+            problems.append(f"'{printable_name(fe.file)[:200]}' is listed in the examined-fields manifest but matches no scanned TIFF"
+                            + (f" (nearest existing file: '{near[0]}')" if near else ""))
             continue
         if fe.sha256 and fe.sha256.lower() != s.sha256.lower():
             raise MLError(f"examined-fields manifest: {fe.file} lists sha256 {fe.sha256[:12]}... but {s.rel} has {s.sha256[:12]}...; "
@@ -1060,18 +1177,35 @@ def classify_source(sc: SourceScan, pages: Iterable[int], *, mode: str, manifest
 class _PlaneCache:
     """Per-source cache of page planes; ``release`` frees them. Planes are read ONCE per page."""
 
-    def __init__(self, sc: SourceScan):
+    def __init__(self, sc: SourceScan, rehash: bool = True):
         self.sc = sc
+        self.rehash = rehash                 # real import: hash the file again at the first plane read (dry runs never read planes)
+        self.verified = False
         self.planes: dict[int, np.ndarray] = {}
         self.lock = threading.Lock()
+
+    def _changed(self, what: str) -> MLError:
+        return MLError(f"{self.sc.rel} changed on disk {what}; the crops would no longer match the recorded source sha256. "
+                       "Nothing was published; rerun the import (the staging directory is kept and resumes).")
+
+    def _check_unchanged(self, phase: str) -> None:
+        st = self.sc.path.stat()
+        sig = (self.sc.size, self.sc.mtime_ns, self.sc.ino, self.sc.ctime_ns)
+        if _stat_sig(st) != sig and not (self.sc.ino == 0 and self.sc.ctime_ns == 0 and _stat_sig(st)[:2] == sig[:2]):
+            raise self._changed(f"{phase} (size / modification time / inode / change time differ from the scan)")
 
     def plane(self, page: int) -> np.ndarray:
         with self.lock:
             if page not in self.planes:
-                st = self.sc.path.stat()
-                if st.st_size != self.sc.size or st.st_mtime_ns != self.sc.mtime_ns:
-                    raise MLError(f"{self.sc.rel} changed on disk after it was scanned (size/mtime differ); rerun the import")
+                self._check_unchanged("after it was scanned")
+                if self.rehash and not self.verified:
+                    # the cheap stat check cannot see a same-size rewrite whose mtime was restored: hash the bytes again
+                    # (streaming) at the first plane read of the source, and compare with the sha256 that is recorded
+                    if sha256_stream(self.sc.path) != self.sc.sha256:
+                        raise self._changed("after it was scanned (its content hash differs from the one recorded in the scan)")
+                    self.verified = True
                 a = read_plane(self.sc.path, page)
+                self._check_unchanged("while its pixels were being read")
                 if a.shape != (self.sc.height, self.sc.width) or str(a.dtype) != self.sc.dtype:
                     raise MLError(f"{self.sc.rel} page {page}: pixels {a.shape} {a.dtype} differ from the header "
                                   f"({self.sc.height}x{self.sc.width} {self.sc.dtype})")
@@ -1457,15 +1591,29 @@ def _check_consistency(cid: str, prov: dict, n_positive: int, crop_sha: Optional
     return bad
 
 
+def is_legacy_import(manifest) -> bool:
+    """True when a snapshot manifest (SnapshotManifest or dict) is - or claims to have been - a bridge import: it records
+    ``options.legacy_import`` OR a non-empty ``import_summary`` OR any of its own (not carried-over frozen) crops carries
+    provenance. Deleting one of these marks from a hand-edited manifest therefore never turns an import into a plain snapshot."""
+    d = manifest.model_dump(mode="json") if hasattr(manifest, "model_dump") else dict(manifest)
+    if "legacy_import" in (d.get("options") or {}) or d.get("import_summary"):
+        return True
+    return any(c.get("provenance") for c in d.get("crops", []) if not c.get("frozen_from"))
+
+
 def verify_examination_provenance(manifest) -> list[str]:
     """Problems found in the crops of a legacy-import snapshot manifest (empty list = every train / val / test crop is proven
     researcher-examined AND its status, counts, evidence and source hash agree). ``manifest`` = SnapshotManifest or its dict.
-    Snapshots that are not legacy imports (no ``import_summary``) are out of scope and return []."""
+    Snapshots that are not legacy imports (see :func:`is_legacy_import`) are out of scope and return []."""
     d = manifest.model_dump(mode="json") if hasattr(manifest, "model_dump") else dict(manifest)
-    summary = d.get("import_summary") or {}
-    if summary.get("kind") != KIND:
+    if not is_legacy_import(d):
         return []
     bad: list[str] = []
+    if (d.get("import_summary") or {}).get("kind") != KIND:
+        bad.append("the snapshot is a historical-TIFF import but its import_summary is missing or not a legacy-import summary "
+                   "(the import can no longer be cross-checked)")
+    if "legacy_import" not in (d.get("options") or {}):
+        bad.append("the snapshot is a historical-TIFF import but options.legacy_import is missing")
     for c in d.get("crops", []):
         cid = c.get("crop_id", "?")
         prov = c.get("provenance") or {}
@@ -1494,6 +1642,7 @@ class ImportPlan:
     n_cands: int = 0
     mapped: bool = True
     valid_mask_report: dict = field(default_factory=dict)
+    hard_refusals: list = field(default_factory=list)
 
 
 def _identity_of(sc: SourceScan, imap: dict) -> dict:
@@ -1515,12 +1664,28 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
     opts.check()
     root = Path(root)
     if not root.exists():
-        raise MLError(f"--input {root} does not exist")
+        raise MLError(f"--input {printable_name(str(root))} does not exist")
+    if utf8_name_problem(root.name):
+        raise MLError(f"--input {printable_name(str(root))}: the name of the input directory is not valid UTF-8 and is recorded in "
+                      "the manifest; rename it or use a UTF-8 locale")
     if opts.mode == ex.MODE_MANIFEST and not (examined_fields or lab_csv):
         raise MLError("--mode examined-fields-manifest needs --examined-fields FILE (or --lab-csv): only the tuples the manifest "
                       "lists can be used; nothing is inferred")
     if examined_fields and lab_csv:
         raise MLError("give ONE examined-fields source: --examined-fields or --lab-csv, not both")
+    series = _lab_series_map(lab_series)              # a malformed --lab-series is refused even when it would not be used
+    if lab_series and not lab_csv:
+        raise MLError("--lab-series was given without --lab-csv: it only says which TIFF page each lab-CSV series counts; "
+                      "give the CSV (and --acknowledge-lab-csv-field-numbering) or drop the option")
+    if lab_csv and not series:
+        raise MLError("--lab-csv needs --lab-series SERIES=PAGE (e.g. T7B=0,T7A=1): which TIFF page each CSV series counts is "
+                      "never inferred")
+    if lab_csv and not opts.acknowledge_lab_csv_field_numbering:
+        raise MLError("--lab-csv needs --acknowledge-lab-csv-field-numbering: it records that you confirm 'field N of the lab CSV = "
+                      "ImageJ counter N-1' (this mapping was inferred from the data, not stated by the lab).")
+    if opts.acknowledge_lab_csv_field_numbering and not lab_csv:
+        raise MLError("--acknowledge-lab-csv-field-numbering was given without --lab-csv: there is no lab CSV whose field numbering "
+                      "it could confirm (the flag would be recorded as an assumption that nothing uses)")
     cm = load_channel_map(channel_map) if channel_map else None
     table = load_identity_map(identity_map, level=opts.level) if identity_map else None
     man = load_examined(examined_fields) if examined_fields else None
@@ -1534,7 +1699,9 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
     lab_info = None
     if lab_csv:
         man, lab_info = lab_csv_manifest([Path(p) for p in lab_csv], lab_series, [s for s in kept if not s.rejected], opts)
-    entries_by_src, man_problems = (manifest_entries_for(man, [s for s in kept if not s.rejected]) if man else ({}, []))
+    entries_by_src, man_problems = (manifest_entries_for(man, [s for s in kept if not s.rejected], all_scans=kept)
+                                    if man else ({}, []))
+    nameless = [x for x in man_problems if "matches no scanned TIFF" in x] if examined_fields else []
 
     # ---- mapping + eligibility
     blockers: list[str] = []
@@ -1585,6 +1752,13 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
 
     plan = ImportPlan(scan=scan, opts=opts, exts=exts, plans=plans, summary={}, blockers=blockers, identity_map=imap,
                       n_cands=n_cands, mapped=mapped, valid_mask_report=valid_mask_report)
+    # mapping entries that name no TIFF at all (a stale or mistyped file list): `import_legacy` refuses them even in a dry run
+    # (a read-only caller such as the preflight can still report them from here)
+    plan.hard_refusals = [b for b in blockers if b.startswith("channel map files[")]
+    if nameless:
+        plan.hard_refusals.append("examined-fields manifest " + str(examined_fields) + ": " + "; ".join(nameless[:5])
+                                  + (f" (+{len(nameless) - 5} more)" if len(nameless) > 5 else "")
+                                  + ". Use the exact relative path below --input (or a unique base name).")
     live = [p for p in plans if p.ext.cands]
     # ---- identity gate (every source with at least one examined tuple; known even before a channel map exists)
     eligible = [p for p in plans if any(t.exam.researcher_examined for t in p.tuples.values())]
@@ -1834,6 +2008,9 @@ def import_legacy(data_dir: str | Path, root: str | Path, opts: BridgeOptions, *
     data_dir = Path(data_dir)
     plan = build_plan(Path(root), opts, channel_map=channel_map, identity_map=identity_map, examined_fields=examined_fields,
                       lab_csv=lab_csv, lab_series=lab_series, dry_run=dry_run, data_dir=data_dir, say=say)
+    if plan.hard_refusals:
+        raise MLError("; ".join(plan.hard_refusals + [b for b in plan.blockers if "matches no scanned TIFF" in b
+                                                        and b not in plan.hard_refusals]))
     for b in plan.blockers:
         say(f"  BLOCKER: {b}")
     if not dry_run and plan.blockers:
@@ -1846,7 +2023,7 @@ def import_legacy(data_dir: str | Path, root: str | Path, opts: BridgeOptions, *
         if done:
             # identical inputs, options, code and test lock: nothing is rewritten; a staging directory left by an interrupted
             # run of the SAME plan is obsolete now
-            shutil.rmtree(ds.datasets_dir(data_dir) / f".staging-{ds.safe_id(plan.resume_key)}", ignore_errors=True)
+            ds.remove_staging_if_free(data_dir, f".staging-{ds.safe_id(plan.resume_key)}")
             say(f"already imported as {done} (identical plan {plan.resume_key}); nothing was written")
             return ImportOutcome(plan, None, list(plan.blockers), already_imported=done)
     bo = ds.BuildOptions(seed=opts.seed, fractions=opts.fractions, level=opts.level,
