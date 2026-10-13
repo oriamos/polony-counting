@@ -1,6 +1,6 @@
 """``python -m polony_app.ml <command>`` - explicit, step-by-step; nothing trains or promotes by itself.
 
-Commands: build, split, verify, train, eval-model, evaluate, compare, promote, rollback, list, show.
+Commands: build, import-legacy, split, verify, train, gpu-smoke, eval-model, evaluate, compare, promote, rollback, list, show.
 (``dataset build`` is accepted as an alias of ``build``.)"""
 from __future__ import annotations
 
@@ -43,6 +43,23 @@ def _fractions(s: Optional[str]) -> Optional[dict]:
 
 def _p(*a):
     print(*a, flush=True)
+
+
+# Command groups that live in their own modules (each exposes ``COMMANDS``, ``register(subparsers)`` and
+# ``run(args, data_dir) -> int``): ``cli_legacy`` = import-legacy, ``cli_devices`` = gpu-smoke.
+_EXTENSIONS = ("cli_legacy", "cli_devices")
+
+
+def _extension_modules() -> list:
+    import importlib
+    mods = []
+    for name in _EXTENSIONS:
+        try:
+            mods.append(importlib.import_module(f"{__package__}.{name}"))
+        except ModuleNotFoundError as exc:      # the module does not exist (yet): its commands are simply absent
+            if exc.name != f"{__package__}.{name}":
+                raise
+    return mods
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -144,12 +161,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sh = sub.add_parser("show", help="print the manifest of a snapshot")
     sh.add_argument("snapshot")
+    for mod in _extension_modules():
+        mod.register(sub)
     return ap
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     cmds = {"build", "split", "verify", "train", "eval-model", "evaluate", "compare", "promote", "rollback", "list", "show"}
+    for mod in _extension_modules():
+        cmds |= set(mod.COMMANDS)
     for i, tok in enumerate(argv[:-1]):
         if tok == "dataset" and argv[i + 1] in cmds:    # `dataset build ...` == `build ...`
             argv = argv[:i] + argv[i + 1:]
@@ -167,6 +188,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 def _run(a, data_dir: str) -> int:
     from . import dataset as ds
     from .registry import Registry
+
+    for mod in _extension_modules():
+        if a.cmd in mod.COMMANDS:
+            return int(mod.run(a, data_dir))
 
     if a.cmd == "build":
         opts = ds.BuildOptions(

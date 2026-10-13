@@ -72,7 +72,7 @@ def resolve_identity(src: SourceInfo, identity_map: Optional[dict] = None) -> di
         return {"source": "identity_map", "confirmed": True, "assay": imap.get("assay"),
                 "specimen_id": imap.get("specimen_id") or imap.get("specimen"),
                 "replicate": imap.get("replicate"), "slide_id": imap.get("slide_id") or imap.get("slide"),
-                "note": "supplied by --identity-map"}
+                "scan_session": imap.get("scan_session"), "note": "supplied by --identity-map"}
     if src.slide_meta_id:
         m = _SLIDE_META.match(src.slide_meta_id)
         return {"source": "slide_meta", "confirmed": True, "assay": None,
@@ -97,7 +97,8 @@ def _record(src: SourceInfo, ident: dict, reserved: Optional[str]) -> ImageRecor
         sha256=src.sha256, size_bytes=0, kind=ImageKind.stack, width=src.width, height=src.height,
         n_planes=src.n_planes, dtype=src.dtype, bit_depth=src.bit_depth,
         assay=ident.get("assay"), specimen_id=ident.get("specimen_id"), replicate=ident.get("replicate"),
-        slide_id=ident.get("slide_id"), identity_source=ident["source"], identity_confirmed=bool(ident["confirmed"]),
+        slide_id=ident.get("slide_id"), scan_session=ident.get("scan_session"),
+        identity_source=ident["source"], identity_confirmed=bool(ident["confirmed"]),
         reserved_split=reserved, reserved_reason="locked test set" if reserved else None, has_annotations=True)
 
 
