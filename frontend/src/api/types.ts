@@ -509,23 +509,58 @@ export interface FieldImportRequest {
 
 export type CompareCountType = 'red_positive' | 'green_positive' | 'red_only' | 'green_only' | 'yellow';
 
+export type ExaminedStatus = 'positive_marked' | 'verified_zero' | 'unknown' | 'conflict';
+
 export interface CompareRow {
   field: number;
+  /** null when the field was not provably examined on this plane (never read as 0) */
   reference_count: number | null;
   app_count: number | null;
   delta: number | null;
+  status: ExaminedStatus;
+  examined: boolean;
+  examination_source: string;
+  region?: string;
+  has_reference_marks?: boolean;
+  reference_marks?: number;
+  reason?: string | null;
+}
+
+export interface CompareSummary {
+  /** all field regions */
+  n_fields: number;
+  eligible_examined_fields: number;
+  positive_marked_fields: number;
+  verified_zero_fields: number;
+  unknown_fields_excluded: number;
+  conflict_fields_excluded: number;
+  /** e.g. 'embedded_imagej_marks', 'embedded_imagej_marks+sidecar_csv', 'none' */
+  eligibility_source: string;
+  /** over the eligible examined fields only; null when there are none */
+  pearson_r: number | null;
+  slope: number | null;
+  mae: number | null;
+  total_reference: number | null;
+  total_app: number | null;
+  app_total_unknown_fields_not_counted?: number;
 }
 
 export interface CompareResponse {
   rows: CompareRow[];
-  summary: {
-    n_fields: number;
-    pearson_r: number | null;
-    slope: number | null;
-    mae: number | null;
-    total_reference: number;
-    total_app: number;
-  };
+  summary: CompareSummary;
+  plane?: number;
+  count_type?: string;
+  note?: string;
+  warnings?: string[];
+}
+
+export interface ExaminedFieldsResult {
+  matched_file_entries: number;
+  pages: Record<string, number>;
+  n_entries: number;
+  warnings: string[];
+  stored_as?: string;
+  evidence?: string;
 }
 
 export interface AutoChamberResponse {

@@ -43,15 +43,26 @@ export const deltaClass = (d: number | null): 'dpos' | 'dneg' | 'dzero' | 'dnone
 
 export const fmtDelta = (d: number | null) => (d == null ? '–' : d > 0 ? `+${d}` : String(d));
 
+/** Totals over the examined (eligible) rows only; unknown/conflict rows (reference null) never enter. null when none is eligible. */
 export function totals(rows: CompareRow[]) {
   let r = 0,
-    a = 0;
+    a = 0,
+    n = 0;
   for (const x of rows) {
-    r += x.reference_count ?? 0;
+    if (x.reference_count == null || x.examined === false) continue;
+    r += x.reference_count;
     a += x.app_count ?? 0;
+    n++;
   }
-  return { reference: r, app: a };
+  return n ? { reference: r, app: a, n } : null;
 }
+
+export const STATUS_LABEL: Record<CompareRow['status'], string> = {
+  positive_marked: 'examined (marks)',
+  verified_zero: 'examined (counted zero)',
+  unknown: 'unknown - not examined on this plane, excluded',
+  conflict: 'conflict - evidence contradicts the marks, excluded',
+};
 
 export const COUNT_TYPE_LABEL = {
   red_positive: 'red-positive',

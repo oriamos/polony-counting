@@ -24,7 +24,7 @@ Body `{mode: counted|all, shift:[dx,dy]=[0,0], plane: int|null, replace: bool=fa
 (`field_index=N`) from the grid cells, shifted by `shift` and clipped to the image. `counted`: only fields that have marks on `plane` (any plane
 if null), placed in the cell holding most of their marks. `all`: every cell (fields keep their mapped number, the rest are numbered
 in reading order; cells numbered above 24 are named `Cell-N` without a field number because the lab template has 24 fields).
-**Ambiguity:** a field without marks may be 'not counted' or 'counted, zero' - the file cannot say; the response warns about it.
+**Ambiguity:** a field without marks may be 'not counted' or 'counted, zero' - the file cannot say. Such a field/plane is 'unknown' and is excluded from the comparison (see below); the response warns about it.
 Existing `Field-*`/`Cell-*` regions: 409 `fields_exist` unless `replace=true`. Goes through `engine.set_regions`: finalized -> 409,
 replaced regions lose approval/inspection, objects are re-assigned. Field regions are placed *before* other regions: when regions overlap
 the first listed counting region owns the object, so a 'Chamber' region must come after the fields (done here). 422 when the image has no grid.
@@ -33,10 +33,33 @@ Shift: the stored overlay does not always describe what was counted (FS-B_D was 
 to cells of the shifted grid, so a wrong shift shows up as warnings ('marks lie in another cell').
 
 ## Comparison (`GET /api/analyses/{id}/fields/compare?plane=&count_type=`)
-Per field region (counting regions with a `field_index`): reference count (marks of `plane`) vs the app's non-deleted objects of
-`count_type` (red_positive, green_positive, red_only, green_only, yellow), `delta = app - reference`; `summary{n_fields, pearson_r, slope
-(least squares through 0), mae, total_reference, total_app}`. Neutral: the marks are the researcher's counts, not a measured truth, and
-differences can come from either side. Fields without marks are compared as 0 and listed in `warnings`. 422 without field regions.
+Per field region (counting regions with a `field_index`): app count (non-deleted objects of `count_type`: red_positive, green_positive,
+red_only, green_only, yellow) next to the researcher's reference, but **only for field/plane pairs the researcher provably examined**.
+The rule is applied independently to every (source TIFF, field, plane) tuple, with the shared definition in `fields/examined.py`:
+
+* **examined** = embedded ImageJ marks on THAT plane in THAT field (`positive_marked`), or an entry of the examined-fields manifest /
+  sidecar stating the count of that field on that plane, including a counted zero (`verified_zero`, reference 0 ONLY then);
+* a field without marks on the plane is `unknown` (reference `null`, never 0); marks on the other plane, the grid, and the app's own
+  detections are never evidence. A field imported because it has marks on page 0 is therefore unknown on page 1 unless page 1 has marks there;
+* a manifest count that differs from the number of marks (or a stated zero where marks exist) is a `conflict`: excluded, not repaired;
+  an entry that names the field without a count and there are no marks stays `unknown`.
+
+Rows: `{field, region, status, examined, examination_source, reference_count (null if not examined), app_count, delta (null if not
+examined), has_reference_marks, reference_marks, reason}`. `summary`: `n_fields` (all field regions), `eligible_examined_fields`,
+`positive_marked_fields`, `verified_zero_fields`, `unknown_fields_excluded`, `conflict_fields_excluded`, `eligibility_source`
+(`embedded_imagej_marks`, `embedded_imagej_marks+sidecar_csv`, ... or `none`), and over the eligible fields only `pearson_r`, `slope`
+(least squares through 0), `mae`, `total_reference`, `total_app`; all five are `null` when no field is eligible (with a warning), never
+0/NaN. `app_total_unknown_fields_not_counted` shows what the app found in excluded fields; it enters no total. Neutral: the marks are
+the researcher's counts, not a measured truth, and differences can come from either side. 422 without field regions.
+
+### Examined-fields manifest (`POST /api/analyses/{id}/examined-fields`, multipart `file`)
+JSON (`schema: polony-examined-fields`, v1) or CSV (`# evidence: ...` first line; columns `file,page,counter|field|row+col,count,counted_zero,note`),
+see `fields/examined.py`. It is validated (422 `examined_manifest_invalid` when malformed, `examined_manifest_mismatch` when its sha256 differs
+from the file), stored next to the originals as `examined_fields.json` (replaces a previous one; 409 when the analysis is finalized) and
+returns `{matched_file_entries, pages: {page: n_entries}, n_entries, warnings, stored_as, evidence}`. The file entry is found by the stored or
+uploaded file name, or by sha256. Entries are resolved to a Field-* region by `field` (= region field number), `counter` (field of that
+ImageJ counter under the chosen numbering) or `row`+`col` (cell of the overlay grid, numbered as in `/reference`); unresolved entries
+are warnings in `compare`, not silently dropped. Every later `compare` reads the stored manifest.
 
 ## Automatic chamber (`POST /api/analyses/{id}/regions/auto-chamber`, preview only)
 `{rim_px=40}` -> `{polygon, area_px2, rim_px, method, warnings, suggested_exclusions[{polygon,area_px2,reason}]}`; nothing is stored (apply it

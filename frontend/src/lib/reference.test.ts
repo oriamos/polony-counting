@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ReferenceInfo } from '../api/types';
-import { countedFields, deltaClass, fmtDelta, pointsOfPlane, previewImport, shiftPolygon } from './reference';
+import type { CompareRow, ReferenceInfo } from '../api/types';
+import { totals, countedFields, deltaClass, fmtDelta, pointsOfPlane, previewImport, shiftPolygon } from './reference';
 
 const ref: ReferenceInfo = {
   available: true,
@@ -50,5 +50,14 @@ describe('reference grid shift', () => {
     expect(deltaClass(null)).toBe('dnone');
     expect(fmtDelta(3)).toBe('+3');
     expect(fmtDelta(-2)).toBe('-2');
+  });
+});
+
+describe('totals over compare rows', () => {
+  const row = (field: number, ref: number | null, app: number, status: CompareRow['status']): CompareRow =>
+    ({ field, reference_count: ref, app_count: app, delta: ref == null ? null : app - ref, status, examined: ref != null, examination_source: '' });
+  it('ignores unknown rows (their app count never enters) and is null without eligible rows', () => {
+    expect(totals([row(1, 3, 2, 'positive_marked'), row(2, 0, 1, 'verified_zero'), row(3, null, 50, 'unknown')])).toEqual({ reference: 3, app: 3, n: 2 });
+    expect(totals([row(3, null, 50, 'unknown')])).toBeNull();
   });
 });

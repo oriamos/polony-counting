@@ -137,10 +137,16 @@ def test_compare(client, aid):
     r = client.get(f"{url}/fields/compare?plane=0&count_type=red_positive")
     assert r.status_code == 200, r.text
     j = r.json()
-    assert j["rows"] == [
-        {"field": 1, "reference_count": 3, "app_count": 2, "delta": -1, "has_reference_marks": True, "region": "Field-1"},
-        {"field": 2, "reference_count": 2, "app_count": 2, "delta": 0, "has_reference_marks": True, "region": "Field-2"},
-        {"field": 3, "reference_count": 1, "app_count": 0, "delta": -1, "has_reference_marks": True, "region": "Field-3"}]
+    core = ("field", "reference_count", "app_count", "delta", "has_reference_marks", "region", "status", "examined",
+            "examination_source")
+    assert [{k: row[k] for k in core} for row in j["rows"]] == [
+        dict(field=1, reference_count=3, app_count=2, delta=-1, has_reference_marks=True, region="Field-1",
+             status="positive_marked", examined=True, examination_source="embedded_imagej_marks"),
+        dict(field=2, reference_count=2, app_count=2, delta=0, has_reference_marks=True, region="Field-2",
+             status="positive_marked", examined=True, examination_source="embedded_imagej_marks"),
+        dict(field=3, reference_count=1, app_count=0, delta=-1, has_reference_marks=True, region="Field-3",
+             status="positive_marked", examined=True, examination_source="embedded_imagej_marks")]
+    assert j["summary"]["eligibility_source"] == "embedded_imagej_marks"
     s = j["summary"]
     assert (s["n_fields"], s["total_reference"], s["total_app"]) == (3, 6, 4)
     assert s["mae"] == pytest.approx(2 / 3)
@@ -150,5 +156,11 @@ def test_compare(client, aid):
     g = client.get(f"{url}/fields/compare?plane=0&count_type=green_positive").json()
     assert [row["app_count"] for row in g["rows"]] == [0, 1, 0]
     p1 = client.get(f"{url}/fields/compare?plane=1&count_type=red_positive").json()
-    assert [row["reference_count"] for row in p1["rows"]] == [0, 0, 1]
+    # plane 1: only field 3 has marks there. Fields 1 and 2 (marked on plane 0 only) are NOT examined on plane 1:
+    # unknown, reference null (this used to be compared against an artificial 0), and out of every metric.
+    assert [row["reference_count"] for row in p1["rows"]] == [None, None, 1]
+    assert [row["status"] for row in p1["rows"]] == ["unknown", "unknown", "positive_marked"]
+    assert p1["summary"]["eligible_examined_fields"] == 1 and p1["summary"]["unknown_fields_excluded"] == 2
+    assert p1["summary"]["total_reference"] == 1 and p1["summary"]["total_app"] == 0
+    assert not any("compared as 0" in w for w in p1["warnings"])
     assert client.get(f"{url}/fields/compare?plane=0&count_type=bogus").status_code == 422

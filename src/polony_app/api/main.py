@@ -125,6 +125,10 @@ class CsvMapBody(BaseModel):
 
 
 # ------------------------------------------------------------------ helpers
+EXAMINED_FILE = "examined_fields.json"
+MAX_MANIFEST_BYTES = 2 * 1024 * 1024
+
+
 def err(status: int, code: str, message: str, detail: dict | None = None) -> JSONResponse:
     return JSONResponse({"code": code, "message": message, "detail": detail}, status_code=status)
 
@@ -594,8 +598,52 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
 
         if plane < 0:
             return err(422, "invalid_param", "plane must be 0 or greater")
+        from polony_app.fields import examined
+
         with store.view(aid_ok(aid)) as st:
-            return fields.compare(st.analysis, _reference(st), plane, count_type, numbering)
+            mp = store.originals_dir(aid) / EXAMINED_FILE
+            try:
+                manifest = examined.load_manifest(mp) if mp.is_file() else None
+            except examined.ExaminedError as exc:
+                return err(422, "examined_manifest_invalid", str(exc))
+            return fields.compare(st.analysis, _reference(st), plane, count_type, numbering, manifest, store.originals_dir(aid))
+
+    @api.post("/analyses/{aid}/examined-fields")
+    def post_examined_fields(aid: str, file: UploadFile = File(...)):
+        """Attach the researcher's examined-fields manifest (JSON, or CSV with a '# evidence:' first line). It is
+        validated, stored as originals/<id>/examined_fields.json and read by every later comparison."""
+        from polony_app.fields import examined, service as fields
+
+        name = safe_filename(file.filename or "examined_fields.json")
+        suffix = ".csv" if name.lower().endswith(".csv") else ".json"
+        raw = file.file.read(MAX_MANIFEST_BYTES + 1)
+        if len(raw) > MAX_MANIFEST_BYTES:
+            return err(422, "examined_manifest_invalid", "the manifest is larger than 2 MB")
+        tmp = store.data_dir / "tmp" / uuid.uuid4().hex
+        tmp.mkdir(parents=True)
+        try:
+            (tmp / f"m{suffix}").write_bytes(raw)
+            try:
+                manifest = examined.load_manifest(tmp / f"m{suffix}")
+            except examined.ExaminedError as exc:
+                return err(422, "examined_manifest_invalid", str(exc))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        with store.edit(aid_ok(aid)) as st:
+            engine.guard_editable(st)
+            try:
+                info = fields.summarize_manifest(st.analysis, manifest, store.originals_dir(aid))
+            except examined.ExaminedError as exc:
+                return err(422, "examined_manifest_mismatch", str(exc))
+            od = store.originals_dir(aid)
+            od.mkdir(parents=True, exist_ok=True)
+            data = json.loads(manifest.model_dump_json(by_alias=True, exclude={"sha256"}))
+            data["uploaded_name"] = name
+            data["uploaded_sha256"] = manifest.sha256
+            (od / EXAMINED_FILE).write_text(json.dumps(data, indent=2), encoding="utf-8")
+            info["stored_as"] = EXAMINED_FILE
+            info["evidence"] = manifest.evidence
+            return info
 
     @api.post("/analyses/{aid}/regions/auto-chamber")
     def post_auto_chamber(aid: str, body: AutoChamberBody):

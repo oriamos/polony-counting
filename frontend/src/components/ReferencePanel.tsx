@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api/client';
 import type { CompareCountType, CompareResponse, ImportMode, Region } from '../api/types';
-import { COUNT_TYPE_LABEL, deltaClass, fmtDelta, previewImport } from '../lib/reference';
+import { COUNT_TYPE_LABEL, deltaClass, fmtDelta, previewImport, STATUS_LABEL } from '../lib/reference';
 import { useApp } from '../state/store';
 import { NumInput } from './DetectTab';
 
@@ -344,6 +344,7 @@ export function CompareSection() {
               <thead>
                 <tr>
                   <th>field</th>
+                  <th>status</th>
                   <th className="num">reference</th>
                   <th className="num">app</th>
                   <th className="num">delta</th>
@@ -351,8 +352,11 @@ export function CompareSection() {
               </thead>
               <tbody>
                 {data.rows.map((r) => (
-                  <tr key={r.field}>
+                  <tr key={r.field} className={r.examined ? '' : 'muted'} data-testid={`cmp-row-${r.field}`}>
                     <th scope="row">{r.field}</th>
+                    <td className="small" data-testid={`cmp-status-${r.field}`} title={r.reason ?? r.examination_source}>
+                      {STATUS_LABEL[r.status] ?? r.status}
+                    </td>
                     <td className="num mono">{r.reference_count ?? '–'}</td>
                     <td className="num mono">{r.app_count ?? '–'}</td>
                     <td className={`num mono ${deltaClass(r.delta)}`} data-testid={`cmp-delta-${r.field}`}>
@@ -364,8 +368,24 @@ export function CompareSection() {
             </table>
           </div>
           <dl className="kv" data-testid="cmp-summary">
-            <dt>fields compared</dt>
+            <dt>fields in the analysis</dt>
             <dd className="mono">{data.summary.n_fields}</dd>
+            <dt>eligible (examined)</dt>
+            <dd className="mono" data-testid="cmp-eligible">{data.summary.eligible_examined_fields}</dd>
+            <dt>positive marked</dt>
+            <dd className="mono">{data.summary.positive_marked_fields}</dd>
+            <dt>verified zero</dt>
+            <dd className="mono">{data.summary.verified_zero_fields}</dd>
+            <dt>unknown, excluded</dt>
+            <dd className="mono" data-testid="cmp-unknown">{data.summary.unknown_fields_excluded}</dd>
+            {data.summary.conflict_fields_excluded > 0 && (
+              <>
+                <dt>conflict, excluded</dt>
+                <dd className="mono">{data.summary.conflict_fields_excluded}</dd>
+              </>
+            )}
+            <dt>evidence</dt>
+            <dd className="mono">{data.summary.eligibility_source}</dd>
             <dt>Pearson r</dt>
             <dd className="mono">{f(data.summary.pearson_r)}</dd>
             <dt>slope</dt>
@@ -373,10 +393,16 @@ export function CompareSection() {
             <dt>MAE</dt>
             <dd className="mono">{f(data.summary.mae)}</dd>
             <dt>total reference</dt>
-            <dd className="mono">{data.summary.total_reference}</dd>
+            <dd className="mono">{data.summary.total_reference ?? '–'}</dd>
             <dt>total app</dt>
-            <dd className="mono">{data.summary.total_app}</dd>
+            <dd className="mono">{data.summary.total_app ?? '–'}</dd>
           </dl>
+          <div className="muted small">Totals, r, slope and MAE use the eligible fields only. A field without marks on this plane is unknown, not zero.</div>
+          {(data.warnings ?? []).map((w, k) => (
+            <div key={k} className="notice small" data-testid="cmp-warning">
+              {w}
+            </div>
+          ))}
         </>
       )}
       <div className="muted small" data-testid="cmp-note">

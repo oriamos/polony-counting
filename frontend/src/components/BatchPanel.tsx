@@ -36,12 +36,14 @@ export function BatchPanel() {
   const [chamber, setChamber] = useState(true);
   const [rim, setRim] = useState(40);
   const [compare, setCompare] = useState(true);
+  const [manifest, setManifest] = useState<File | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const stop = useRef(false);
   const input = useRef<HTMLInputElement>(null);
+  const manifestInput = useRef<HTMLInputElement>(null);
   const refresh = useApp((s) => s.refreshList);
   const open_ = useApp((s) => s.openAnalysis);
 
@@ -67,7 +69,7 @@ export function BatchPanel() {
     setErr('');
     const result = await runBatch(
       files,
-      { engine, autoChamber: chamber, rimPx: rim, compare },
+      { engine, autoChamber: chamber, rimPx: rim, compare, manifest },
       api,
       (i, row) => setRows((r) => r.map((x, k) => (k === i ? row : x))),
       () => stop.current,
@@ -115,8 +117,17 @@ export function BatchPanel() {
               </label>
               <label className="chk small">
                 <input type="checkbox" checked={compare} disabled={busy} onChange={(e) => setCompare(e.target.checked)} data-testid="batch-compare" />
-                Compare with the researcher's marks embedded in each TIFF (imports her fields as regions)
+                Compare with the researcher's marks embedded in each TIFF (imports her fields as regions; a field counts as examined on a page only if it has marks on that page or the manifest says so)
               </label>
+              {compare && (
+                <div className="small">
+                  <input ref={manifestInput} type="file" accept=".json,.csv" hidden data-testid="batch-manifest-input" onChange={(e) => setManifest(e.target.files?.[0] ?? null)} />
+                  <button className="btn sm" disabled={busy} onClick={() => manifestInput.current?.click()} data-testid="batch-manifest-pick">
+                    Examined-fields manifest (optional)…
+                  </button>{' '}
+                  {manifest ? <span className="mono">{manifest.name}</span> : <span className="muted">none: only fields with marks on a page count as examined on that page</span>}
+                </div>
+              )}
               <label className="chk small">
                 <input type="checkbox" checked={confirmed} disabled={busy} onChange={(e) => setConfirmed(e.target.checked)} data-testid="batch-confirm" />
                 I confirm for all {files.length} files: TIFF page 0 = <b>red</b>, page 1 = <b>green</b>
@@ -173,7 +184,10 @@ export function BatchPanel() {
                     <ul className="small mono batch-cmp">
                       {r.compare.map((c) => (
                         <li key={`${c.plane}-${c.countType}`}>
-                          page {c.plane} · {c.countType}: app {c.totalApp} vs ref {c.totalReference} ({c.nFields} fields, r {c.pearsonR == null ? '–' : c.pearsonR.toFixed(2)}, MAE {c.mae == null ? '–' : c.mae.toFixed(1)})
+                          page {c.plane} · {c.countType}:{' '}
+                          {c.eligibleExaminedFields === 0
+                            ? `no examined field on this page (${c.unknownFieldsExcluded} unknown, excluded); no metrics`
+                            : `app ${c.totalApp} vs ref ${c.totalReference} (${c.eligibleExaminedFields} examined = ${c.positiveMarkedFields} marked + ${c.verifiedZeroFields} zero; ${c.unknownFieldsExcluded} unknown excluded${c.conflictFieldsExcluded ? `, ${c.conflictFieldsExcluded} conflict excluded` : ''}; r ${c.pearsonR == null ? '–' : c.pearsonR.toFixed(2)}, MAE ${c.mae == null ? '–' : c.mae.toFixed(1)})`}
                         </li>
                       ))}
                     </ul>
@@ -204,7 +218,7 @@ export function BatchPanel() {
               )}
               {compare && (
                 <div className="muted small">
-                  The summary counts the whole chamber; the researcher counted only her fields. Compare per field (second file), not the slide totals. Agreement with her marks is not accuracy.
+                  The summary counts the whole chamber; the researcher counted only her fields. Compare per field (second file), not the slide totals. Fields without evidence of being examined on a page are excluded, never counted as zero. Agreement with her marks is not accuracy.
                 </div>
               )}
             </>

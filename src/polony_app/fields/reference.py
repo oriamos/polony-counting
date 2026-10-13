@@ -76,6 +76,19 @@ class Reference:
                              "(the cell with most marks is used).")
         return out, warns
 
+    def cell_field_numbers(self, numbering: str = "index") -> dict[tuple[int, int], int]:
+        """{(row, col): field number} of the overlay grid (as drawn in ``to_dict``); {} without a grid."""
+        if self.grid is None:
+            return {}
+        g = self.grid
+        cells = g.cells()
+        mapped, _ = self.field_cells(g, numbering)
+        by_cell: dict[int, int] = {}
+        for f in sorted(mapped):
+            by_cell.setdefault(mapped[f], f)
+        nums = number_cells(len(cells), by_cell)
+        return {(c.row, c.col): nums[i] for i, c in enumerate(cells)}
+
     def to_dict(self) -> dict:
         d: dict = {"available": self.available, "source_file": self.source_file, "points": [],
                    "grid": {"source": "none", "origin": [0.0, 0.0], "cell": [0.0, 0.0], "cols": 0, "rows": 0, "cells": []},
