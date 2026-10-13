@@ -4,6 +4,7 @@ Everything is derived from INDEPENDENT oracles written in this file (never from 
 (file, field, page) tuples the researcher marked / listed, where every mark is, which specimens share a slide, ...
 Known bugs found while writing these tests are kept as ``xfail(strict=True)`` tests: when the bug is fixed the marker must go.
 """
+import csv
 import hashlib
 import json
 import math
@@ -956,17 +957,22 @@ def independent_valid_mask(shape, cells):
     return v
 
 
-def test_page_bounds_in_the_manifest_equal_an_independent_computation_and_exclude_saturation(tmp_path):
+@pytest.mark.parametrize("vm", ["eligible-fields", "grid-cells"])
+def test_page_bounds_in_the_manifest_equal_an_independent_computation_and_exclude_saturation(tmp_path, vm):
     root = tmp_path / "in"
     root.mkdir()
     marks = spec_marks({(0, 0): 3, (0, 4): 2, (1, 1): 4}, 1)
     planes = saturated_stack(root, "29-09-2026_T7_AB_AM-A.tif", marks, seed=5, sat_frac=0.35)
-    out = run_import(tmp_path, root, allow_unconfirmed_identity=True)
+    # (the saturated fixture would be read as a 'chamber' by the default mask; the masks are compared explicitly here)
+    out = run_import(tmp_path, root, allow_unconfirmed_identity=True, valid_mask=vm)
     (src,) = out.result.manifest.sources
     examined = {0: [(0, 0), (1, 1)], 1: [(0, 1)]}                 # cells (row, col) with marks, per page (cell 1 -> (0,1); cell 4 -> (1,1))
+    if vm == "grid-cells":
+        examined = {0: [(r, c) for r in range(3) for c in range(3)], 1: [(r, c) for r in range(3) for c in range(3)]}
     roles = {0: "red", 1: "green"}
     for page, cells in examined.items():
         b = src.page_normalization[roles[page]]
+        assert b["valid_mask_used"] == vm and b["valid_mask_option"] == vm
         valid = independent_valid_mask(planes[page].shape, cells)
         want = cm.page_bounds(planes[page], valid, (1.0, 99.8))
         assert b["lo"] == want["lo"] and b["hi"] == want["hi"] and b["n_used"] == want["n_used"]
@@ -977,7 +983,7 @@ def test_page_bounds_in_the_manifest_equal_an_independent_computation_and_exclud
         with_sat = np.percentile(planes[page][valid].astype(float), [1.0, 99.8])
         if b["n_saturated"]:
             assert with_sat[1] > b["hi"] and b["hi"] < 65535
-        # the valid mask is the eligible fields only, NOT the whole page
+        # the valid mask is the chosen cell union only, NOT the whole page
         whole = cm.page_bounds(planes[page], None, (1.0, 99.8))
         assert b["n_valid"] == int(valid.sum()) < whole["n_valid"]
         for c in out.result.manifest.crops:
@@ -1167,8 +1173,13 @@ def test_random_strays_and_invalid_points_match_an_independent_label_oracle(tmp_
                 (c1, n1), *rest = cnt.most_common()
                 if not rest or rest[0][1] < n1:
                     maj[ctr] = c1
+            # F2: a usable mark without a plane (position 0 / beyond the planes) makes EVERY tuple of its cell a conflict
+            unplaced = {geom_cell(m[0], m[1]) for m in marks if m[3] not in (1, 2) and 0 <= m[0] < W and 0 <= m[1] < H
+                        and geom_cell(m[0], m[1]) is not None}
             for page in (1, 2):
                 for cell in range(9):
+                    if cell in unplaced:
+                        continue
                     here = [m for m in pts if m[3] == page and geom_cell(m[0], m[1]) == cell]
                     own = [m for m in here if maj.get(m[2]) == cell]
                     if own:
@@ -1318,3 +1329,495 @@ def test_nan_fractions_are_refused(tmp_path, capsys):
     code = main(["--data-dir", str(tmp_path / "d"), "import-legacy", "--input", str(root), "--channel-map", str(cmap),
                  "--identity-map", str(imap), "--dry-run", "--fractions", "nan,0.5,0.5"])
     assert code == 2
+
+
+# ============================================================================================ 9. independent-review fixes
+# Each test reproduces a defect of the independent review (scratchpad/review/REVIEW.md, t1..t15) and fails on the old code.
+def chamber_stack(root, name, marks, seed, *, h=300, w=400, band=True):
+    """Two planes of a 400x300 slide: noisy interior, page 1 clipped (65535) OUTSIDE a rectangular 'chamber' (30..370 x 30..270,
+    the app's auto chamber, rim 40 -> ~70..330 x 70..230). A bright band lies inside the chamber but OUTSIDE every grid cell (the
+    grid covers x 10..160, y 10..115), so the chamber statistics differ from the grid-cell and the examined-field statistics."""
+    rng = np.random.default_rng(seed)
+    p0 = rng.integers(200, 30000, (h, w)).astype(np.uint16)
+    p1 = rng.integers(200, 30000, (h, w)).astype(np.uint16)
+    if band:
+        p0[100:260, 200:330] = rng.integers(45000, 52000, (160, 130)).astype(np.uint16)
+    inside = np.zeros((h, w), bool)
+    inside[30:270, 30:370] = True
+    p0[~inside] = 25000
+    p1[~inside] = 65535
+    roi = point_roi([(x, y) for x, y, *_ in marks], [m[2] for m in marks], [m[3] for m in marks])
+    write_stack(Path(root) / name, [p0, p1], roi=roi, overlays=[grid_overlay(GRID_XS, GRID_YS, w, h)])
+    return [p0, p1]
+
+
+def app_page_bounds(planes, page, rim=40):
+    """lo/hi exactly as the app computes them at inference: auto chamber -> counting Region -> build_valid_mask ->
+    valid-unsaturated percentiles (independent of the bridge code)."""
+    from polony_app import schemas
+    from polony_app.detection.masks import build_valid_mask
+    from polony_app.imaging.chamber import auto_chamber
+    res = auto_chamber(planes, rim)
+    reg = schemas.Region(id="c", kind=schemas.RegionKind.counting, name="chamber", polygon=[tuple(p) for p in res["polygon"]])
+    valid = build_valid_mask(planes[page].shape, [reg])
+    return cm.page_bounds(planes[page], valid, (1.0, 99.8)), valid
+
+
+def test_F1_page_lo_hi_are_computed_over_the_apps_chamber_mask_like_inference(tmp_path):
+    root = tmp_path / "in"
+    root.mkdir()
+    marks = spec_marks({(0, 0): 3, (0, 4): 2, (1, 1): 4}, 1)
+    planes = chamber_stack(root, "29-09-2026_T7_AB_AM-A.tif", marks, seed=3)
+    got = {}
+    for vm in ("chamber", "grid-cells", "eligible-fields"):
+        out = run_import(tmp_path, root, allow_unconfirmed_identity=True, valid_mask=vm, data=tmp_path / f"d_{vm}")
+        (src,) = out.result.manifest.sources
+        got[vm] = src.page_normalization
+        assert out.result.manifest.options["legacy_import"]["valid_mask"] == vm
+        assert out.plan.summary["options"]["valid_mask"] == vm == out.plan.summary["valid_mask"]["option"]
+    assert lb.BridgeOptions().valid_mask == "chamber"                       # the default is the inference mask
+    # default option = parity with the app path, for every page, and every crop carries the page's lo/hi
+    default = run_import(tmp_path, root, allow_unconfirmed_identity=True, data=tmp_path / "d_default")
+    (src,) = default.result.manifest.sources
+    for page, role in ((0, "red"), (1, "green")):
+        want, valid = app_page_bounds(planes, page)
+        b = src.page_normalization[role]
+        assert (b["lo"], b["hi"], b["n_used"], b["n_valid"]) == (want["lo"], want["hi"], want["n_used"], want["n_valid"])
+        assert b["valid_mask_used"] == "chamber" and b["valid_mask_fallback"] is None and "automatic chamber" in b["valid_mask"]
+        # ... and with the spotiflow adapter's own normaliser statistics when it can be imported without torch
+        try:
+            from polony_app.engines.spotiflow_adapter import _valid_unsaturated_range
+        except Exception:  # noqa: BLE001
+            _valid_unsaturated_range = None
+        if _valid_unsaturated_range is not None:
+            lo, hi, _info = _valid_unsaturated_range(planes[page], valid)
+            assert (b["lo"], b["hi"]) == (lo, hi)
+        for c in default.result.manifest.crops:
+            if c.page == page:
+                assert (c.norm_lo, c.norm_hi) == (want["lo"], want["hi"])
+    # the old policy (examined fields only) and the grid cells give scales the app never uses (here hi is about 2x off)
+    assert got["eligible-fields"]["red"]["hi"] < 0.7 * src.page_normalization["red"]["hi"]
+    assert got["grid-cells"]["red"]["hi"] < 0.7 * src.page_normalization["red"]["hi"]
+    s = default.plan.summary["valid_mask"]
+    assert s["used_counts"] == {"chamber": 1} and s["by_source"]["29-09-2026_T7_AB_AM-A.tif"]["red"]["valid_mask_used"] == "chamber"
+
+
+def test_F1_no_chamber_falls_back_to_all_grid_cells_with_a_warning_and_is_independent_of_workers(tmp_path):
+    root = tmp_path / "in"
+    root.mkdir()
+    # file 1 has a chamber, file 2 (uniform noise) has none
+    chamber_stack(root, "29-09-2026_T7_AB_AM-A.tif", spec_marks({(0, 0): 3, (0, 4): 2}, 1), seed=3)
+    saturated_stack(root, "29-09-2026_T7_AB_AS-A.tif", spec_marks({(0, 0): 3, (0, 4): 2}, 2), seed=6, sat_frac=0.0)
+    runs = [run_import(tmp_path, root, allow_unconfirmed_identity=True, workers=w, data=tmp_path / f"d{w}") for w in (1, 3)]
+    assert runs[0].result.version == runs[1].result.version
+    out = runs[0]
+    by = {s.name: s.page_normalization for s in out.result.manifest.sources}
+    assert by["29-09-2026_T7_AB_AM-A.tif"]["red"]["valid_mask_used"] == "chamber"
+    fb = by["29-09-2026_T7_AB_AS-A.tif"]["red"]
+    assert fb["valid_mask_used"] == "grid-cells" and fb["valid_mask_option"] == "chamber" and "No clipped scanner background" in fb["valid_mask_fallback"]
+    planes = [tifffile.imread(str(root / "29-09-2026_T7_AB_AS-A.tif"))[k] for k in (0, 1)]
+    want = cm.page_bounds(planes[0], independent_valid_mask(planes[0].shape, [(r, c) for r in range(3) for c in range(3)]), (1.0, 99.8))
+    assert (fb["lo"], fb["hi"]) == (want["lo"], want["hi"])
+    assert any("no automatic chamber" in w and "AS-A" in w for w in out.result.manifest.warnings)
+    vm = out.result.manifest.import_summary["valid_mask"]
+    assert vm["used_counts"] == {"chamber": 1, "grid-cells": 1} and [f["file"] for f in vm["chamber_fallbacks"]] == ["29-09-2026_T7_AB_AS-A.tif"]
+
+
+def test_F1_page_bounds_fallback_is_recorded_in_the_manifest_and_warned(tmp_path):
+    root = tmp_path / "in"
+    root.mkdir()
+    rng = np.random.default_rng(0)
+    planes = [rng.integers(200, 30000, (H, W)).astype(np.uint16) for _ in range(2)]
+    for p in planes:
+        p[:] = 65535                                    # everything saturated: < 1000 valid unsaturated pixels
+        p[0, :5] = 100
+    write_stack(root / "29-09-2026_T7_AB_AM-A.tif", planes, roi=point_roi([(x, y) for x, y, *_ in spec_marks({(0, 0): 3}, 1)], [0] * 3, [1] * 3),
+                overlays=[grid_overlay(GRID_XS, GRID_YS, W, H)])
+    out = run_import(tmp_path, root, allow_unconfirmed_identity=True, valid_mask="grid-cells")
+    vm = out.result.manifest.import_summary["valid_mask"]
+    assert vm["page_bounds_fallbacks"] and vm["page_bounds_fallbacks"][0]["role"] in ("red", "green")
+    assert any("valid unsaturated pixel" in w for w in out.result.manifest.warnings)
+
+
+def test_F2_marks_without_a_usable_plane_make_every_tuple_of_their_cell_a_conflict(tmp_path):
+    """review t1/t2: a mark at ImageJ position 0 / beyond the planes inside a manifest-zero cell used to leave a verified_zero
+    crop with that polony inside it as background; inside a positive cell it sat unlabelled in the crop."""
+    import legacy_fixtures as lf
+    root = tmp_path / "in"
+    root.mkdir()
+    x, y = (GRID_XS[1] + 25, GRID_YS[1] + 17)                       # cell (1,1)
+    px, py = (GRID_XS[0] + 25, GRID_YS[0] + 17)                     # cell (0,0), a positive cell
+    for name, pos in (("pos0", 0), ("pos3", 3)):
+        base = marks_in(0, 0, 4, 0, 1, 1) + marks_in(0, 1, 3, 1, 1, 1)
+        pts = [(m[0], m[1]) for m in base] + [(x, y), (px + 8, py + 6)]
+        roi = lf.point_roi(pts, [m[2] for m in base] + [4, 0], [1] * len(base) + [pos, pos])
+        make_tiff(root / f"{name}.tif", roi=roi, seed=hash(name) % 100)
+    ex_ = write_examined(tmp_path / "ex.json", {f"{n}.tif": {0: [{"row": 1, "col": 1, "count": 0}, {"row": 0, "col": 0}, {"row": 0, "col": 1}],
+                                                             1: [{"row": 1, "col": 1, "count": 0}]} for n in ("pos0", "pos3")})
+    out = run_import(tmp_path, root, examined=ex_, mode="examined-fields-manifest", allow_unconfirmed_identity=True)
+    cells = {(c.source_file, c.page, c.region_id) for c in out.result.manifest.crops}
+    for n in ("pos0", "pos3"):
+        assert (f"{n}.tif", 0, "r1c1") not in cells and (f"{n}.tif", 1, "r1c1") not in cells        # no verified zero
+        assert (f"{n}.tif", 0, "r0c0") not in cells                                                # no positive crop with an unlabelled polony
+        assert (f"{n}.tif", 0, "r0c1") in cells                                                    # untouched cells stay positive
+    f = out.plan.summary["fields"]
+    assert f["verified_zero_fields"] == 0 and f["conflict_fields_excluded"] >= 6                  # per file: r1c1 p0 + p1 and r0c0 p0
+    assert any("without a usable plane" in r for r in f["reasons"])
+    rows = [r for r in csv.DictReader(open(out.result.path / "points.csv"))]
+    assert any(r["basis"] == "dropped:plane_unspecified" for r in rows)
+    assert lb.verify_examination_provenance(out.result.manifest) == []
+
+
+def _doc(**over):
+    base = {"schema": "polony-channel-map", "version": 1, "confirmed_by": "E", "confirmed_on": "x", "source_of_truth": "y",
+            "defaults": {"pages": {"0": {"role": "red", "train": True}, "1": {"role": "green", "train": False}}}}
+    base.update(over)
+    return base
+
+
+def test_F8_files_keys_and_rules_that_match_nothing_are_blockers_with_the_nearest_file(tmp_path):
+    """review t11: './odd.tif', 'ODD.tif', 'sub\\odd.tif' and a mistyped rule glob used to fall through silently to the default."""
+    root = tmp_path / "in"
+    make_tiff(root / "a.tif", marks=marks_in(0, 0, 3, 0, 1), seed=1)
+    make_tiff(root / "sub" / "odd.tif", marks=marks_in(0, 0, 3, 0, 1), seed=2)
+    swapped = {"pages": {"0": {"role": "green", "train": True}, "1": {"role": "red", "train": True}}}
+    cmp_ = tmp_path / "c.json"
+    cmp_.write_text(json.dumps(_doc(files={"./sub/odd.tif": swapped, "SUB/ODD.tif": swapped, "sub\\odd.tif": swapped, "a.tif": swapped},
+                                    rules=[{"id": "typo", "match": {"glob": "*_odd.tif"}, **swapped}])))
+    with pytest.raises(MLError) as e:
+        run_import(tmp_path, root, cmap=cmp_, allow_unconfirmed_identity=True)
+    msg = str(e.value)
+    assert msg.count("matches no scanned TIFF") == 4 and "nearest existing file: 'sub/odd.tif'" in msg and "rule 'typo'" in msg
+    assert "files['a.tif']" not in msg                                              # an exact key is fine
+    dry = run_import(tmp_path, root, cmap=cmp_, allow_unconfirmed_identity=True, dry=True)
+    assert len([b for b in dry.blockers if "matches no scanned TIFF" in b]) == 4
+    code = main(["--data-dir", str(tmp_path / "dd"), "import-legacy", "--input", str(root), "--channel-map", str(cmp_),
+                 "--allow-unconfirmed-identity", "--dry-run"])
+    assert code == 0
+    # a clean map with an exact key and a matching rule passes
+    ok = tmp_path / "ok.json"
+    ok.write_text(json.dumps(_doc(files={"sub/odd.tif": swapped}, rules=[{"id": "r", "match": {"glob": "a.tif"}, **swapped}])))
+    out = run_import(tmp_path, root, cmap=ok, allow_unconfirmed_identity=True, dry=True)
+    assert not out.blockers
+
+
+def test_F8_template_states_train_explicitly_and_typos_are_refused(tmp_path):
+    lb.write_templates(tmp_path / "t", None)
+    doc = json.loads((tmp_path / "t" / "channels.template.json").read_text())
+    for blk in doc["defaults"]["pages"].values():
+        assert isinstance(blk["train"], bool) and blk["role"]
+    doc.update(confirmed_by="E", source_of_truth="y")
+    doc["defaults"]["pages"]["0"]["trian"] = False                                    # review: typo => page was trained on
+    p = tmp_path / "typo.json"
+    p.write_text(json.dumps(doc))
+    with pytest.raises(MLError, match="unknown key.*trian"):
+        lb.load_channel_map(p)
+
+
+def test_F10_identity_confirmed_is_explicit_and_specimen_id_is_required(tmp_path):
+    def load(rows, **kw):
+        p = tmp_path / "i.json"
+        p.write_text(json.dumps({"rows": rows}))
+        return lb.load_identity_map(p, **kw)
+    with pytest.raises(MLError, match="row 2 \\(b.tif\\).*explicitly true or false"):
+        load([{"file": "a.tif", "specimen_id": "S", "confirmed": True}, {"file": "b.tif", "specimen_id": "S"}])
+    c = tmp_path / "i.csv"
+    c.write_text("file,specimen_id,slide_id,confirmed\na.tif,S,S_A,\n")
+    with pytest.raises(MLError, match="row 1 \\(a.tif\\).*explicitly true or false.*empty cell"):
+        lb.load_identity_map(c)
+    with pytest.raises(MLError, match="no specimen_id.*--level slide"):
+        load([{"file": "a.tif", "slide_id": "S_A", "confirmed": True}])
+    t = load([{"file": "a.tif", "slide_id": "S_A", "confirmed": True}], level="slide")           # explicit slide-level split
+    assert t.rows[0]["slide_id"] == "S_A"
+    with pytest.raises(MLError, match="assay on some rows.*none on others"):
+        load([{"file": "a.tif", "specimen_id": "AM", "slide_id": "AM_A", "assay": "T7_AB", "confirmed": True},
+              {"file": "b.tif", "specimen_id": "am", "slide_id": "AM_B", "confirmed": True}])
+    # unconfirmed template rows are not subject to the specimen rule
+    load([{"file": "a.tif", "confirmed": False}])
+
+
+def test_F10_replicates_spelled_with_different_case_stay_in_one_group(tmp_path):
+    """review t6: 'AM' vs 'am' (and an assay set on one replicate only) split the replicates of one specimen in 12/12 seeds."""
+    root = tmp_path / "in"
+    root.mkdir()
+    files = {}
+    for k, (sp, rep) in enumerate([("AM", "A"), ("am", "B"), ("AS", "A"), ("AS ", "B"), ("FS", "A"), ("FS", "B")]):
+        rel = f"f{k}.tif"
+        make_tiff(root / rel, marks=spec_marks({(0, 0): 3, (0, 4): 2}, k + 1), seed=k + 1)
+        files[rel] = {"file": rel, "specimen_id": sp, "slide_id": f"{sp.strip()}_{rep}", "assay": "T7_AB" if sp != "am" else "t7_ab",
+                      "confirmed": True}
+    p = tmp_path / "id.json"
+    p.write_text(json.dumps({"rows": list(files.values())}))
+    for seed in range(6):
+        out = run_import(tmp_path, root, imap=p, fractions=FR3, seed=seed, data=tmp_path / f"d{seed}")
+        sp = out.result.manifest.splits["analysis_to_split"]
+        grp = out.result.manifest.splits["analysis_to_group"]
+        by = {s.name: s.analysis_id for s in out.result.manifest.sources}
+        for a, b in (("f0.tif", "f1.tif"), ("f2.tif", "f3.tif"), ("f4.tif", "f5.tif")):
+            assert grp[by[a]] == grp[by[b]] and sp[by[a]] == sp[by[b]]
+    assert any("differ only by case" in w for w in out.result.manifest.warnings)
+
+
+def test_F3_slide_only_identity_gets_an_accurate_warning():
+    from polony_app.legacy_import.schema import Dataset, ImageKind, ImageRecord
+    from polony_app.legacy_import.splits import assign_splits
+    def rec(i, **kw):
+        return ImageRecord(image_id=f"i{i}", file_name=f"f{i}.tif", rel_path=f"f{i}.tif", sha256=f"{i:064x}", size_bytes=1,
+                           kind=ImageKind.stack, width=10, height=10, n_planes=1, dtype="uint16", bit_depth=16, **kw)
+    ds_ = Dataset(images=[rec(1, slide_id="S1", identity_confirmed=True), rec(2, slide_id="S2", identity_confirmed=True),
+                          rec(3, identity_confirmed=True)])
+    sa = assign_splits(ds_, seed=0, fractions={"train": 0.5, "val": 0.5, "test": 0.0}, level="auto", allow_unconfirmed=True)
+    w = "\n".join(sa.warnings)
+    assert "no specimen identity (only a slide id) for: f1.tif, f2.tif" in w and "grouped by its slide alone" in w
+    assert "no specimen/slide identity could be reconstructed for: f3.tif" in w and "f1.tif" not in w.split("reconstructed for:")[1]
+
+
+def locked_variants_import(tmp_path, assay, spec_transform):
+    root, files, d, first, lock, test_src = first_locked_import(tmp_path)
+    spec = test_src[0].identity["specimen_id"]
+    root2 = second_dir(tmp_path)
+    make_tiff(root2 / "newslide.tif", marks=spec_marks({(0, 0): 4}, 9), seed=77)
+    row = {"file": "newslide.tif", "specimen_id": spec_transform(spec), "slide_id": spec + "_C", "assay": assay, "confirmed": True}
+    imap2 = tmp_path / "id2.json"
+    imap2.write_text(json.dumps({"rows": [row]}))
+    out = run_import(tmp_path, root2, imap=imap2, fractions=FR3, data=d, seed=4, dry=True)
+    return out, lock
+
+
+@pytest.mark.parametrize("assay,tr", [(None, lambda s: s), ("T7_XY", lambda s: s), ("T7_AB", lambda s: s.lower()),
+                                      ("T7_AB", lambda s: f"  {s} "), (None, lambda s: s.lower())])
+def test_F7_new_slide_of_a_locked_specimen_is_locked_whatever_the_assay_or_case(tmp_path, assay, tr):
+    """review t12: blank / other assay or another case of the specimen id sent the new slide to TRAIN (leak)."""
+    out, lock = locked_variants_import(tmp_path, assay, tr)
+    ga = out.plan.ga
+    assert len(ga.locked_analyses) == 1 and list(ga.split_of.values()) == ["test"]
+    assert any("same specimen as a locked test image" in w for w in ga.warnings)
+
+
+def test_F7_lock_identity_conflicts_refuse_train_and_val_crops_of_a_locked_identity(tmp_path):
+    from polony_app.ml.splits import lock_identity_conflicts, lock_identity_sets
+    root, files, d, first, lock, test_src = first_locked_import(tmp_path)
+    spec = test_src[0].identity["specimen_id"]
+    assert lock["images"][0]["identity"]["specimen_id"] and spec.casefold() in lock_identity_sets(lock)[0]
+    # the snapshot itself is clean
+    assert lock_identity_conflicts(ds.load_manifest(d, first.result.version), lock) == []
+    m = ds.load_manifest(d, first.result.version).model_dump(mode="json")
+    train_src = next(s for s in m["sources"] if s["split"] == "train")
+    train_src["identity"] = dict(train_src["identity"], specimen_id=f" {spec.lower()} ", assay=None)     # same specimen, other spelling
+    bad = lock_identity_conflicts(m, lock)
+    assert len(bad) == 1 and "locked test set" in bad[0] and train_src["name"] in bad[0]
+    # old locks (written before 'identity' existed) are read from their key strings
+    old = json.loads(json.dumps(lock))
+    for i in old["images"]:
+        i.pop("identity")
+    assert lock_identity_conflicts(m, old) == bad
+    # a slide-id collision is caught as well
+    m2 = ds.load_manifest(d, first.result.version).model_dump(mode="json")
+    s2 = next(s for s in m2["sources"] if s["split"] == "val" or s["split"] == "train")
+    s2["identity"] = dict(s2["identity"], specimen_id="UNRELATED", slide_id=test_src[0].identity["slide_id"].lower())
+    assert len(lock_identity_conflicts(m2, lock)) == 1
+
+
+def test_F9_a_tampered_marker_and_csv_together_is_rejected_and_the_clean_snapshot_is_published(tmp_path, monkeypatch):
+    """review t7: crop csv edited together with the hashes in its marker was resumed and published as a fabricated label."""
+    root = tmp_path / "in"
+    root.mkdir()
+    corpus = standard_corpus(root, ("AM", "AS", "FS"))
+    imap = write_identity_map(tmp_path / "id.json", corpus)
+    clean = run_import(tmp_path / "x", root, imap=imap, data=tmp_path / "clean", workers=1) if (tmp_path / "x").mkdir() is None else None
+    orig, n = ds.write_crop_files, {"n": 0}
+
+    def boom(*a, **k):
+        n["n"] += 1
+        if n["n"] == 8:
+            raise RuntimeError("simulated crash")
+        return orig(*a, **k)
+    monkeypatch.setattr(ds, "write_crop_files", boom)
+    with pytest.raises(RuntimeError):
+        run_import(tmp_path, root, imap=imap, workers=1)
+    monkeypatch.setattr(ds, "write_crop_files", orig)
+    (stg,) = list((tmp_path / "data" / "datasets").glob(".staging-*"))
+    mk = sorted((stg / ".done").glob("*.json"))[0]
+    m = json.loads(mk.read_text())
+    rec = m["crops"][0]
+    (stg / rec["path_csv"]).write_text("y,x\n5.0,5.0\n")
+    rec["csv_sha256"] = hashlib.sha256((stg / rec["path_csv"]).read_bytes()).hexdigest()
+    rec["n_positive"] = 1
+    mk.write_text(json.dumps(m))
+    out = run_import(tmp_path, root, imap=imap, workers=1)
+    assert ds.verify_snapshot(tmp_path / "data", out.result.version) == []
+    assert out.result.version == clean.result.version                     # exactly the clean build, not the fabricated label
+    c0 = next(c for c in out.result.manifest.crops if c.crop_id == rec["crop_id"])
+    assert (out.result.path / c0.path_csv).read_text() != "y,x\n5.0,5.0\n"
+    assert not list((tmp_path / "data" / "datasets").glob(".staging-*"))
+
+
+def test_F9_the_resume_key_changes_with_the_logic_version_and_the_code(tmp_path, monkeypatch):
+    root = tmp_path / "in"
+    root.mkdir()
+    corpus = standard_corpus(root, ("AM", "AS"))
+    imap = write_identity_map(tmp_path / "id.json", corpus)
+    cmap = write_channel_map(tmp_path / "c.json", defaults=RED_GREEN)
+
+    def key():
+        return lb.build_plan(root, opts(), channel_map=cmap, identity_map=imap, say=lambda *a: None).resume_key
+    k0 = key()
+    assert key() == k0
+    monkeypatch.setattr(lb, "LOGIC_VERSION", lb.LOGIC_VERSION + 1)
+    assert key() != k0
+    monkeypatch.undo()
+    monkeypatch.setattr(lb, "code_fingerprint", lambda: "other-code")
+    assert key() != k0
+
+
+def test_F11_reimporting_identical_input_is_a_noop_and_leaves_no_staging(tmp_path, capsys):
+    root = tmp_path / "in"
+    root.mkdir()
+    corpus = standard_corpus(root, ("AM", "AS", "FS"))
+    imap = write_identity_map(tmp_path / "id.json", corpus)
+    first = run_import(tmp_path, root, imap=imap)
+    assert first.already_imported is None and first.result.manifest.import_summary["plan_key"]
+    before = tree(tmp_path / "data")
+    stale = tmp_path / "data" / "datasets" / f".staging-{first.plan.resume_key}"            # an obsolete staging dir of the same plan
+    (stale / ".done").mkdir(parents=True)
+    again = run_import(tmp_path, root, imap=imap)
+    assert again.already_imported == first.result.version and again.result is None
+    assert not [p for p in (tmp_path / "data" / "datasets").iterdir() if p.name.startswith(".staging")]
+    assert tree(tmp_path / "data") == before
+    code = main(["--data-dir", str(tmp_path / "data"), "import-legacy", "--input", str(root), "--channel-map", str(tmp_path / "channels.json"),
+                 "--identity-map", str(imap), "--created-at", T0, "--fractions", "0.5,0.5,0"])
+    assert code == 0 and f"already imported as {first.result.version}" in capsys.readouterr().out
+    # a new test lock changes the plan (the locked sources are carried over): it is NOT 'already imported'
+    third = run_import(tmp_path, root, imap=imap, fractions=FR3)
+    assert third.already_imported is None
+
+
+def test_F11_an_already_existing_version_removes_its_staging(tmp_path, monkeypatch):
+    root = tmp_path / "in"
+    root.mkdir()
+    corpus = standard_corpus(root, ("AM", "AS", "FS"))
+    imap = write_identity_map(tmp_path / "id.json", corpus)
+    first = run_import(tmp_path, root, imap=imap)
+    monkeypatch.setattr(lb, "find_published", lambda *a, **k: None)         # force the write path -> "already exists"
+    with pytest.raises(MLError, match="already exists"):
+        run_import(tmp_path, root, imap=imap, resume=False)
+    with pytest.raises(MLError, match="already exists"):
+        run_import(tmp_path, root, imap=imap)
+    assert not [p for p in (tmp_path / "data" / "datasets").iterdir() if p.name.startswith(".staging")]
+    assert ds.verify_snapshot(tmp_path / "data", first.result.version) == []
+
+
+def test_F4_every_mark_belongs_to_the_crop_whose_pixel_footprint_contains_it(tmp_path):
+    """review t4: on a fractional grid a polony within 0.5 px of a grid line was labelled in neither crop or unlabelled in one."""
+    import legacy_fixtures as lf
+    rng = np.random.default_rng(5)
+    root = tmp_path / "in"
+    root.mkdir()
+    xs, ys = [10.3, 60.7, 110.2, 160.0], [10.0, 45.5, 80.1, 115.0]
+    for k, sub in enumerate([True, False]):
+        pts, ctr = [], []
+        for r in range(3):
+            for c in range(3):
+                for _ in range(12):
+                    fx = rng.choice([0.0, 0.001, 0.02, 0.98, 0.999, 0.5, rng.random()])
+                    fy = rng.choice([0.0, 0.001, 0.02, 0.98, 0.999, 0.5, rng.random()])
+                    pts.append((min(xs[c] + fx * (xs[c + 1] - xs[c]), 159.4), min(ys[r] + fy * (ys[r + 1] - ys[r]), 114.9)))
+                    ctr.append(r * 3 + c)
+        make_tiff(root / f"s{k}.tif", roi=lf.point_roi(pts, ctr, [1] * len(pts), subpixel=sub), grid_xs=xs, grid_ys=ys, seed=k)
+    plan = lb.build_plan(root, opts(), channel_map=write_channel_map(tmp_path / "c.json", defaults=RED_GREEN), say=lambda *a: None)
+    n_checked = 0
+    for p in plan.plans:
+        sc = p.scan
+        boxes = [(c, c.box_file) for c in p.ext.cands if c.page == 0]
+        for c, (x0, y0, x1, y1) in boxes:
+            lab = set(next(t.labels for (pg, cell), t in p.tuples.items() if pg == 0 and sc.cell_name(cell) == c.region.id))
+            inbox = {i for i in range(sc.n_points) if sc.page[i] == 0 and sc.pstatus[i] == 0
+                     and x0 <= math.floor(sc.x[i] + 0.5) < x1 and y0 <= math.floor(sc.y[i] + 0.5) < y1}
+            assert inbox == lab, f"{sc.rel} {c.region.id}: marks inside the footprint {sorted(inbox - lab)} unlabelled / {sorted(lab - inbox)} outside"
+            assert c.n_edge == 0 and len(c.points) == len(lab)
+            n_checked += len(lab)
+    assert n_checked > 100
+
+
+def test_smaller_symlinks_resolving_outside_input_are_skipped_with_a_reason(tmp_path):
+    """review t8: a symlinked FILE pointing outside --input was imported."""
+    root, outside = tmp_path / "in", tmp_path / "outside"
+    root.mkdir()
+    make_tiff(outside / "secret.tif", marks=marks_in(0, 0, 3, 0, 1, 1), seed=3)
+    make_tiff(outside / "d" / "deep.tif", marks=marks_in(0, 0, 3, 0, 1, 1), seed=4)
+    make_tiff(root / "real.tif", marks=marks_in(0, 0, 3, 0, 1, 1), seed=5)
+    make_tiff(root / "sub" / "inner.tif", marks=marks_in(0, 0, 3, 0, 1, 1), seed=6)
+    os.symlink(outside / "secret.tif", root / "link.tif")
+    os.symlink(outside / "d", root / "linkdir")
+    os.symlink(root / "sub" / "inner.tif", root / "inner_link.tif")                  # inside --input: fine (byte-identical alias)
+    skipped = []
+    got = [r for r, _ in lb.discover_tiffs(root, skipped)]
+    assert got == ["inner_link.tif", "real.tif", "sub/inner.tif"]
+    assert dict(skipped) == {"link.tif": "symlink resolving outside --input: not imported", "linkdir": "symlinked directory: not followed"}
+    out = run_import(tmp_path, root, allow_unconfirmed_identity=True, dry=True)
+    assert out.plan.summary["tiffs"]["skipped_links"] == [{"path": "link.tif", "reason": "symlink resolving outside --input: not imported"},
+                                                         {"path": "linkdir", "reason": "symlinked directory: not followed"}]
+    assert out.plan.summary["tiffs"]["discovered"] == 3
+
+
+def test_smaller_lock_records_overrides_and_refuses_acknowledged_assumptions_without_the_flag(tmp_path):
+    root = tmp_path / "in"
+    root.mkdir()
+    files = standard_corpus(root, ("AM", "AS", "FS", "PS", "QS"))
+    imap = write_identity_map(tmp_path / "id.json", files)
+    d = tmp_path / "data"
+    # a counter-less file accepted through --acknowledge-no-counters
+    make_tiff(root / "29-09-2026_T7_AB_ZZ-A.tif", marks=[(m[0], m[1], None, m[3]) for m in marks_in(0, 0, 3, 0, 1, 3)], seed=44,
+              with_counters=False)
+    rows = json.loads(imap.read_text())["rows"] + [{"file": "29-09-2026_T7_AB_ZZ-A.tif", "specimen_id": "ZZ", "slide_id": "ZZ_A",
+                                                    "assay": "T7_AB", "confirmed": True}]
+    imap.write_text(json.dumps({"rows": rows}))
+    first = run_import(tmp_path, root, imap=imap, fractions=FR3, data=d, acknowledge_no_counters=True)
+    assert first.result.manifest.import_summary["options"]["acknowledge_no_counters"] is True
+    with pytest.raises(MLError, match="acknowledge-no-counters.*--allow-acknowledged-assumptions-in-test-lock"):
+        ds.lock_test_set(d, first.result.version)
+    lock = ds.lock_test_set(d, first.result.version, allow_acknowledged_assumptions=True)
+    assert lock["overrides"]["snapshot_options"]["acknowledge_no_counters"] is True
+    assert lock["overrides"]["allow_acknowledged_assumptions_flag"] is True
+    # without any acknowledgement the lock records all-false overrides
+    d2 = tmp_path / "data2"
+    clean = run_import(tmp_path, root, imap=imap, fractions=FR3, data=d2, acknowledge_no_counters=True, mode="marked-only")
+    assert clean.result is not None
+    root3 = tmp_path / "in3"
+    root3.mkdir()
+    files3 = standard_corpus(root3, ("AM", "AS", "FS", "PS", "QS"))
+    first3 = run_import(tmp_path / "w3", root3, imap=write_identity_map(tmp_path / "id3.json", files3), fractions=FR3,
+                        data=tmp_path / "data3") if (tmp_path / "w3").mkdir() is None else None
+    lock3 = ds.lock_test_set(tmp_path / "data3", first3.result.version)
+    assert lock3["overrides"]["snapshot_options"] == {"acknowledge_no_counters": False, "acknowledge_field_equals_counter_plus_one": False,
+                                                      "acknowledge_lab_csv_field_numbering": False, "allow_unconfirmed_identity": False}
+
+
+def test_smaller_provenance_must_be_internally_consistent(tmp_path):
+    root = tmp_path / "in"
+    root.mkdir()
+    files = standard_corpus(root, ("AM", "AS"))
+    imap = write_identity_map(tmp_path / "id.json", files)
+    ex_ = write_examined(tmp_path / "ex.json", {rel: {0: [{"row": 2, "col": 2, "count": 0}, {"row": 0, "col": 0}, {"row": 0, "col": 1}]}
+                                                for rel in files.values()})
+    out = run_import(tmp_path, root, imap=imap, examined=ex_, mode="examined-fields-manifest")
+    base = out.result.manifest.model_dump(mode="json")
+    assert lb.verify_examination_provenance(base) == []
+    kinds = {c["provenance"]["examination_status"] for c in base["crops"]}
+    assert kinds == {"positive_marked", "verified_zero"}
+    pos = next(c for c in base["crops"] if c["provenance"]["examination_status"] == "positive_marked")
+    zero = next(c for c in base["crops"] if c["provenance"]["examination_status"] == "verified_zero")
+
+    def bad_with(crop, **prov_or_top):
+        m = json.loads(json.dumps(base))
+        c = next(x for x in m["crops"] if x["crop_id"] == crop["crop_id"])
+        for k, v in prov_or_top.items():
+            (c if k in c else c["provenance"])[k] = v
+        return lb.verify_examination_provenance(m)
+    assert any("verified_zero" in b for b in bad_with(zero, n_positive=2))
+    assert any("verified_zero" in b for b in bad_with(zero, stated_count=3))
+    assert any("verified_zero" in b for b in bad_with(zero, examination_source="embedded_imagej_marks"))
+    assert any("positive_marked" in b for b in bad_with(pos, n_researcher_marks=0))
+    assert any("positive" in b for b in bad_with(pos, n_positive=0))
+    assert any("source_sha256" in b for b in bad_with(pos, source_sha256="0" * 64))
+    assert any("source_tiff" in b for b in bad_with(pos, source_tiff=""))

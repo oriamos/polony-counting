@@ -367,6 +367,13 @@ export function CompareSection() {
               </tbody>
             </table>
           </div>
+          {(data.summary.unplaned_marks ?? 0) > 0 && (
+            <div className="notice warn-text small" role="alert" data-testid="cmp-unplaned">
+              <strong>{data.summary.unplaned_marks} reference mark(s) have no valid plane number.</strong> They count as evidence for no plane. Fields
+              containing them are conflicts on every plane and excluded from all metrics
+              {data.summary.unplaned_mark_fields?.length ? `: field ${data.summary.unplaned_mark_fields.join(', ')}` : ''}.
+            </div>
+          )}
           <dl className="kv" data-testid="cmp-summary">
             <dt>fields in the analysis</dt>
             <dd className="mono">{data.summary.n_fields}</dd>

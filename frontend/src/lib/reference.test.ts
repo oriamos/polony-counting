@@ -61,3 +61,17 @@ describe('totals over compare rows', () => {
     expect(totals([row(3, null, 50, 'unknown')])).toBeNull();
   });
 });
+
+describe('marks without a valid plane', () => {
+  const r2: ReferenceInfo = {
+    ...ref,
+    points: [...ref.points, { x: 3, y: 3, counter: 1, plane: null, field: 2 }],
+    reference_counts: { '1': { plane0: 3, plane1: 0 }, '2': { plane0: 0, plane1: 0, unplaned: 1 } },
+  };
+  it('are evidence for no plane', () => {
+    expect(pointsOfPlane(r2, 0)).toHaveLength(1);
+    expect(pointsOfPlane(r2, 1)).toHaveLength(1);
+    expect([...countedFields(r2, null)]).toEqual([1]);
+    expect([...countedFields(r2, 1)]).toEqual([]);
+  });
+});

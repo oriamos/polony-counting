@@ -99,6 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--replace-lock", action="store_true")
     s.add_argument("--reason", default="")
     s.add_argument("--allow-unconfirmed-identity", action="store_true")
+    s.add_argument("--allow-acknowledged-assumptions-in-test-lock", action="store_true",
+                   help="lock a snapshot that was built with an --acknowledge-* assumption (e.g. no ImageJ counters); such data "
+                        "does not enter the permanent test set unless you say so (recorded in the lock)")
 
     v = sub.add_parser("verify", help="re-hash a snapshot")
     v.add_argument("snapshot")
@@ -241,7 +244,8 @@ def _run(a, data_dir: str) -> int:
             _p(f"  WARNING: {w}")
         if a.lock_test:
             lock = ds.lock_test_set(data_dir, a.snapshot, replace=a.replace_lock, reason=a.reason,
-                                    allow_unconfirmed_identity=a.allow_unconfirmed_identity)
+                                    allow_unconfirmed_identity=a.allow_unconfirmed_identity,
+                                    allow_acknowledged_assumptions=a.allow_acknowledged_assumptions_in_test_lock)
             _p(f"LOCKED test set of snapshot {a.snapshot}: {len(lock['groups'])} group(s); lock {lock['lock_sha256'][:16]}. "
                "Later snapshots carry these test crops over unchanged and may never train on them.")
         return 0

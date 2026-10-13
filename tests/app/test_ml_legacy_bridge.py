@@ -270,8 +270,9 @@ def test_invalid_points_are_dropped_with_a_reason_never_clamped_never_labels(tmp
     bad = [(W + 15.5, 20.5, 0, 1),                  # beyond the image -> out_of_bounds
            (4.5, 5.5, 0, 1),                        # inside the image but left/above the grid -> outside_grid
            (good[0][0] + 0.2, good[0][1] + 0.2, 0, 1),   # within 1 px of an earlier point -> duplicate
-           (30.5, 30.5, 0, 0),                      # position 0 -> plane unspecified
-           (31.5, 31.5, 0, 7)]                      # position beyond the number of planes -> unspecified
+           # plane-less marks sit in an UNMARKED cell: inside an examined cell they would make that cell a conflict (F2)
+           (*cell_xy(2, 2, 0.3, 0.3), 0, 0),        # position 0 -> plane unspecified
+           (*cell_xy(2, 2, 0.7, 0.7), 0, 7)]        # position beyond the number of planes -> unspecified
     root = make_one(tmp_path, marks=good + bad)
     out = go(tmp_path, root, im=None, allow_unconfirmed_identity=True)
     a = out.plan.summary["annotations"]
@@ -395,15 +396,30 @@ def test_channel_map_validation_errors_are_actionable(tmp_path, corpus):
     with pytest.raises(MLError, match="confirmed_by"):
         lb.load_channel_map(doc(confirmed_by=""))
     with pytest.raises(MLError, match="no role"):
-        lb.load_channel_map(doc(defaults={"pages": {"0": {"role": None}}}))
+        lb.load_channel_map(doc(defaults={"pages": {"0": {"role": None, "train": True}}}))
     with pytest.raises(MLError, match="unique"):
-        lb.load_channel_map(doc(defaults={"pages": {"0": {"role": "red"}, "1": {"role": "red"}}}))
+        lb.load_channel_map(doc(defaults={"pages": {"0": {"role": "red", "train": True}, "1": {"role": "red", "train": True}}}))
     with pytest.raises(MLError, match="'train'"):
         lb.load_channel_map(doc(defaults={"pages": {"0": {"role": "red", "train": "yes"}}}))
     with pytest.raises(MLError, match="schema"):
         lb.load_channel_map(doc(schema="other"))
     with pytest.raises(MLError, match="'match' must use only"):
-        lb.load_channel_map(doc(rules=[{"id": "r", "match": {"colour": "red"}, "pages": {"0": {"role": "a"}}}]))
+        lb.load_channel_map(doc(rules=[{"id": "r", "match": {"colour": "red"}, "pages": {"0": {"role": "a", "train": True}}}]))
+    # F8: no default for 'train', no unknown key at any level (a typo must never silently change what is trained)
+    with pytest.raises(MLError, match="no 'train'"):
+        lb.load_channel_map(doc(defaults={"pages": {"0": {"role": "red"}}}))
+    with pytest.raises(MLError, match="unknown key.*trian"):
+        lb.load_channel_map(doc(defaults={"pages": {"0": {"role": "red", "trian": False, "train": True}}}))
+    with pytest.raises(MLError, match="unknown key.*defalts"):
+        lb.load_channel_map(doc(defalts=1))
+    with pytest.raises(MLError, match="unknown key.*mach"):
+        lb.load_channel_map(doc(rules=[{"id": "r", "mach": {"glob": "*"}, "match": {"glob": "*"},
+                                        "pages": {"0": {"role": "a", "train": True}}}]))
+    with pytest.raises(MLError, match="unknown key.*pagez"):
+        lb.load_channel_map(doc(files={"a.tif": {"pagez": 1, "pages": {"0": {"role": "a", "train": True}}}}))
+    with pytest.raises(MLError, match="unknown key.*idd"):
+        lb.load_channel_map(doc(defaults=[{"idd": "x", "pages": {"0": {"role": "a", "train": True}}}]))
+    lb.load_channel_map(doc(_comment="comments with a leading underscore are fine"))
     # a template left unfilled is refused
     lb.write_templates(tmp_path / "t", root)
     with pytest.raises(MLError, match="confirmed_by"):
@@ -516,7 +532,7 @@ def test_identity_map_rows_unconfirmed_ambiguous_and_missing_are_reported(tmp_pa
     root, files = corpus
     rows = [{"file": files["AM-A"], "specimen_id": "AM", "slide_id": "AM_A", "confirmed": True},
             {"file": files["AM-B"], "specimen_id": "AM", "slide_id": "AM_B", "confirmed": False},
-            {"file": "ghost.tif", "specimen_id": "X", "slide_id": "X_A"}]
+            {"file": "ghost.tif", "specimen_id": "X", "slide_id": "X_A", "confirmed": True}]
     p = tmp_path / "id.json"
     p.write_text(json.dumps(rows))
     tbl = lb.load_identity_map(p)
@@ -532,7 +548,7 @@ def test_identity_map_rows_unconfirmed_ambiguous_and_missing_are_reported(tmp_pa
     out = go(tmp_path, root, im=c, dry=True)
     assert out.plan.summary["identity"]["confirmed"] == 4 and not out.blockers
     with pytest.raises(MLError, match="neither specimen_id nor slide_id"):
-        (tmp_path / "bad.json").write_text(json.dumps([{"file": "a.tif"}]))
+        (tmp_path / "bad.json").write_text(json.dumps([{"file": "a.tif", "confirmed": True}]))
         lb.load_identity_map(tmp_path / "bad.json")
 
 
@@ -541,7 +557,7 @@ def test_basename_that_is_not_unique_is_not_applied(tmp_path):
     make_tiff(root / "a/x.tif", marks=marks_in(0, 0, 3, 0, 1), seed=1)
     make_tiff(root / "b/x.tif", marks=marks_in(0, 0, 3, 0, 1), seed=2)
     p = tmp_path / "id.json"
-    p.write_text(json.dumps([{"file": "x.tif", "specimen_id": "S", "slide_id": "S_A"}]))
+    p.write_text(json.dumps([{"file": "x.tif", "specimen_id": "S", "slide_id": "S_A", "confirmed": True}]))
     out = go(tmp_path, root, im=p, dry=True)
     assert out.plan.summary["identity"]["map"]["ambiguous_basename"] == ["x.tif"] and out.plan.summary["identity"]["confirmed"] == 0
 
@@ -789,7 +805,7 @@ def test_lab_csv_needs_acknowledgement_and_series_and_converts_to_a_manifest(tmp
 # ================================================================== randomised adversarial tests
 def synth_scan(nr, nc, pts):
     """pts: [(cell or -1, counter or -1, page, pstatus)] -> a SourceScan without any file."""
-    sc = lb.SourceScan(source_id="img_synth", rel="s.tif", path=Path("s.tif"), sha256="0" * 64, size=0, mtime_ns=0)
+    sc = lb.SourceScan(source_id="img_synth", rel="s.tif", path=Path("s.tif"), sha256="0" * 64, size=0, mtime_ns=0, n_planes=3)
     sc.xs = tuple(float(10 + 50 * k) for k in range(nc + 1))
     sc.ys = tuple(float(10 + 35 * k) for k in range(nr + 1))
     n = len(pts)
@@ -816,12 +832,22 @@ def random_points(rng, nr, nc, n):
     out = []
     for _ in range(n):
         cell = int(rng.integers(-1, nr * nc))
-        out.append((cell, int(rng.integers(-1, 6)), int(rng.integers(0, 3)), int(rng.choice([0, 0, 0, 0, 1, 2]))))
+        out.append((cell, int(rng.integers(-1, 6)), int(rng.integers(-1, 4)), int(rng.choice([0, 0, 0, 0, 1, 2]))))
     return out
 
 
+def unplaced_cells(sc):
+    """cells holding a usable mark whose plane is unspecified (-1) or beyond the file's planes (F2)."""
+    return {int(sc.cell[i]) for i in range(sc.n_points)
+            if sc.pstatus[i] == 0 and sc.cell[i] >= 0 and not 0 <= sc.page[i] < sc.n_planes}
+
+
 def check_invariants(sc, pages, res):
+    bad_cells = unplaced_cells(sc)
     for (pg, cell), t in res.items():
+        if cell in bad_cells:       # a mark of unknown plane may belong to any page: nothing of this cell is proven or zero
+            assert t.exam.status == ex.CONFLICT and t.labels == [] and not t.exam.researcher_examined
+            continue
         ok_here = [i for i in range(sc.n_points) if sc.page[i] == pg and sc.pstatus[i] == 0 and sc.cell[i] == cell]
         own = [i for i in ok_here if sc.counter[i] < 0 or sc.counter_cell.get(int(sc.counter[i])) == cell]
         if t.exam.status == ex.POSITIVE:
@@ -848,7 +874,7 @@ def test_randomised_eligibility_invariants_and_page_independence():
         check_invariants(sc, [0, 1, 2], res)
         # metamorphic: deleting every point of the OTHER pages never changes a page's tuples
         for page in (0, 1, 2):
-            only = synth_scan(nr, nc, [p for p in pts if p[2] == page])
+            only = synth_scan(nr, nc, [p for p in pts if p[2] == page or not 0 <= p[2] < 3])
             only.counter_cell, only.cell_counters = sc.counter_cell, sc.cell_counters
             r2 = lb.classify_source(only, [page], mode="marked-only", manifest=None, entries={})
             for cell in range(nr * nc):
@@ -861,7 +887,7 @@ def test_randomised_eligibility_invariants_and_page_independence():
 def test_hypothesis_eligibility_invariants():
     hyp = pytest.importorskip("hypothesis")
     from hypothesis import given, settings, strategies as st
-    pt = st.tuples(st.integers(-1, 8), st.integers(-1, 5), st.integers(0, 2), st.sampled_from([0, 0, 0, 1, 2]))
+    pt = st.tuples(st.integers(-1, 8), st.integers(-1, 5), st.integers(-1, 3), st.sampled_from([0, 0, 0, 1, 2]))
 
     @settings(max_examples=150, deadline=None)
     @given(st.lists(pt, max_size=30))
@@ -873,7 +899,8 @@ def test_hypothesis_eligibility_invariants():
         tally = ex.ExaminationTally()
         for t in res.values():
             tally.add(t.exam)
-        assert tally.eligible_examined + tally.excluded_unproven == 27 and tally.verified_zero == 0 and tally.conflict == 0
+        assert tally.eligible_examined + tally.excluded_unproven == 27 and tally.verified_zero == 0
+        assert tally.conflict == 3 * len(unplaced_cells(sc))
     prop()
 
 
@@ -886,7 +913,11 @@ def test_randomised_manifest_zero_requires_no_marks_anywhere_near():
         sc = synth_scan(nr, nc, pts)
         entries = {(pg, c): ex.FieldEntry(row=c // nc, col=c % nc, count=0) for pg in (0, 1) for c in range(nr * nc)}
         res = lb.classify_source(sc, [0, 1], mode="examined-fields-manifest", manifest=man, entries=entries)
+        bad_cells = unplaced_cells(sc)
         for (pg, cell), t in res.items():
+            if cell in bad_cells:
+                assert t.exam.status == ex.CONFLICT and t.labels == []
+                continue
             anything = any(sc.page[i] == pg and sc.pstatus[i] == 0 and (sc.cell[i] == cell or (
                 sc.counter[i] >= 0 and sc.counter_cell.get(int(sc.counter[i])) == cell)) for i in range(sc.n_points))
             if t.exam.status == ex.VERIFIED_ZERO:

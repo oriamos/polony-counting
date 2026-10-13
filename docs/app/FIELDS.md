@@ -57,9 +57,21 @@ JSON (`schema: polony-examined-fields`, v1) or CSV (`# evidence: ...` first line
 see `fields/examined.py`. It is validated (422 `examined_manifest_invalid` when malformed, `examined_manifest_mismatch` when its sha256 differs
 from the file), stored next to the originals as `examined_fields.json` (replaces a previous one; 409 when the analysis is finalized) and
 returns `{matched_file_entries, pages: {page: n_entries}, n_entries, warnings, stored_as, evidence}`. The file entry is found by the stored or
-uploaded file name, or by sha256. Entries are resolved to a Field-* region by `field` (= region field number), `counter` (field of that
-ImageJ counter under the chosen numbering) or `row`+`col` (cell of the overlay grid, numbered as in `/reference`); unresolved entries
-are warnings in `compare`, not silently dropped. Every later `compare` reads the stored manifest.
+uploaded file name, or by sha256; if several file entries match the same file with DIFFERENT content the manifest is refused (422), never
+"last wins". Entries are resolved to a Field-* region by `field` (= the lab field number; trusted only because the manifest author stated it),
+`counter` or `row`+`col` (cell of the overlay grid, numbered as in `/reference`). A `counter` entry resolves ONLY through that counter's actual
+points in the TIFF; a counter with no point stays unresolved (warning naming the entry) and is never guessed as field counter+1, because lab
+sheets number fields without gaps and an absent counter (AM-B: 3 and 19) would shift every later field. Unresolved entries are warnings in
+`compare`, not silently dropped. Every later `compare` reads the stored manifest.
+Strict schema: integers must be real integers (`true`, `1.5`, `"3"` rejected), `counter/field/row/col` >= 0, `count` 0..1,000,000, unknown keys
+(manifest, file entry, field entry, CSV column) are errors; files > 2 MB (endpoint; 8 MB for the CLI loader) and JSON nested deeper than
+32 levels are rejected with 422, never a 500.
+
+### Marks without a plane
+A mark whose ImageJ position is missing, 0 ("all planes") or beyond the file's planes has `plane: null` in `/reference` and is evidence for NO
+plane (`reference_counts[field].unplaned` counts them; `unplaned{count,fields}`). In `compare`, every field containing such a mark is `conflict`
+on ALL planes ("mark with unspecified plane inside this field"), even when a manifest states a count, and a leading `WARNING:` plus
+`summary.unplaned_marks` / `unplaned_mark_fields` are returned (shown as an alert in the UI). The training import drops these marks too.
 
 ## Automatic chamber (`POST /api/analyses/{id}/regions/auto-chamber`, preview only)
 `{rim_px=40}` -> `{polygon, area_px2, rim_px, method, warnings, suggested_exclusions[{polygon,area_px2,reason}]}`; nothing is stored (apply it

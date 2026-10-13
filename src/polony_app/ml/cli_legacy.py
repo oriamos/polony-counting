@@ -59,6 +59,11 @@ def register(sub) -> None:
     p.add_argument("--level", default="auto", choices=["auto", "specimen", "slide", "scan_session", "source_image"])
     p.add_argument("--downscale", type=int, default=1, choices=[1, 2, 4, 8])
     p.add_argument("--normaliser", default="valid_unsaturated", choices=["valid_unsaturated", "none"])
+    p.add_argument("--valid-mask", default="chamber", choices=list(lb_valid_masks()),
+                   help="mask the page-level lo/hi (normalisation) are computed over. chamber (default): the app's automatic "
+                        "chamber (rim 40 px) = the inference mask; when a file has no detectable chamber the union of ALL grid cells "
+                        "is used and recorded. grid-cells: always the union of all grid cells. eligible-fields: the examined "
+                        "fields only (NOT the inference mask: kept for comparison)")
     p.add_argument("--batch-size", type=int, default=4, help="only used for the training estimate")
     p.add_argument("--epochs", type=int, default=30, help="only used for the training estimate")
     p.add_argument("--workers", type=int, default=1, help="crop-writing threads (the snapshot is identical for any value)")
@@ -66,6 +71,11 @@ def register(sub) -> None:
     p.add_argument("--no-resume", action="store_true", help="do not reuse a staging directory of an interrupted run")
     p.add_argument("--created-at", help=argparse.SUPPRESS)
     p.add_argument("--write-templates", metavar="DIR", help="write identities / channels / examined-fields templates and exit")
+
+
+def lb_valid_masks() -> tuple:
+    from . import legacy_bridge as lb
+    return lb.VALID_MASKS
 
 
 def _p(*a) -> None:
@@ -89,13 +99,17 @@ def run(args, data_dir: str) -> int:
         acknowledge_field_equals_counter_plus_one=args.acknowledge_field_equals_counter_plus_one,
         acknowledge_lab_csv_field_numbering=args.acknowledge_lab_csv_field_numbering, seed=args.seed,
         fractions=_fractions(args.fractions), level=args.level, downscale=args.downscale, normaliser=args.normaliser,
-        batch_size=args.batch_size, epochs=args.epochs, workers=args.workers, created_at=args.created_at)
+        batch_size=args.batch_size, epochs=args.epochs, workers=args.workers, created_at=args.created_at,
+        valid_mask=args.valid_mask)
     out = lb.import_legacy(data_dir, args.input, opts, channel_map=args.channel_map, identity_map=args.identity_map,
                            examined_fields=args.examined_fields, lab_csv=[Path(p) for p in args.lab_csv],
                            lab_series=args.lab_series, dry_run=args.dry_run, resume=not args.no_resume, say=_p)
     if args.dry_run:
         for line in format_report(out, data_dir):
             _p(line)
+        return 0
+    if out.already_imported:
+        _p(f"already imported as {out.already_imported}")
         return 0
     _p(f"import summary: {out.plan.summary['fields']['eligible_examined_fields']} examined (field, page) tuple(s) used, "
        f"{out.plan.summary['fields']['excluded_unproven']} excluded because examination could not be proven")
@@ -121,7 +135,13 @@ def format_report(out, data_dir) -> list[str]:
     ad("IMPORT-LEGACY DRY RUN - nothing was written (no staging directory, no snapshot)")
     ad("=" * 78)
     ad(f"mode: {s['mode']}   downscale: {s['options']['downscale']}   normaliser: {s['options']['normaliser']}   "
-       f"valid mask for page lo/hi: {s['options']['valid_mask']}")
+       f"valid mask for page lo/hi: {s['options']['valid_mask']}"
+       + ("" if s['options']['valid_mask'] != "eligible-fields" else "  (NOT the inference mask)"))
+    if s["options"]["valid_mask"] == "chamber":
+        ad("  (chamber detection reads the pixels: it runs at import time; files without a chamber fall back to the union of all "
+           "grid cells and are recorded per source in import_summary.valid_mask)")
+    for sk in s["tiffs"].get("skipped_links", []):
+        ad(f"  SKIPPED link {sk['path']}: {sk['reason']}")
     for k, v in s["input_files"].items():
         if v:
             for f in (v if isinstance(v, list) else [v]):

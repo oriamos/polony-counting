@@ -253,6 +253,7 @@ class _Extract:
     # fill ``src.page_normalization`` / ``cand.norm`` and append to ``late_warnings``); ``release`` frees what it loaded.
     prepare: Optional[Callable[[], None]] = None
     release: Optional[Callable[[], None]] = None
+    finalize: Optional[Callable[[], None]] = None      # runs once per source after ALL sources are written (summary bookkeeping)
     late_warnings: list = field(default_factory=list)
 
 
@@ -525,12 +526,17 @@ def _csv_text(header: list[str], rows: list[list]) -> str:
     return buf.getvalue()
 
 
+def labels_csv_text(yx: list) -> str:
+    """The exact text of a label CSV (header y,x); its sha256 is the expected ``csv_sha256`` of a planned crop."""
+    return _csv_text(["y", "x"], [[repr(float(y)), repr(float(x))] for y, x in yx])
+
+
 def write_crop_files(dirpath: Path, crop_id: str, image: np.ndarray, yx: list) -> tuple[str, str]:
     """Write ``<id>.tif`` (original dtype, single page, uncompressed) and ``<id>.csv`` (columns y,x)."""
     dirpath.mkdir(parents=True, exist_ok=True)
     tif = dirpath / f"{crop_id}.tif"
     tifffile.imwrite(str(tif), image, photometric="minisblack", metadata=None, software=False)
-    txt = _csv_text(["y", "x"], [[repr(float(y)), repr(float(x))] for y, x in yx])
+    txt = labels_csv_text(yx)
     (dirpath / f"{crop_id}.csv").write_text(txt, encoding="utf-8", newline="")
     return sha256_file(tif), sha256_file(dirpath / f"{crop_id}.csv")
 
@@ -763,18 +769,40 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
             return (stage / ".done" / f"{safe_id(e.src.analysis_id)}.json") if (resume and stage is not None) else None
 
         def reuse_marker(e, split) -> Optional[list[CropRecord]]:
+            """A finished source of an interrupted run is reused ONLY if everything the marker claims is re-derived from the
+            current plan: same resume key (inputs, options, code), the expected label CSV bytes (recomputed from the planned
+            labels), every planned record field (box, labels, page, role, source sha, split, group, normaliser, provenance),
+            the sha256 of both files on disk, and a readable single-page TIFF of the planned shape and dtype. Hashes written
+            in the marker alone are never trusted."""
             mp = marker_path(e)
             if mp is None or not mp.is_file():
                 return None
             try:
                 m = json.loads(mp.read_text(encoding="utf-8"))
+                if m.get("resume_key") != resume_key:
+                    return None
                 recs = [CropRecord.model_validate(x) for x in m["crops"]]
                 if [r.crop_id for r in recs] != [cid_of[id(c)] for c in e.cands] or any(r.split != split for r in recs):
                     return None
-                for r in recs:
-                    if sha256_file(stage / r.path_tif) != r.tif_sha256 or sha256_file(stage / r.path_csv) != r.csv_sha256:
+                norms = m.get("page_normalization", {})
+                for r, c in zip(recs, e.cands):
+                    expected_csv = sha256_bytes(labels_csv_text(c.points).encode("utf-8"))
+                    if r.csv_sha256 != expected_csv or sha256_file(stage / r.path_csv) != expected_csv:
                         return None
-                e.src.page_normalization = m.get("page_normalization", {})
+                    if sha256_file(stage / r.path_tif) != r.tif_sha256:
+                        return None
+                    nb = norms.get(c.role) or {}
+                    if r.norm_lo != nb.get("lo") or r.norm_hi != nb.get("hi"):
+                        return None
+                    want = make_rec(e, c, split, r.tif_sha256, r.csv_sha256).model_copy(
+                        update={"norm_lo": r.norm_lo, "norm_hi": r.norm_hi})
+                    if want.model_dump(mode="json") != r.model_dump(mode="json"):
+                        return None
+                    with tifffile.TiffFile(str(stage / r.path_tif)) as tf:
+                        sr = tf.series[0]
+                        if len(tf.pages) != 1 or tuple(sr.shape) != tuple(want.shape_hw) or str(np.dtype(sr.dtype)) != want.dtype:
+                            return None
+                e.src.page_normalization = norms
                 e.late_warnings += list(m.get("late_warnings", []))
                 return recs
             except Exception:  # a damaged marker is never trusted: the source is simply written again
@@ -805,7 +833,7 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
                     e.release()
             mp = marker_path(e)
             if mp is not None:
-                atomic_write_text(mp, pretty_json({"crops": [r.model_dump(mode="json") for r in recs],
+                atomic_write_text(mp, pretty_json({"resume_key": resume_key, "crops": [r.model_dump(mode="json") for r in recs],
                                                    "page_normalization": e.src.page_normalization,
                                                    "late_warnings": e.late_warnings[n_late:]}))
             return recs
@@ -835,6 +863,9 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
                 if will_write and done_crops >= next_report:
                     say(f"  {done_crops}/{total_crops} crops written")
                     next_report = done_crops + progress_every
+        for e in exts:
+            if e.finalize is not None:
+                e.finalize()
         for e in exts:
             warnings += [w for w in e.late_warnings if w not in warnings]
         for e in with_crops:
@@ -898,7 +929,11 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
                 if r["status"] not in ("raw_proposal", "dropped"):
                     for c in mine:
                         x0, y0, x1, y1 = c.box_reference_frame
-                        if c.channel_role == r["role"] and x0 <= r["x"] < x1 and y0 <= r["y"] < y1:
+                        if r.get("footprint_cell"):      # bridge rows: the cell was assigned by pixel footprint already
+                            if c.channel_role == r["role"] and c.region_id == r.get("region_id"):
+                                cid = c.crop_id
+                                break
+                        elif c.channel_role == r["role"] and x0 <= r["x"] < x1 and y0 <= r["y"] < y1:
                             cid = c.crop_id
                             break
                 dy, dx = _shift_for_rows(e, r["role"])
@@ -1009,6 +1044,8 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
         manifest.version = version
         final = snapshot_path(data_dir, version)
         if final.exists():
+            if stage is not None:
+                shutil.rmtree(stage, ignore_errors=True)      # nothing to resume: the identical snapshot is published
             raise MLError(f"snapshot {version} already exists at {final}: an identical snapshot was built before. "
                           "Snapshots are immutable and are never overwritten.")
         if dry_run:
@@ -1080,9 +1117,15 @@ def split_report(data_dir: str | Path, version: str) -> dict:
             "locked": m.test_lock}
 
 
+ACK_ASSUMPTIONS = ("acknowledge_no_counters", "acknowledge_field_equals_counter_plus_one", "acknowledge_lab_csv_field_numbering")
+
+
 def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, reason: str = "",
-                  allow_unconfirmed_identity: bool = False) -> dict:
-    """Freeze the test groups of snapshot ``version`` (``test_lock.json``)."""
+                  allow_unconfirmed_identity: bool = False, allow_acknowledged_assumptions: bool = False) -> dict:
+    """Freeze the test groups of snapshot ``version`` (``test_lock.json``). The overrides the snapshot was built with are
+    recorded in the lock. A snapshot built with an ``--acknowledge-*`` assumption (counter-less marks, field N = counter N-1,
+    lab-CSV numbering) is REFUSED unless ``allow_acknowledged_assumptions`` is given: a permanent test set must not rest on an
+    unverified reading of the data."""
     from .splits import SourceInfo, _record, group_key, write_lock
 
     m = load_manifest(data_dir, version)
@@ -1095,6 +1138,16 @@ def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, 
     if m.splits.get("unconfirmed_identity") and not allow_unconfirmed_identity:
         raise MLError("the test groups of this snapshot rest on UNCONFIRMED (file-name-inferred) identities; confirm "
                       "them (--identity-map) and rebuild, or pass --allow-unconfirmed-identity to lock anyway")
+    used = (m.import_summary or {}).get("options") or {}
+    acks = [k for k in ACK_ASSUMPTIONS if used.get(k)]
+    if acks and not allow_acknowledged_assumptions:
+        raise MLError(f"snapshot {version} was built with {', '.join('--' + k.replace('_', '-') for k in acks)}: the test set would "
+                      "rest on an assumption the operator acknowledged but nobody verified. Rebuild without it, or pass "
+                      "--allow-acknowledged-assumptions-in-test-lock to lock anyway (recorded in the lock).")
+    overrides = {"snapshot_options": {k: bool(used.get(k)) for k in (*ACK_ASSUMPTIONS, "allow_unconfirmed_identity")},
+                 "allow_unconfirmed_identity_flag": bool(allow_unconfirmed_identity),
+                 "allow_acknowledged_assumptions_flag": bool(allow_acknowledged_assumptions),
+                 "snapshot_built_with_allow_unconfirmed_identity": bool((m.options or {}).get("allow_unconfirmed_identity"))}
     if m.test_lock and not replace:
         raise MLError(f"snapshot {version} was itself built on a locked test set ({m.test_lock.get('snapshot')}); "
                       "to re-lock use --replace-lock --reason ...")
@@ -1107,8 +1160,10 @@ def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, 
         rec = _record(info, s.identity or {"source": "unknown", "confirmed": False}, None)
         imgs.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": rec.sha256,
                      "file_sha256s": sorted(s.tiff_sha256.values()), "group": s.group_id,
+                     "identity": {"specimen_id": rec.specimen_id, "slide_id": rec.slide_id, "assay": rec.assay},
                      "keys": {"specimen": group_key(rec, "specimen"), "slide": group_key(rec, "slide"),
                               "source_image": group_key(rec, "source_image")}})
     groups = sorted({c.group_id for c in test_crops})
     return write_lock(data_dir, snapshot=version, test_content_sha256=test_content_hash(m.crops), groups=groups, images=imgs,
-                      level=m.splits.get("level") or "auto", seed=int(m.splits.get("seed") or 0), replace=replace, reason=reason)
+                      level=m.splits.get("level") or "auto", seed=int(m.splits.get("seed") or 0), replace=replace, reason=reason,
+                      overrides=overrides)

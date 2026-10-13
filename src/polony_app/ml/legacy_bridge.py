@@ -44,11 +44,14 @@ Phases
 from __future__ import annotations
 
 import csv
+import difflib
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import re
+import shutil
 import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -79,8 +82,15 @@ Say = Callable[[str], None]
 CHANNEL_SCHEMA = "polony-channel-map"
 CHANNEL_VERSION = 1
 KIND = "legacy_imagej"
-VALID_MASK = "eligible-fields"
+VALID_MASKS = ("chamber", "grid-cells", "eligible-fields")
+DEFAULT_VALID_MASK = "chamber"
+CHAMBER_RIM_PX = 40                      # the app's default rim for the automatic chamber (api AutoChamberBody.rim_px)
+# bump when the labelling / eligibility / normalisation logic changes: part of the resume key, so a staging directory left by
+# other logic is never resumed (the source text of this module, dataset.py and common.py is hashed as well)
+LOGIC_VERSION = 2
 STRADDLE_REASON = "only straddling points from another counter"
+PLANE_CONFLICT_REASON = ("a mark without a usable plane (ImageJ position 0 / missing / beyond the file's planes) lies in this "
+                         "cell: its polony may belong to any page, so no page of the cell can be proven examined or zero")
 COORDINATE_FRAME = ("ImageJ ROI points (pixel-edge frame; sub-pixel ROIs: canonical = imagej - 0.5, integer ROIs: pixel index) "
                     "in canonical image pixel coordinates (pixel centre = integer, x = column, y = row); label CSV 'y,x' relative "
                     "to the top-left pixel of the exported native-resolution crop (box_xyxy)")
@@ -127,6 +137,7 @@ class BridgeOptions:
     workers: int = 1
     created_at: Optional[str] = None
     duplicate_tol_px: float = 1.0
+    valid_mask: str = DEFAULT_VALID_MASK
 
     def check(self) -> "BridgeOptions":
         if self.mode not in ex.MODES:
@@ -134,6 +145,8 @@ class BridgeOptions:
                           "cells as negatives")
         self.downscale = check_downscale(self.downscale)
         self.normaliser = check_normaliser(self.normaliser)
+        if self.valid_mask not in VALID_MASKS:
+            raise MLError(f"--valid-mask must be one of {list(VALID_MASKS)} (got {self.valid_mask!r})")
         self.workers = max(1, int(self.workers))
         if self.batch_size < 1 or self.epochs < 1:
             raise MLError("--batch-size and --epochs must be >= 1")
@@ -148,7 +161,8 @@ class BridgeOptions:
                 "seed": self.seed, "fractions": self.fractions, "level": self.level, "downscale": self.downscale,
                 "normaliser": self.normaliser, "percentiles": [float(p) for p in self.percentiles],
                 "min_crop_px": self.min_crop_px, "batch_size": self.batch_size, "epochs": self.epochs,
-                "valid_mask": VALID_MASK, "duplicate_tol_px": self.duplicate_tol_px}
+                "valid_mask": self.valid_mask, "chamber_rim_px": CHAMBER_RIM_PX,
+                "duplicate_tol_px": self.duplicate_tol_px}
 
 
 # ---------------------------------------------------------------------------------------------- file helpers
@@ -163,22 +177,47 @@ def sha256_stream(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def discover_tiffs(root: Path) -> list[tuple[str, Path]]:
+def discover_tiffs(root: Path, skipped: Optional[list] = None) -> list[tuple[str, Path]]:
     """[(relative posix path, path)] of every .tif/.tiff below ``root``: sorted, dot-directories and dot-files skipped,
-    symlinked directories not followed, archives never opened."""
+    symlinked directories not followed, symlinked FILES whose target lies outside ``root`` skipped, archives never opened.
+    Every skipped link is appended to ``skipped`` (when given) as ``(relative path, reason)``."""
     root = Path(root)
     if root.is_file():
         return [(root.name, root)] if root.suffix.lower() in (".tif", ".tiff") else []
     out: list[tuple[str, Path]] = []
+    real_root = Path(os.path.realpath(root))
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        keep = []
+        for d in sorted(dirnames):
+            if d.startswith("."):
+                continue
+            if (Path(dirpath) / d).is_symlink():
+                if skipped is not None:
+                    skipped.append(((Path(dirpath) / d).relative_to(root).as_posix(),
+                                    "symlinked directory: not followed"))
+                continue
+            keep.append(d)
+        dirnames[:] = keep
         for fn in sorted(filenames):
             if fn.startswith(".") or Path(fn).suffix.lower() not in (".tif", ".tiff"):
                 continue
             if fn.lower().endswith((".tif.zip", ".tiff.zip")):
                 continue
             p = Path(dirpath) / fn
-            out.append((p.relative_to(root).as_posix(), p))
+            rel = p.relative_to(root).as_posix()
+            if p.is_symlink():
+                target = Path(os.path.realpath(p))
+                try:
+                    target.relative_to(real_root)
+                except ValueError:
+                    if skipped is not None:
+                        skipped.append((rel, "symlink resolving outside --input: not imported"))
+                    continue
+                if not target.is_file():
+                    if skipped is not None:
+                        skipped.append((rel, "broken or non-file symlink: not imported"))
+                    continue
+            out.append((rel, p))
     out.sort(key=lambda t: t[0])
     return out
 
@@ -272,6 +311,7 @@ class ScanResult:
     discovered: int
     sources: list                                          # SourceScan, kept (unique) files, sorted by rel path
     aliases: dict                                          # kept rel -> [alias rels]
+    skipped_links: list = field(default_factory=list)      # [(rel, reason)] symlinks that were not followed / imported
 
 
 def _header(path: Path) -> dict:
@@ -308,6 +348,37 @@ def _info_hint(path: Path) -> Optional[str]:
 def _clean(msg: str, path: Path, rel: str) -> str:
     """Error texts must not embed absolute paths (the manifest is location independent)."""
     return msg.replace(str(path), rel).replace(str(path.parent), "<dir>")
+
+
+def pixel_footprint_cells(x, y, xs, ys, pstatus) -> np.ndarray:
+    """Cell index (row * n_cols + col) of every mark, -1 = outside the grid / unusable.
+
+    A mark belongs to the cell whose integer PIXEL footprint (``pixel_box`` of the cell rectangle, i.e. the pixels whose centres
+    lie in the cell) contains the pixel the mark rounds to (``floor(x + 0.5)``; pixel centres are integers). The footprints of
+    neighbouring cells tile the pixel grid exactly, so a mark is never inside one crop's pixels while counted for another
+    cell, also on a fractional grid. Out-of-bounds marks (pstatus 2) have no cell."""
+    n = len(x)
+    out = np.full(n, -1, np.int64)
+    if len(xs) < 2 or len(ys) < 2 or n == 0:
+        return out
+    ex_ = np.array([math.ceil(float(v) - 0.5) for v in xs], np.int64)
+    ey_ = np.array([math.ceil(float(v) - 0.5) for v in ys], np.int64)
+    nc, nr = len(xs) - 1, len(ys) - 1
+    fx, fy = np.asarray(x, float), np.asarray(y, float)
+    for k in range(n):
+        if pstatus[k] == 2 or not (np.isfinite(fx[k]) and np.isfinite(fy[k])):
+            continue
+        ix, iy = int(math.floor(fx[k] + 0.5)), int(math.floor(fy[k] + 0.5))
+        c = int(np.searchsorted(ex_, ix, side="right")) - 1
+        r = int(np.searchsorted(ey_, iy, side="right")) - 1
+        if 0 <= c < nc and 0 <= r < nr and ix < ex_[c + 1] and iy < ey_[r + 1]:
+            out[k] = r * nc + c
+    return out
+
+
+def pixel_of(v: float) -> int:
+    """The pixel a canonical coordinate falls in (pixel centres are integers)."""
+    return int(math.floor(float(v) + 0.5))
 
 
 def _scan_one(rel: str, path: Path, sha: str, source_id: str, opts: BridgeOptions) -> SourceScan:
@@ -370,19 +441,17 @@ def _scan_one(rel: str, path: Path, sha: str, source_id: str, opts: BridgeOption
     sc.counter = np.array([-1 if p.counter is None else int(p.counter) for p in pts], np.int32)
     sc.page = np.array([-1 if p.page is None else int(p.page) for p in pts], np.int32)
     sc.pstatus = np.array([_PSTATUS[p.status.value] for p in pts], np.int8)
-    cells = np.full(n, -1, np.int64)
-    for k, p in enumerate(pts):
-        if p.field_id:
-            m = _ID_RE.search(p.field_id)
-            cells[k] = int(m.group(1)) * nc + int(m.group(2))
-    sc.cell = cells
+    sc.cell = pixel_footprint_cells(sc.x, sc.y, sc.xs, sc.ys, sc.pstatus)
     sc.object_ids = [f"{p.roi_index}:{p.point_index}" for p in pts]
-    for f in fields:
-        idx = f.grid_row * nc + f.grid_col
-        if f.counters:
-            sc.cell_counters[idx] = [int(c) for c in f.counters]
-            for c in f.counters:
-                sc.counter_cell[int(c)] = idx
+    # a counter's field = the cell holding most of its (ok) marks; ties go to the first cell met (as the importer does)
+    counter_cells: dict[int, Counter] = defaultdict(Counter)
+    for k in range(n):
+        if sc.pstatus[k] == 0 and sc.counter[k] >= 0 and sc.cell[k] >= 0:
+            counter_cells[int(sc.counter[k])][int(sc.cell[k])] += 1
+    for ctr, cnt in sorted(counter_cells.items()):
+        cell = cnt.most_common(1)[0][0]
+        sc.counter_cell[ctr] = cell
+        sc.cell_counters.setdefault(cell, []).append(ctr)
     sc.notes = [(w.code, w.message) for w in warn.items if w.severity.value != "info"][:20]
     return sc
 
@@ -391,8 +460,11 @@ def scan_tree(root: Path, opts: BridgeOptions, say: Say = print, *, progress_eve
     """Phase A. Streams every file once for its sha256, drops byte-identical copies (first path in sorted order wins), reads
     headers and ROI blobs. Never reads pixel planes."""
     root = Path(root)
-    files = discover_tiffs(root)
+    skipped_links: list = []
+    files = discover_tiffs(root, skipped_links)
     say(f"discovered {len(files)} TIFF file(s) under {root}")
+    for rel, why in skipped_links:
+        say(f"  SKIPPED {rel}: {why}")
     kept: dict[str, SourceScan] = {}
     aliases: dict[str, list] = {}
     ids: dict[str, str] = {}            # id -> sha256 (collision guard)
@@ -411,7 +483,8 @@ def scan_tree(root: Path, opts: BridgeOptions, say: Say = print, *, progress_eve
         if progress_every and n % progress_every == 0:
             say(f"  scanned {n}/{len(files)} file(s)")
     sources = sorted(kept.values(), key=lambda s: s.rel)
-    return ScanResult(root=root, discovered=len(files), sources=sources, aliases=aliases)
+    return ScanResult(root=root, discovered=len(files), sources=sources, aliases=aliases,
+                      skipped_links=sorted(skipped_links))
 
 
 # ---------------------------------------------------------------------------------------------- channel map
@@ -424,7 +497,7 @@ class ChannelMap:
     source_of_truth: str
     defaults: list                  # [(id, pages)]
     rules: list                     # [(id, match, pages)]
-    files: dict                     # rel path -> pages
+    files: dict                     # rel path -> pages (keys exactly as written: checked against the scanned files)
 
     def describe(self) -> dict:
         return {"name": None if self.path is None else Path(self.path).name, "sha256": self.sha256,
@@ -433,6 +506,17 @@ class ChannelMap:
 
 
 _MATCH_KEYS = ("glob", "assay", "sha256", "specimen_id", "slide_id")
+
+
+_PAGE_KEYS = ("role", "train")
+
+
+def _unknown_keys(d: dict, allowed: Iterable[str], where: str, *, comments: bool = False) -> None:
+    """Typos are errors: an unknown key (``trian``) must never be silently ignored. Keys starting with '_' are comments when
+    ``comments`` is true (top level only)."""
+    bad = sorted(str(k) for k in d if k not in allowed and not (comments and str(k).startswith("_")))
+    if bad:
+        raise MLError(f"channel map: {where}: unknown key(s) {bad}; allowed: {sorted(allowed)}")
 
 
 def _pages_block(raw, where: str) -> dict:
@@ -444,12 +528,16 @@ def _pages_block(raw, where: str) -> dict:
         if not str(k).isdigit():
             raise MLError(f"channel map: {where}: page keys are 0-based integers, got {k!r}")
         if not isinstance(v, dict):
-            raise MLError(f"channel map: {where}: page {k} must be an object with 'role' (and optional 'train')")
+            raise MLError(f"channel map: {where}: page {k} must be an object with 'role' and 'train'")
+        _unknown_keys(v, _PAGE_KEYS, f"{where}: page {k}")
         role = v.get("role")
         if not isinstance(role, str) or not role.strip():
             raise MLError(f"channel map: {where}: page {k} has no role (got {role!r}). The map must state, for every page, what "
                           "it shows (e.g. 'red'); roles are never inferred. Fill in the template.")
-        train = v.get("train", True)
+        if "train" not in v:
+            raise MLError(f"channel map: {where}: page {k} has no 'train'. State explicitly whether this page is trained on "
+                          "(true) or not (false); there is no default.")
+        train = v["train"]
         if not isinstance(train, bool):
             raise MLError(f"channel map: {where}: page {k}: 'train' must be true or false (got {train!r})")
         role = role.strip()
@@ -472,6 +560,8 @@ def load_channel_map(path: str | Path) -> ChannelMap:
         raise MLError(f"channel map {p}: 'schema' must be '{CHANNEL_SCHEMA}'")
     if d.get("version") != CHANNEL_VERSION:
         raise MLError(f"channel map {p}: unsupported version {d.get('version')!r} (supported: {CHANNEL_VERSION})")
+    _unknown_keys(d, ("schema", "version", "confirmed_by", "confirmed_on", "source_of_truth", "defaults", "rules", "files"),
+                  f"{p}", comments=True)
     if not str(d.get("confirmed_by") or "").strip():
         raise MLError(f"channel map {p}: 'confirmed_by' is empty. A channel map is the researcher's statement of what each page "
                       "shows; fill in who confirmed this mapping and on what basis ('confirmed_by', 'confirmed_on', 'source_of_truth').")
@@ -485,9 +575,12 @@ def load_channel_map(path: str | Path) -> ChannelMap:
         for k, it in enumerate(items):
             if not isinstance(it, dict):
                 raise MLError(f"channel map {p}: defaults[{k}] must be an object")
+            _unknown_keys(it, ("id", "pages"), f"defaults[{k}]")
             defaults.append((str(it.get("id") or f"default{k}"), _pages_block(it.get("pages"), f"defaults[{k}]")))
     rules, seen = [], set()
     for k, r in enumerate(d.get("rules") or []):
+        if isinstance(r, dict):
+            _unknown_keys(r, ("id", "match", "pages"), f"rules[{k}]")
         rid = str(r.get("id") or "").strip() if isinstance(r, dict) else ""
         if not rid:
             raise MLError(f"channel map {p}: rules[{k}] needs a non-empty 'id' (it is recorded as the origin of the mapping)")
@@ -498,8 +591,11 @@ def load_channel_map(path: str | Path) -> ChannelMap:
         if not isinstance(match, dict) or not match or set(match) - set(_MATCH_KEYS):
             raise MLError(f"channel map {p}: rule '{rid}': 'match' must use only {list(_MATCH_KEYS)} (got {match!r})")
         rules.append((rid, {k2: str(v) for k2, v in match.items()}, _pages_block(r.get("pages"), f"rule '{rid}'")))
-    files = {str(k): _pages_block((v or {}).get("pages") if isinstance(v, dict) else None, f"files['{k}']")
-             for k, v in (d.get("files") or {}).items()}
+    files = {}
+    for k, v in (d.get("files") or {}).items():
+        if isinstance(v, dict):
+            _unknown_keys(v, ("pages",), f"files['{k}']")
+        files[str(k)] = _pages_block(v.get("pages") if isinstance(v, dict) else None, f"files['{k}']")
     if not (defaults or rules or files):
         raise MLError(f"channel map {p}: it defines no defaults, rules or files")
     return ChannelMap(p, sha256_bytes(raw), str(d["confirmed_by"]), str(d.get("confirmed_on") or ""),
@@ -552,6 +648,33 @@ def resolve_mapping(cm: ChannelMap, sc: SourceScan) -> Optional[tuple[dict, str]
     return None
 
 
+def channel_map_unmatched(cm: ChannelMap, scans: list) -> list[str]:
+    """Blocker texts: every ``files`` entry that is not EXACTLY the relative posix path (or byte-identical alias path) of a
+    scanned TIFF, and every rule that matches no scanned TIFF. Nothing is normalised silently: a key such as './a.tif', 'A.tif'
+    or 'sub\\a.tif' that would have fallen through to the default mapping is reported with the nearest existing file."""
+    rels = sorted({r for s in scans for r in [s.rel, *s.alias_paths]})
+    relset = set(rels)
+    out: list[str] = []
+    for key in sorted(cm.files):
+        if key in relset:
+            continue
+        norm = key.replace("\\", "/")
+        while norm.startswith("./"):
+            norm = norm[2:]
+        fold = {r.casefold(): r for r in rels}
+        near = norm if norm in relset else fold.get(norm.casefold())
+        if near is None:
+            cands = difflib.get_close_matches(norm, rels, n=1, cutoff=0.0) or difflib.get_close_matches(
+                Path(norm).name, [Path(r).name for r in rels], n=1, cutoff=0.0)
+            near = next((r for r in rels if Path(r).name == cands[0]), cands[0]) if cands else None
+        out.append(f"channel map files['{key}'] matches no scanned TIFF (it must be the exact relative posix path below --input, "
+                   "no './', no backslashes, same case)" + (f"; nearest existing file: '{near}'" if near else "; no TIFF was scanned"))
+    for rid, match, _pages in cm.rules:
+        if not any(_rule_matches(match, s) for s in scans):
+            out.append(f"channel map rule '{rid}' ({json.dumps(match, sort_keys=True)}) matches no scanned TIFF")
+    return out
+
+
 def _brief(pages: dict) -> str:
     return ", ".join(f"page {k}={v['role']}" for k, v in pages.items())
 
@@ -562,13 +685,37 @@ class IdentityTable:
     path: Optional[Path]
     sha256: str
     rows: list
+    warnings: list = field(default_factory=list)
 
 
 _TRUE = {"1", "true", "yes", "y", "t"}
-_FALSE = {"0", "false", "no", "n", "f", ""}
+_FALSE = {"0", "false", "no", "n", "f"}
 
 
-def load_identity_map(path: str | Path) -> IdentityTable:
+def _idkey(v: Optional[str]) -> Optional[str]:
+    """Grouping/lock key of an identity string: stripped, whitespace-collapsed, case-folded."""
+    return None if v is None else " ".join(str(v).split()).casefold()
+
+
+def _canonicalise(rows: list, key: str) -> list[str]:
+    """Rows whose ``key`` differs only by case/whitespace get ONE spelling (the lexicographically smallest), so replicates
+    spelled 'AM' and 'am' stay in one group. Returns human-readable notes."""
+    clusters: dict[str, set] = defaultdict(set)
+    for r in rows:
+        if r.get(key):
+            clusters[_idkey(r[key])].add(" ".join(r[key].split()))
+    notes = []
+    canon = {k: sorted(v)[0] for k, v in clusters.items()}
+    for k, v in sorted(clusters.items()):
+        if len(v) > 1:
+            notes.append(f"{key} spellings {sorted(v)} differ only by case/spacing: treated as one ('{canon[k]}')")
+    for r in rows:
+        if r.get(key):
+            r[key] = canon[_idkey(r[key])]
+    return notes
+
+
+def load_identity_map(path: str | Path, *, level: str = "auto") -> IdentityTable:
     p = Path(path)
     try:
         raw = p.read_bytes()
@@ -586,26 +733,56 @@ def load_identity_map(path: str | Path) -> IdentityTable:
     for k, r in enumerate(rows):
         if not isinstance(r, dict) or not str(r.get("file") or "").strip():
             raise MLError(f"identity map {p}: row {k + 1} has no 'file'")
-        conf = r.get("confirmed", True)
-        if isinstance(conf, str):
-            s = conf.strip().lower()
-            if s not in _TRUE | _FALSE:
-                raise MLError(f"identity map {p}: row {k + 1}: 'confirmed' must be true/false (got {conf!r})")
-            conf = s in _TRUE if s != "" else True
-        row = {"file": str(r["file"]).strip().replace("\\", "/"), "confirmed": bool(conf)}
+        fname = str(r["file"]).strip()
+        conf = r.get("confirmed")
+        if isinstance(conf, bool):
+            pass
+        elif isinstance(conf, str) and conf.strip().lower() in _TRUE | _FALSE:
+            conf = conf.strip().lower() in _TRUE
+        else:
+            raise MLError(f"identity map {p}: row {k + 1} ({fname}): 'confirmed' must be explicitly true or false (got "
+                          f"{'nothing / an empty cell' if conf is None or conf == '' else repr(conf)}). A missing value is never read as "
+                          "confirmed: set true only for rows you checked against the lab's records.")
+        row = {"file": fname.replace("\\", "/"), "confirmed": bool(conf)}
         for key in ("specimen_id", "slide_id", "scan_session", "assay", "replicate"):
             v = r.get(key)
             row[key] = None if v is None or str(v).strip() == "" else str(v).strip()
         if row["confirmed"] and not (row["specimen_id"] or row["slide_id"]):
             raise MLError(f"identity map {p}: row {k + 1} ({row['file']}) is marked confirmed but has neither specimen_id nor slide_id")
+        if row["confirmed"] and not row["specimen_id"] and level != "slide":
+            raise MLError(f"identity map {p}: row {k + 1} ({row['file']}) is confirmed but has no specimen_id: replicate slides of one "
+                          "specimen could then land in different splits (leakage). Fill in specimen_id, or pass --level slide to "
+                          "state that each slide is an independent unit.")
+        if row["confirmed"] and level == "slide" and not row["slide_id"]:
+            raise MLError(f"identity map {p}: row {k + 1} ({row['file']}): --level slide needs a slide_id on every confirmed row")
         out.append(row)
-    return IdentityTable(p, sha256_bytes(raw), out)
+    notes: list[str] = []
+    confirmed = [r for r in out if r["confirmed"]]
+    for key in ("specimen_id", "slide_id", "assay"):
+        notes += _canonicalise(confirmed, key)
+    # one specimen must not be described with a set assay on one slide and a blank/different one on another: the assay is part
+    # of the grouping key, so the replicates would silently be split apart
+    by_spec: dict[str, list] = defaultdict(list)
+    for r in confirmed:
+        if r["specimen_id"]:
+            by_spec[_idkey(r["specimen_id"])].append(r)
+    for sk, rs in sorted(by_spec.items()):
+        assays = {r["assay"] for r in rs}
+        if None in assays and len(assays) > 1:
+            blank = sorted(r["file"] for r in rs if not r["assay"])
+            raise MLError(f"identity map {p}: specimen '{rs[0]['specimen_id']}' has an assay on some rows "
+                          f"({sorted(a for a in assays if a)}) and none on others ({blank}); the assay is part of the grouping key, so "
+                          "its replicate slides would land in different groups. Fill in the same assay on every row of the specimen "
+                          "(or clear it everywhere).")
+        if len(assays - {None}) > 1:
+            notes.append(f"specimen '{rs[0]['specimen_id']}' appears with different assays {sorted(assays)}: kept as separate groups")
+    return IdentityTable(p, sha256_bytes(raw), out, notes)
 
 
 def apply_identity_map(table: Optional[IdentityTable], scans: list) -> tuple[dict, dict]:
     """(identity_map {source_id: {...}} for ``ml.splits``, report). Only rows marked confirmed enter the map."""
     report = {"rows": 0, "matched": 0, "unconfirmed_rows": [], "ambiguous_basename": [], "missing_on_disk": [],
-              "unlisted_files": [], "conflicting_rows": []}
+              "unlisted_files": [], "conflicting_rows": [], "normalisation_notes": list(table.warnings) if table else []}
     if table is None:
         report["unlisted_files"] = [s.rel for s in scans]
         return {}, report
@@ -822,6 +999,16 @@ def classify_source(sc: SourceScan, pages: Iterable[int], *, mode: str, manifest
     :func:`polony_app.fields.examined.classify`. ``entries`` = {(page, cell): FieldEntry | None(=clash)}."""
     out: dict = {}
     n = sc.n_points
+    # usable marks whose plane is unspecified (ImageJ position 0 = "all planes" / missing) or beyond the file's planes: their
+    # polony may belong to ANY page, so every (page, cell) tuple of a cell holding one is a CONFLICT (never a verified zero,
+    # never a crop with that polony unlabelled inside it)
+    unplaced: dict[int, int] = defaultdict(int)
+    for i in range(n):
+        if sc.pstatus[i] != 0 or int(sc.cell[i]) < 0:
+            continue
+        pg = int(sc.page[i])
+        if pg < 0 or pg >= sc.n_planes:
+            unplaced[int(sc.cell[i])] += 1
     for page in pages:
         own: dict[int, list] = defaultdict(list)
         stray: dict[int, list] = defaultdict(list)
@@ -840,6 +1027,11 @@ def classify_source(sc: SourceScan, pages: Iterable[int], *, mode: str, manifest
             if owner is not None and owner != c:
                 extra[owner].append(i)
         for cell in range(sc.n_cells):
+            if cell in unplaced:
+                out[(page, cell)] = TupleResult(
+                    page, cell, ex.Examination(ex.CONFLICT, unplaced[cell], (), "", PLANE_CONFLICT_REASON), unplaced[cell],
+                    [], 0)
+                continue
             o, s, e = own.get(cell, []), stray.get(cell, []), extra.get(cell, [])
             has_entry = (page, cell) in entries
             entry = entries.get((page, cell))
@@ -884,6 +1076,10 @@ class _PlaneCache:
                 self.planes[page] = a
             return self.planes[page]
 
+    def drop(self, page: int) -> None:
+        with self.lock:
+            self.planes.pop(page, None)
+
     def release(self) -> None:
         with self.lock:
             self.planes.clear()
@@ -919,9 +1115,43 @@ def _assumptions_for(opts: BridgeOptions, sc: SourceScan, n_no_counter: int) -> 
     return a
 
 
+VALID_MASK_TEXT = {
+    "chamber": ("the app's automatic chamber (imaging.chamber.auto_chamber, rim 40 px, all planes of the file) as one counting "
+                "region -> detection.masks.build_valid_mask; saturated pixels excluded: the SAME mask the app uses at inference"),
+    "grid-cells": "union of ALL grid cells of the file (fallback when no chamber is found, or --valid-mask grid-cells)",
+    "eligible-fields": ("union of the pixel boxes of the researcher-examined fields on this page (--valid-mask eligible-fields; "
+                        "NOT the inference mask: a biased, marked-only subset)")}
+
+
+def grid_cells_mask(shape_hw: tuple, boxes: Iterable[tuple]) -> np.ndarray:
+    valid = np.zeros(shape_hw, bool)
+    for x0, y0, x1, y1 in boxes:
+        valid[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] = True
+    return valid
+
+
+def chamber_valid_mask(planes: Sequence[np.ndarray]) -> tuple:
+    """(mask | None, 'chamber' | 'grid-cells', why-not, extra info) exactly as the app's auto chamber -> counting region ->
+    ``build_valid_mask``. ``mask`` is None (and 'grid-cells' returned) when no chamber could be found."""
+    from polony_app.detection.masks import build_valid_mask
+    from polony_app.imaging import chamber as chm
+    try:
+        res = chm.auto_chamber(list(planes), CHAMBER_RIM_PX)
+    except chm.ChamberError as exc:
+        return None, "grid-cells", str(exc), {}
+    region = schemas.Region(id="chamber", kind=schemas.RegionKind.counting, name="automatic chamber",
+                            polygon=[(float(px), float(py)) for px, py in res["polygon"]])
+    mask = build_valid_mask(tuple(planes[0].shape), [region])
+    if not mask.any():
+        return None, "grid-cells", "the automatic chamber polygon covers no pixel", {}
+    return mask, "chamber", None, {"chamber_area_px2": float(res["area_px2"]), "chamber_mask_channel_index": int(res["mask_channel_index"]),
+                                    "chamber_polygon_vertices": len(res["polygon"])}
+
+
 def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions, manifest: Optional[ex.ExaminedManifest],
-                page_entries: dict, ident: dict, identity_map_given: bool) -> SourcePlan:
+                page_entries: dict, ident: dict, identity_map_given: bool, valid_mask_report: Optional[dict] = None) -> SourcePlan:
     """Phase C for one source: eligibility, labels, crop candidates (lazy) and the points / regions rows."""
+    valid_mask_report = {} if valid_mask_report is None else valid_mask_report
     train_pages = sorted(p for p, v in pages.items() if v["train"])
     entries, unresolved = resolve_entries(sc, page_entries, opts)
     tuples = classify_source(sc, train_pages, mode=opts.mode, manifest=manifest, entries=entries)
@@ -979,7 +1209,7 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
         pos, edge = [], 0
         for i in tr.labels:
             cx, cy = float(sc.x[i]) - bx0, float(sc.y[i]) - by0
-            if -0.5 <= cx < w - 0.5 and -0.5 <= cy < h - 0.5:
+            if bx0 <= pixel_of(sc.x[i]) < bx1 and by0 <= pixel_of(sc.y[i]) < by1:
                 pos.append((cy, cx, sc.object_ids[i]))
                 label_cell[i] = ("label", cell)
             else:
@@ -1000,7 +1230,8 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
             "grid_row": int(r), "grid_col": int(c), "field_id": f"{sc.source_id}:{rname}",
             "cell_polygon_canonical": [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]],
             "coordinate_frame": COORDINATE_FRAME, "n_points_dropped_edge": int(edge),
-            "n_labels_from_other_counters": int(tr.n_stray), "assumptions": list(assumptions),
+            "n_labels_from_other_counters": int(tr.n_stray), "n_labels": len(tr.labels), "stated_count": e.stated_count,
+            "assumptions": list(assumptions),
             "alias_paths": list(sc.alias_paths), "mode": opts.mode}
         region = schemas.Region(id=rname, kind=schemas.RegionKind.counting, name=f"field {rname}",
                                 field_index=(counters[0] + 1 if len(counters) == 1 else None),
@@ -1042,6 +1273,8 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
             reason = "outside_grid"
         elif pg < 0:
             reason = "plane_unspecified"
+        elif pg >= sc.n_planes:
+            reason = "plane_out_of_range"
         elif pg not in role_of:
             reason = "page_not_trained" if pg in pages else "page_unmapped"
         elif i in label_cell:
@@ -1063,7 +1296,7 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
                          "x": float(sc.x[i]), "y": float(sc.y[i]), "status": status,
                          "basis": LABEL_BASIS if status == "confirmed" else f"dropped:{reason}", "cls": "",
                          "origin": SOURCE_ORIGIN, "region_id": (sc.cell_name(cl) if cl >= 0 else None),
-                         "consensus_status": None})
+                         "consensus_status": None, "footprint_cell": True})
 
     if not cands:
         why = (R_NO_ELIGIBLE, "no (field, page) tuple of this file is proven examined (" + "; ".join(
@@ -1071,23 +1304,46 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
         src.skipped = f"{why[0]}: {why[1]}"
         ext.warnings.append(f"{sc.rel}: skipped - {src.skipped}")
 
-    # ---- hooks: read each page plane once, page normalisation on the eligible fields only, then release
+    # ---- hooks: read each page plane once, page normalisation over the app's valid mask, then release
     boxes_by_page: dict[int, list] = defaultdict(list)
     for (page, cell), tr in tuples.items():
         if tr.exam.researcher_examined:
             boxes_by_page[page].append(pixel_box(sc.cell_rect(cell)))
+    all_boxes = [pixel_box(sc.cell_rect(cell)) for cell in range(sc.n_cells)]
 
     def prepare() -> None:
+        """Statistics only (no label and no test-set information enters): lo/hi of every trained page over the SAME valid mask
+        the app uses at inference, computed ONCE per source (planes are read once and released afterwards)."""
+        pages_needed = sorted({c.page for c in cands})
+        mask, used, why, extra = (None, None, None, {})
+        if opts.valid_mask == "chamber":
+            planes = [cache.plane(p) for p in range(sc.n_planes)]
+            mask, used, why, extra = chamber_valid_mask(planes)
+            if used != "chamber":
+                ext.late_warnings.append(f"{sc.rel}: no automatic chamber ({why}); page lo/hi use the union of all "
+                                         "grid cells instead (valid_mask_used = grid-cells)")
+            for p in range(sc.n_planes):
+                if p not in pages_needed:
+                    cache.drop(p)                      # only the planes that become crops stay in memory
+            if used != "chamber":
+                mask = grid_cells_mask((sc.height, sc.width), all_boxes)
+        elif opts.valid_mask == "grid-cells":
+            used = "grid-cells"
+            mask = grid_cells_mask((sc.height, sc.width), all_boxes)
         done: dict[str, dict] = {}
-        for page in sorted({c.page for c in cands}):
+        for page in pages_needed:
             plane = cache.plane(page)
-            valid = np.zeros(plane.shape, bool)
-            for x0, y0, x1, y1 in boxes_by_page[page]:
-                valid[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] = True
+            if opts.valid_mask == "eligible-fields":
+                valid = grid_cells_mask(plane.shape, boxes_by_page[page])
+                used = "eligible-fields"
+            else:
+                valid = mask
             b = page_bounds(plane, valid, opts.percentiles)
             role = role_of[page]
             b.update({"file": sc.rel, "page": int(page), "mode": opts.normaliser, "policy": LO_HI_POLICY,
-                      "valid_mask": "union of the pixel boxes of the researcher-examined fields on this page (eligible-fields)"})
+                      "valid_mask_option": opts.valid_mask, "valid_mask_used": used, "valid_mask_fallback": why,
+                      "valid_mask": VALID_MASK_TEXT[used], "valid_mask_pixels": int(valid.sum())})
+            b.update(extra)
             if b["fallback"]:
                 ext.late_warnings.append(f"{sc.rel} page {page} ({role}): {b['fallback']}")
             done[role] = b
@@ -1096,8 +1352,29 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
                     cd.norm = b
         src.page_normalization = done
 
+    def finalize() -> None:
+        vm = valid_mask_report.setdefault("by_source", {})
+        if src.page_normalization:
+            vm[sc.rel] = {role: {k: b.get(k) for k in ("valid_mask_option", "valid_mask_used", "valid_mask_fallback", "fallback",
+                                                         "lo", "hi", "n_used", "n_valid", "chamber_area_px2")}
+                          for role, b in sorted(src.page_normalization.items())}
+            uc = valid_mask_report.setdefault("used_counts", {})
+            used = sorted({b.get("valid_mask_used") for b in src.page_normalization.values()})
+            for u in used:
+                uc[u] = uc.get(u, 0) + 1
+            for role, b in sorted(src.page_normalization.items()):
+                if b.get("valid_mask_fallback"):
+                    valid_mask_report.setdefault("chamber_fallbacks", []).append(
+                        {"file": sc.rel, "used": b.get("valid_mask_used"), "why": b["valid_mask_fallback"]})
+                    break
+            for role, b in sorted(src.page_normalization.items()):
+                if b.get("fallback"):
+                    valid_mask_report.setdefault("page_bounds_fallbacks", []).append(
+                        {"file": sc.rel, "page": b.get("page"), "role": role, "why": b["fallback"]})
+
     ext.prepare = prepare if cands else None
     ext.release = cache.release
+    ext.finalize = finalize if cands else None
 
     return SourcePlan(scan=sc, ext=ext, tuples=tuples, pages=pages, origin=origin, dropped=dropped,
                       straddling_kept=straddling_kept, n_edge=n_edge_total, skipped=skipped, unresolved_entries=unresolved,
@@ -1140,17 +1417,60 @@ def assert_examined(cands: Iterable) -> None:
             raise MLError("REFUSED to export a crop that is not proven researcher-examined: " + "; ".join(bad))
 
 
+_ZERO_SOURCES = (ex.SRC_SIDECAR_CSV, ex.SRC_SIDECAR_XLSX, ex.SRC_MANIFEST)
+
+
+def _check_consistency(cid: str, prov: dict, n_positive: int, crop_sha: Optional[str], strict: bool = True) -> list[str]:
+    """Status, counts and evidence of one crop must agree (a verified zero with positives, or a positive crop without marks, is
+    a corrupted or hand-edited manifest)."""
+    bad = []
+    status = prov.get("examination_status")
+    marks = prov.get("n_researcher_marks")
+    labels = prov.get("n_labels")
+    edge = prov.get("n_points_dropped_edge") or 0
+    if not isinstance(marks, int) or isinstance(marks, bool):
+        bad.append(f"crop {cid}: n_researcher_marks is not an integer")
+        return bad
+    if labels is not None and n_positive + int(edge) != labels:
+        bad.append(f"crop {cid}: {n_positive} positive(s) + {edge} edge-dropped != {labels} label(s) inside the field")
+    if status == ex.POSITIVE:
+        if marks <= 0:
+            bad.append(f"crop {cid}: positive_marked but n_researcher_marks is {marks}")
+        if n_positive <= 0 and not edge:
+            bad.append(f"crop {cid}: positive_marked but it has no positive label")
+        if ex.SRC_EMBEDDED not in str(prov.get("examination_source") or ""):
+            bad.append(f"crop {cid}: positive_marked but the evidence source is {prov.get('examination_source')!r}, not embedded marks")
+    elif status == ex.VERIFIED_ZERO:
+        if marks != 0 or n_positive != 0 or (labels not in (None, 0)):
+            bad.append(f"crop {cid}: verified_zero but it has {marks} mark(s) / {n_positive} positive(s) / {labels} label(s)")
+        if (strict or "stated_count" in prov) and prov.get("stated_count") != 0:
+            bad.append(f"crop {cid}: verified_zero but no stated zero is recorded (stated_count {prov.get('stated_count')!r})")
+        if not any(k in str(prov.get("examination_source") or "").split("+") for k in _ZERO_SOURCES):
+            bad.append(f"crop {cid}: verified_zero but the evidence source {prov.get('examination_source')!r} is not a sidecar / manifest")
+        if not str(prov.get("evidence") or "").strip():
+            bad.append(f"crop {cid}: verified_zero without a stated evidence text")
+    if crop_sha is not None and prov.get("source_sha256") != crop_sha:
+        bad.append(f"crop {cid}: provenance source_sha256 differs from the crop's source_sha256")
+    return bad
+
+
 def verify_examination_provenance(manifest) -> list[str]:
     """Problems found in the crops of a legacy-import snapshot manifest (empty list = every train / val / test crop is proven
-    researcher-examined). ``manifest`` = SnapshotManifest or its dict. Snapshots that are not legacy imports (no
-    ``import_summary``) are out of scope and return []."""
+    researcher-examined AND its status, counts, evidence and source hash agree). ``manifest`` = SnapshotManifest or its dict.
+    Snapshots that are not legacy imports (no ``import_summary``) are out of scope and return []."""
     d = manifest.model_dump(mode="json") if hasattr(manifest, "model_dump") else dict(manifest)
     summary = d.get("import_summary") or {}
     if summary.get("kind") != KIND:
         return []
     bad: list[str] = []
     for c in d.get("crops", []):
-        bad += _check_prov(c.get("crop_id", "?"), c.get("provenance") or {})
+        cid = c.get("crop_id", "?")
+        prov = c.get("provenance") or {}
+        found = _check_prov(cid, prov)
+        bad += found
+        if not found:
+            bad += _check_consistency(cid, prov, int(c.get("n_positive") or 0), c.get("source_sha256"),
+                                      strict=not c.get("frozen_from"))
     return bad
 
 
@@ -1170,6 +1490,7 @@ class ImportPlan:
     resume_key: str = ""
     n_cands: int = 0
     mapped: bool = True
+    valid_mask_report: dict = field(default_factory=dict)
 
 
 def _identity_of(sc: SourceScan, imap: dict) -> dict:
@@ -1198,7 +1519,7 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
     if examined_fields and lab_csv:
         raise MLError("give ONE examined-fields source: --examined-fields or --lab-csv, not both")
     cm = load_channel_map(channel_map) if channel_map else None
-    table = load_identity_map(identity_map) if identity_map else None
+    table = load_identity_map(identity_map, level=opts.level) if identity_map else None
     man = load_examined(examined_fields) if examined_fields else None
 
     scan = scan_tree(root, opts, say)
@@ -1218,7 +1539,10 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
     if cm is None:
         blockers.append("no --channel-map: which page shows which channel is never inferred; supply a confirmed channel map "
                         "(see --write-templates)")
+    if cm is not None:
+        blockers += channel_map_unmatched(cm, kept)
     exts, plans = [], []
+    valid_mask_report: dict = {"option": opts.valid_mask, "chamber_rim_px": CHAMBER_RIM_PX, "by_source": {}}
     map_origin: Counter = Counter()
     per_file_map: dict = {}
     for sc in kept:
@@ -1245,7 +1569,7 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
         map_origin[origin] += 1
         per_file_map[sc.rel] = {"origin": origin, "pages": {str(p): dict(v) for p, v in pages.items()}}
         sp = plan_source(sc, pages=pages, origin=origin, opts=opts, manifest=man, page_entries=entries_by_src.get(sc.source_id, {}),
-                         ident=sc.identity, identity_map_given=table is not None)
+                         ident=sc.identity, identity_map_given=table is not None, valid_mask_report=valid_mask_report)
         plans.append(sp)
         exts.append(sp.ext)
     # a mapping-less dry run must not look like a plan: nothing can be exported
@@ -1257,7 +1581,7 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
     assert_examined(c for p in plans for c in p.ext.cands)
 
     plan = ImportPlan(scan=scan, opts=opts, exts=exts, plans=plans, summary={}, blockers=blockers, identity_map=imap,
-                      n_cands=n_cands, mapped=mapped)
+                      n_cands=n_cands, mapped=mapped, valid_mask_report=valid_mask_report)
     live = [p for p in plans if p.ext.cands]
     # ---- identity gate (every source with at least one examined tuple; known even before a channel map exists)
     eligible = [p for p in plans if any(t.exam.researcher_examined for t in p.tuples.values())]
@@ -1270,6 +1594,8 @@ def build_plan(root: Path, opts: BridgeOptions, *, channel_map: Optional[Path] =
         blockers.append("no crop can be exported: no (file, field, page) tuple is proven researcher-examined and mapped")
     for k in ("ambiguous_basename", "missing_on_disk", "unlisted_files", "unconfirmed_rows"):
         pass
+    plan.warnings += [f"identity map: {n}" for n in (table.warnings if table else [])]
+    plan.warnings += [f"{rel}: {why}" for rel, why in scan.skipped_links]
     plan.warnings += [w for p in plans for w in p.ext.warnings]
     plan.extra_assumptions = _plan_assumptions(opts, plans, uncon)
     _fill_summary(plan, cm, table, man, lab_info, idrep, man_problems, per_file_map, map_origin, root, examined_fields,
@@ -1389,7 +1715,8 @@ def _fill_summary(plan: ImportPlan, cm, table, man, lab_info, idrep, man_problem
                   "rejected_by_reason": dict(sorted(by_reason.items())),
                   "rejected_files": {s.rel: [c for c, _m in s.reasons] for s in rejected},
                   "rejected_messages": {s.rel: [m for _c, m in s.reasons] for s in rejected},
-                  "deduplicated_paths": {k: sorted(v) for k, v in sorted(scan.aliases.items())}},
+                  "deduplicated_paths": {k: sorted(v) for k, v in sorted(scan.aliases.items())},
+                  "skipped_links": [{"path": r, "reason": w} for r, w in scan.skipped_links]},
         "sources": {"with_crops": len(live), "without_crops": len(plan.plans) - len(live),
                     "without_crops_reasons": {R_NO_ELIGIBLE: len(plan.plans) - len(live)} if len(plan.plans) - len(live) else {}},
         "channel_mappings": {"mapped": cm is not None, "map": (cm.describe() if cm else None),
@@ -1412,16 +1739,34 @@ def _fill_summary(plan: ImportPlan, cm, table, man, lab_info, idrep, man_problem
         "estimates": {"native_disk_bytes": int(disk), "native_disk": ds.fmt_bytes(disk), "training": est_train},
         "identity": {"sources": dict(sorted(id_src.items())), "confirmed": id_conf, "unconfirmed": len(elig) - id_conf,
                      "map": idrep, "allow_unconfirmed_identity": opts.allow_unconfirmed_identity},
+        "valid_mask": plan.valid_mask_report,
         "unresolved_manifest_entries": unres_entries + [{"problem": m} for m in man_problems],
         "lab_csv": lab_info,
         "info_label_check": _info_label_check(plan, per_file_map),
         "assumptions": plan.extra_assumptions,
     }
     plan.summary = _jsonable(summary)
+    plan.summary["valid_mask"] = plan.valid_mask_report       # the SAME object: filled in while the sources are written
+    lock = load_lock(data_dir) if data_dir else None
     key = {"files": sorted((s.rel, s.sha256) for s in kept), "options": {k: v for k, v in opts.public().items()
                                                                           if k not in ("batch_size", "epochs")},
-           "inputs": plan.summary["input_files"], "app": "legacy-bridge-1"}
+           "inputs": plan.summary["input_files"], "app": f"legacy-bridge-{LOGIC_VERSION}", "code": code_fingerprint(),
+           "lock": (lock or {}).get("lock_sha256")}
     plan.resume_key = hash_obj(key)[:20]
+    plan.summary["plan_key"] = plan.resume_key
+
+
+def code_fingerprint() -> str:
+    """sha256 over the source text of the modules that decide labels, eligibility and normalisation (this file, dataset.py,
+    common.py) plus LOGIC_VERSION: part of the resume key, so a staging directory written by other code is never reused."""
+    h = hashlib.sha256(f"logic-{LOGIC_VERSION}".encode())
+    here = Path(__file__).resolve().parent
+    for name in ("legacy_bridge.py", "dataset.py", "common.py"):
+        try:
+            h.update(name.encode() + b"\0" + (here / name).read_bytes())
+        except OSError:           # pragma: no cover (zipped install): fall back to the version constant alone
+            h.update(name.encode() + b"\0-")
+    return h.hexdigest()[:20]
 
 
 def _info_label_check(plan: ImportPlan, per_file_map: dict) -> dict:
@@ -1463,6 +1808,19 @@ class ImportOutcome:
     plan: ImportPlan
     result: Optional[ds.BuildResult]
     blockers: list
+    already_imported: Optional[str] = None       # version of a published snapshot built from this exact plan (nothing written)
+
+
+def find_published(data_dir: Path, plan_key: str) -> Optional[str]:
+    """Version of a published snapshot whose ``import_summary.plan_key`` equals ``plan_key`` and that verifies, else None."""
+    for v in ds.list_snapshots(data_dir):
+        try:
+            m = ds.load_manifest(data_dir, v)
+        except Exception:  # noqa: BLE001 - unreadable snapshots are ignored here (ml verify reports them)
+            continue
+        if (m.import_summary or {}).get("plan_key") == plan_key and not ds.verify_snapshot(data_dir, v):
+            return v
+    return None
 
 
 def import_legacy(data_dir: str | Path, root: str | Path, opts: BridgeOptions, *, channel_map=None, identity_map=None,
@@ -1480,13 +1838,21 @@ def import_legacy(data_dir: str | Path, root: str | Path, opts: BridgeOptions, *
     live = [p.ext for p in plan.plans if p.ext.cands]
     if not live:
         return ImportOutcome(plan, None, list(plan.blockers))
+    if not dry_run:
+        done = find_published(data_dir, plan.resume_key)
+        if done:
+            # identical inputs, options, code and test lock: nothing is rewritten; a staging directory left by an interrupted
+            # run of the SAME plan is obsolete now
+            shutil.rmtree(ds.datasets_dir(data_dir) / f".staging-{ds.safe_id(plan.resume_key)}", ignore_errors=True)
+            say(f"already imported as {done} (identical plan {plan.resume_key}); nothing was written")
+            return ImportOutcome(plan, None, list(plan.blockers), already_imported=done)
     bo = ds.BuildOptions(seed=opts.seed, fractions=opts.fractions, level=opts.level,
                          allow_unconfirmed_identity=opts.allow_unconfirmed_identity or dry_run, roles=tuple(sorted(
                              {c.role for e in live for c in e.cands})), identity_map=plan.identity_map or None,
                          min_crop_px=opts.min_crop_px, created_at=opts.created_at, include_raw=False,
                          downscale=opts.downscale, normaliser=opts.normaliser, percentiles=tuple(opts.percentiles))
     extra_options = {"import_mode": opts.mode,
-                     "legacy_import": {"kind": KIND, "valid_mask": VALID_MASK, "mode": opts.mode,
+                     "legacy_import": {"kind": KIND, "valid_mask": opts.valid_mask, "mode": opts.mode,
                                        "resume_key": plan.resume_key}}
     res = ds.assemble_snapshot(
         data_dir, plan.exts, bo, say=say, dry_run=dry_run, warnings=plan.warnings, extra_options=extra_options,

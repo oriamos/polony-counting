@@ -31,7 +31,7 @@ from .common import (DEFAULT_NORMALISER, LO_HI_POLICY, MLError, check_downscale,
 from .dataset import list_snapshots, load_crop, load_manifest, read_labels_csv, snapshot_path, verify_snapshot
 from .manifest import CropRecord, SnapshotManifest
 from .registry import Registry
-from .splits import load_lock, lock_fingerprint
+from .splits import load_lock, lock_fingerprint, lock_identity_conflicts
 
 Say = Callable[[str], None]
 
@@ -192,7 +192,11 @@ def plan_training(data_dir: str | Path, version: str, opts: TrainOptions) -> Tra
         if leaked:
             raise MLError("REFUSED: training/validation data contains locked test material "
                           f"({len(leaked)} crop(s), e.g. {leaked[:3]}). The locked test set may never be trained on.")
-        checks.append(f"no train/val crop belongs to a locked test group or file (lock {lock_sha[:12]})")
+        ident_bad = lock_identity_conflicts(m, lock)
+        if ident_bad:
+            raise MLError("REFUSED: training/validation data shares a specimen or slide identity with the locked test set "
+                          f"(leakage; nothing was trained): {'; '.join(ident_bad[:3])}")
+        checks.append(f"no train/val crop belongs to a locked test group, file or identity (lock {lock_sha[:12]})")
     else:
         warns.append("no locked test set exists: this candidate can be trained but cannot be promoted until one is locked "
                      "(ml split --snapshot <version> --lock-test)")

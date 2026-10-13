@@ -31,11 +31,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, ValidationError, model_validator
 
 SCHEMA = "polony-examined-fields"
 SCHEMA_VERSION = 1
@@ -63,14 +64,23 @@ class ExaminedError(ValueError):
     """A manifest that cannot be trusted (message is meant for the operator)."""
 
 
+MAX_COUNT = 10 ** 6                    # a stated count above this is a typo, not a count
+MAX_INDEX = 10 ** 6                    # counter / field / row / col
+MAX_MANIFEST_FILE_BYTES = 8 * 1024 * 1024
+MAX_JSON_DEPTH = 32                    # the schema nests 5 levels; anything deeper is not a manifest
+
+
 class FieldEntry(BaseModel):
-    counter: Optional[int] = None
-    field: Optional[int] = None
-    row: Optional[int] = None
-    col: Optional[int] = None
-    count: Optional[int] = Field(default=None, ge=0)
-    counted_zero: bool = False
-    note: str = ""
+    """Strict: integers must be real JSON integers (``true``, ``1.5`` and ``"3"`` are rejected), unknown keys are errors."""
+    model_config = ConfigDict(extra="forbid")
+
+    counter: Optional[StrictInt] = Field(default=None, ge=0, le=MAX_INDEX)
+    field: Optional[StrictInt] = Field(default=None, ge=0, le=MAX_INDEX)
+    row: Optional[StrictInt] = Field(default=None, ge=0, le=MAX_INDEX)
+    col: Optional[StrictInt] = Field(default=None, ge=0, le=MAX_INDEX)
+    count: Optional[StrictInt] = Field(default=None, ge=0, le=MAX_COUNT)
+    counted_zero: StrictBool = False
+    note: StrictStr = ""
 
     @model_validator(mode="after")
     def _check(self):
@@ -99,22 +109,37 @@ class FieldEntry(BaseModel):
 
 
 class FileEntry(BaseModel):
-    file: str
-    sha256: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+    file: StrictStr
+    sha256: Optional[StrictStr] = None
     pages: dict[str, list[FieldEntry]] = {}
+
+    @model_validator(mode="after")
+    def _check(self):
+        if not self.file.strip():
+            raise ValueError("a file entry needs a file name")
+        if self.sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", self.sha256):
+            raise ValueError(f"{self.file}: sha256 must be 64 hex characters")
+        return self
 
 
 class ExaminedManifest(BaseModel):
-    schema_name: str = Field(default=SCHEMA, alias="schema")
-    version: int = SCHEMA_VERSION
-    evidence: str
-    source_kind: str = SRC_MANIFEST
-    examined_by: str = ""
-    recorded_on: str = ""
+    schema_name: StrictStr = Field(default=SCHEMA, alias="schema")
+    version: StrictInt = SCHEMA_VERSION
+    evidence: StrictStr
+    source_kind: StrictStr = SRC_MANIFEST
+    examined_by: StrictStr = ""
+    recorded_on: StrictStr = ""
     files: list[FileEntry] = []
     sha256: str = ""                     # of the manifest file bytes (filled by the loader)
+    # written by the /examined-fields endpoint into the stored copy (provenance of the upload); never evidence
+    uploaded_name: StrictStr = ""
+    uploaded_sha256: StrictStr = ""
+    # documentation-only key written by the ``--write-templates`` helper; carries no evidence
+    comment: Optional[list[StrictStr] | StrictStr] = Field(default=None, alias="_comment")
 
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     @model_validator(mode="after")
     def _check(self):
@@ -143,6 +168,7 @@ class ExaminedManifest(BaseModel):
         sha256; a sha256 given in the manifest must match."""
         want = {n for n in names if n} | {Path(n).name for n in names if n}
         out: dict[int, dict[tuple, FieldEntry]] = {}
+        origin: dict[tuple[int, tuple], str] = {}
         for f in self.files:
             hit = f.file in want or Path(f.file).name in want
             if f.sha256 and sha256:
@@ -153,25 +179,71 @@ class ExaminedManifest(BaseModel):
                                         f"{sha256[:12]}...; refusing to apply evidence to a different file")
             if hit:
                 for pg, ents in f.pages.items():
-                    out.setdefault(int(pg), {}).update({e.key(): e for e in ents})
+                    page = out.setdefault(int(pg), {})
+                    for e in ents:
+                        k = e.key()
+                        if k in page and page[k].stated_count != e.stated_count:
+                            raise ExaminedError(
+                                f"page {pg}: field {k} is listed by two file entries ({origin[(int(pg), k)]!r} and {f.file!r}) "
+                                "that match the same file with different content; refusing to let one silently win")
+                        page[k] = e
+                        origin[(int(pg), k)] = f.file
         return out
+
+
+def _json_depth_ok(raw: str) -> None:
+    """Reject absurdly nested JSON before the (recursive) parser sees it: scan bracket depth outside strings."""
+    depth = 0
+    in_str = esc = False
+    for ch in raw:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ExaminedError(f"not a valid examined-fields manifest: JSON nested deeper than {MAX_JSON_DEPTH} levels")
+        elif ch in "]}":
+            depth -= 1
 
 
 def load_manifest(path: str | Path) -> ExaminedManifest:
     """JSON (see the module docstring) or CSV (columns: file, page, counter | field | row+col, count, counted_zero, note)
-    with the mandatory evidence text passed in a ``# evidence: ...`` first line."""
+    with the mandatory evidence text passed in a ``# evidence: ...`` first line. Every failure is an
+    :class:`ExaminedError` (file too large, undecodable, too deeply nested, wrong schema, wrong types, unknown keys)."""
     import hashlib
     p = Path(path)
-    raw = p.read_bytes()
     try:
+        size = p.stat().st_size
+        if size > MAX_MANIFEST_FILE_BYTES:
+            raise ExaminedError(f"{p}: the manifest is larger than {MAX_MANIFEST_FILE_BYTES // (1024 * 1024)} MB")
+        raw = p.read_bytes()
+    except OSError as exc:
+        raise ExaminedError(f"{p}: cannot read the manifest: {exc}") from exc
+    try:
+        text = raw.decode("utf-8-sig")
         if p.suffix.lower() == ".csv":
-            m = _from_csv(raw.decode("utf-8-sig"))
+            m = _from_csv(text)
         else:
-            m = ExaminedManifest.model_validate(json.loads(raw.decode("utf-8-sig")))
-    except (ValidationError, ValueError, KeyError) as exc:
+            _json_depth_ok(text)
+            m = ExaminedManifest.model_validate(json.loads(text))
+    except ExaminedError:
+        raise
+    except (ValidationError, ValueError, KeyError, TypeError, AttributeError, csv.Error) as exc:
         raise ExaminedError(f"{p}: not a valid examined-fields manifest: {exc}") from exc
+    except (RecursionError, MemoryError) as exc:
+        raise ExaminedError(f"{p}: not a valid examined-fields manifest: too deeply nested or too large to read") from exc
     m.sha256 = hashlib.sha256(raw).hexdigest()
     return m
+
+
+CSV_COLUMNS = ("file", "page", "counter", "field", "row", "col", "count", "counted_zero", "note")
 
 
 def _from_csv(text: str) -> ExaminedManifest:
@@ -184,12 +256,22 @@ def _from_csv(text: str) -> ExaminedManifest:
         elif k.strip() == "source_kind":
             kind = v.strip()
     files: dict[str, dict[str, list[FieldEntry]]] = {}
-    for r in csv.DictReader(io.StringIO("\n".join(lines))):
+    reader = csv.DictReader(io.StringIO("\n".join(lines)))
+    unknown = [c for c in (reader.fieldnames or []) if c not in CSV_COLUMNS]
+    if unknown:
+        raise ExaminedError(f"unknown CSV column(s) {unknown}; allowed: {list(CSV_COLUMNS)}")
+    for r in reader:
+        if None in r:
+            raise ExaminedError("a CSV row has more cells than the header")
+        zero = (r.get("counted_zero") or "").strip().lower()
+        if zero not in ("", "0", "1", "true", "false", "yes", "no"):
+            raise ExaminedError(f"counted_zero must be one of 1/true/yes/0/false/no/blank, got {zero!r}")
+
         def num(name):
             v = (r.get(name) or "").strip()
             return int(v) if v != "" else None
         e = FieldEntry(counter=num("counter"), field=num("field"), row=num("row"), col=num("col"), count=num("count"),
-                       counted_zero=(r.get("counted_zero") or "").strip().lower() in ("1", "true", "yes"),
+                       counted_zero=zero in ("1", "true", "yes"),
                        note=(r.get("note") or "").strip())
         files.setdefault(r["file"].strip(), {}).setdefault(str(int(r["page"])), []).append(e)
     return ExaminedManifest(evidence=evidence, source_kind=kind,

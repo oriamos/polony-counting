@@ -470,7 +470,8 @@ export interface ReferencePoint {
   x: number;
   y: number;
   counter: number;
-  plane: number;
+  /** null = mark without a valid plane (missing, 0 or beyond the planes): evidence for no plane */
+  plane: number | null;
   field: number | null;
 }
 
@@ -493,7 +494,8 @@ export interface ReferenceInfo {
   source_file?: string | null;
   points: ReferencePoint[];
   grid: ReferenceGrid | null;
-  reference_counts: Record<string, { plane0?: number; plane1?: number }>;
+  reference_counts: Record<string, { plane0?: number; plane1?: number; unplaned?: number }>;
+  unplaned?: { count: number; fields: number[]; n_without_counter: number };
   planes: { page: number; point_count: number }[];
   warnings: string[];
 }
@@ -543,6 +545,9 @@ export interface CompareSummary {
   total_reference: number | null;
   total_app: number | null;
   app_total_unknown_fields_not_counted?: number;
+  /** marks without a valid plane; their fields are conflict on every plane */
+  unplaned_marks?: number;
+  unplaned_mark_fields?: number[];
 }
 
 export interface CompareResponse {

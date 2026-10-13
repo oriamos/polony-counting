@@ -101,17 +101,22 @@ def assign_splits(
     # ---- choose a key per image
     keys: dict[str, str] = {}
     fallbacks: list[str] = []
+    slide_only: list[str] = []
     for im in ds.images:
         g = gov[im.image_id]
         if level == "auto":
             key = next((k for lv in LEVELS if (k := group_key(g, lv)) is not None), None)
             if not g.specimen_id:
-                fallbacks.append(im.file_name)
+                (slide_only if g.slide_id else fallbacks).append(im.file_name)
         else:
             key = group_key(g, level)
             if key is None:
                 raise SplitError(f"{im.file_name}: no '{level}' identity; use a weaker level or supply identity")
         keys[im.image_id] = key  # type: ignore[assignment]
+    if slide_only:
+        warnings.append(
+            "no specimen identity (only a slide id) for: " + ", ".join(sorted(set(slide_only))) +
+            "; each is grouped by its slide alone, so replicate slides of one specimen can land in different splits")
     if fallbacks:
         warnings.append(
             "no specimen/slide identity could be reconstructed for: " + ", ".join(sorted(set(fallbacks))) +

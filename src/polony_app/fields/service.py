@@ -16,6 +16,7 @@ from .reference import Reference
 MAX_LAB_FIELD = 24
 FIELD_NAME = re.compile(r"^(Field|Cell)-\d+$")
 COUNT_TYPES = ("red_positive", "green_positive", "red_only", "green_only", "yellow")
+UNPLANED_REASON = "mark with unspecified plane inside this field"
 AMBIGUITY = ("A field with no marks on a page is ambiguous: it may be 'not counted' or 'counted, zero'. The file cannot "
              "tell which, so that field/page is 'unknown' and is excluded from every comparison metric unless an "
              "examined-fields manifest states that the researcher counted it (including a counted zero).")
@@ -138,19 +139,26 @@ def _resolve_manifest(a: Analysis, ref: Reference, manifest: Optional[ex.Examine
         for e in ents.values():
             f: Optional[int] = None
             if e.field is not None:
+                # TRUSTED as the lab field number only because the manifest author stated it
                 f = e.field
             elif e.counter is not None:
+                # a counter entry resolves ONLY through the counter's ACTUAL points (their field / majority cell). A
+                # counter without any point is never guessed as field counter+1: lab sheets number fields without gaps,
+                # so after an absent counter (AM-B: counters 3 and 19) counter+1 would name the wrong field.
                 pts = [p for p in ref.points if p.counter == e.counter] if ref.available else []
                 if pts:
                     f = ref.field_of(pts[0], numbering)
-                elif numbering == "index":
-                    f = e.counter + 1
             else:
                 f = cells.get((e.row, e.col))
             label = f"page {pg}: " + ", ".join(f"{k}={v}" for k, v in
                                                (("counter", e.counter), ("field", e.field), ("row", e.row), ("col", e.col))
                                                if v is not None)
-            if f is None:
+            if f is None and e.counter is not None:
+                warns.append(f"Manifest entry ({label}) is ignored: counter {e.counter} has no point in the file, so it is "
+                             "not resolved to a field (never guessed as counter+1: sheets number fields without gaps, "
+                             "so after an absent counter that would name the wrong field). Name the field with 'field' "
+                             "(lab number) or 'row'+'col' instead.")
+            elif f is None:
                 warns.append(f"Manifest entry ({label}) cannot be resolved to a field number and is ignored.")
             elif f not in field_nums:
                 warns.append(f"Manifest entry ({label}) is field {f}, which has no Field-* region in this analysis; ignored.")
@@ -188,6 +196,8 @@ def compare(a: Analysis, ref: Reference, plane: int, count_type: str, numbering:
     if not ref.available:
         warns.append((ref.reason or "No embedded reference marks.") + " Only manifest entries can prove a field was examined.")
     entries = resolved.get(plane, {})
+    unplaned_pts = ref.unplaned_points() if ref.available else []
+    bad_fields = set(ref.unplaned_fields(numbering)) if ref.available else set()
     rows = []
     for r in sorted(regs, key=lambda r: r.field_index):
         f = r.field_index
@@ -197,7 +207,9 @@ def compare(a: Analysis, ref: Reference, plane: int, count_type: str, numbering:
         ents = entries.get(f, [])
         stated = {e.stated_count for e in ents if e.stated_count is not None}
         entry = ents[0] if ents else None
-        if len(stated) > 1:
+        if f in bad_fields:
+            exam = ex.Examination(ex.CONFLICT, n_marks, (ex.SRC_EMBEDDED,), reason=UNPLANED_REASON)
+        elif len(stated) > 1:
             exam = ex.Examination(ex.CONFLICT, n_marks, (ex.SRC_EMBEDDED, manifest.source_kind) if manifest else (),
                                   reason=f"the manifest states different counts for this field/plane: {sorted(stated)}")
         else:
@@ -222,7 +234,17 @@ def compare(a: Analysis, ref: Reference, plane: int, count_type: str, numbering:
         "conflict_fields_excluded": n(ex.CONFLICT), "eligibility_source": "+".join(srcs) if srcs else "none",
         **_metrics(elig),
         "app_total_unknown_fields_not_counted": sum(row["app_count"] for row in rows if not row["examined"]),
+        "unplaned_marks": len(unplaned_pts), "unplaned_mark_fields": sorted(bad_fields),
     }
+    if unplaned_pts:
+        n_nofield = sum(1 for p in unplaned_pts if ref.field_of(p, numbering) is None)
+        bad_in = sorted(bad_fields & {row["field"] for row in rows})
+        warns.insert(0, f"WARNING: {len(unplaned_pts)} reference mark(s) have no valid plane number (missing, 0 or beyond the "
+                        f"planes of the file); they are evidence for no plane. Fields containing such marks"
+                        + (f" ({', '.join(map(str, sorted(bad_fields)))})" if bad_fields else "")
+                        + " are conflict on ALL planes and excluded from every metric"
+                        + (f"; {n_nofield} of them carry no counter, so their field is unknown" if n_nofield else "")
+                        + ". Fix the marks in ImageJ (one plane per mark) and re-upload.")
     excl = [row["field"] for row in rows if not row["examined"]]
     if excl:
         warns.append(f"Excluded from every metric (not provably examined on plane {plane}, never read as zero): "

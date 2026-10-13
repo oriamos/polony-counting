@@ -370,7 +370,7 @@ export function ReferencePointsLayer({ scale }: { scale: number }) {
         const d = `M${p.x - r} ${p.y}H${p.x + r}M${p.x} ${p.y - r}V${p.y + r}`;
         return (
           <g key={i} pointerEvents={hover ? 'all' : 'none'}>
-            <title>{`reference: ${p.field != null ? `field ${p.field}, ` : ''}counter ${p.counter}, plane ${p.plane}`}</title>
+            <title>{`reference: ${p.field != null ? `field ${p.field}, ` : ''}counter ${p.counter}, plane ${p.plane ?? "unspecified (evidence for no plane)"}`}</title>
             <path d={d} stroke="rgba(0,0,0,0.9)" strokeWidth={4 * k} strokeLinecap="round" fill="none" />
             <path d={d} stroke="#ffffff" strokeWidth={1.7 * k} strokeLinecap="round" fill="none" />
             {hover && <circle cx={p.x} cy={p.y} r={r * 1.4} fill="transparent" />}
