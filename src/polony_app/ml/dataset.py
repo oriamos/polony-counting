@@ -17,6 +17,7 @@ import csv
 import io
 import json
 import os
+import re
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -611,17 +612,49 @@ def list_snapshots(data_dir: str | Path) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.is_dir() and not p.name.startswith(".") and (p / "manifest.json").is_file())
 
 
+def rel_path_problem(root: Path, rel) -> Optional[str]:
+    """Why ``rel`` is not a plain relative path that stays inside ``root`` (None = fine): absolute paths, '..' components,
+    backslashes, NUL, and symlinks that resolve outside the snapshot directory are all refused."""
+    if not isinstance(rel, str) or not rel:
+        return f"path {rel!r} is not a non-empty string"
+    if "\x00" in rel or "\\" in rel or rel.startswith("/") or re.match(r"^[A-Za-z]:", rel):
+        return f"path {rel!r} is absolute or contains a forbidden character: it escapes the snapshot directory"
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return f"path {rel!r} contains an empty / '.' / '..' component: it escapes the snapshot directory"
+    try:
+        real_root = Path(os.path.realpath(root))
+        (Path(os.path.realpath(Path(root) / rel))).relative_to(real_root)
+    except ValueError:
+        return f"path {rel!r} resolves outside the snapshot directory (symlink escape)"
+    except OSError as exc:
+        return f"path {rel!r} cannot be resolved ({exc})"
+    return None
+
+
 def verify_snapshot(data_dir: str | Path, version: str) -> list[str]:
-    """Problems found when re-hashing a snapshot (empty list = intact)."""
+    """Problems found when re-hashing a snapshot (empty list = intact). Every path the manifest names (``files`` keys and each
+    crop's ``path_tif`` / ``path_csv``) must stay inside the snapshot directory and every crop file must be listed in ``files``."""
     m = load_manifest(data_dir, version)
     root = snapshot_path(data_dir, version)
     bad = []
     for rel, sha in m.files.items():
+        why = rel_path_problem(root, rel)
+        if why:
+            bad.append(why)
+            continue
         p = root / rel
         if not p.is_file():
             bad.append(f"missing {rel}")
         elif sha256_file(p) != sha:
             bad.append(f"modified {rel}")
+    for c in m.crops:
+        for rel in (c.path_tif, c.path_csv):
+            why = rel_path_problem(root, rel)
+            if why:
+                bad.append(f"crop {c.crop_id}: {why}")
+            elif rel not in m.files:
+                bad.append(f"crop {c.crop_id}: {rel} is not listed (hashed) in the manifest files")
     if _version_of(m) != m.version:
         bad.append("manifest content does not match its version")
     return bad
@@ -875,8 +908,11 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
             if aid in ga.locked_analyses:
                 e.src.skipped = "belongs to the locked test set: not exported again (locked test labels never change)"
                 e.src.n_crops = 0
+        n_by_analysis: dict[str, int] = {}
+        for c in crops:
+            n_by_analysis[c.analysis_id] = n_by_analysis.get(c.analysis_id, 0) + 1
         for e in exts:  # crops per analysis for the manifest
-            e.src.n_crops = sum(1 for c in crops if c.analysis_id == e.src.analysis_id)
+            e.src.n_crops = n_by_analysis.get(e.src.analysis_id, 0)
 
         # ---- carry the locked test crops over verbatim
         test_lock_info = None
@@ -916,12 +952,18 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
         order = {"confirmed": 0, "human_added": 1, "rejected": 2, "unresolved": 3, "unreviewed": 4, "raw_proposal": 5,
                  "dropped": 6}
         live_crops = [c for c in crops if not c.frozen_from]
+        # indexes (a snapshot of ~50,000 crops must not cost sources x crops / regions x crops comparisons)
+        crops_of: dict[str, list] = {}
+        crops_of_region: dict[tuple, list] = {}
+        for c in live_crops:
+            crops_of.setdefault(c.analysis_id, []).append(c)
+            crops_of_region.setdefault((c.analysis_id, c.region_id), []).append(c)
         prow: list[list] = []
         counts: dict[str, int] = {}
         for e in exts:
             aid = e.src.analysis_id
             sp = e.src.split or ""
-            mine = [c for c in live_crops if c.analysis_id == aid]
+            mine = crops_of.get(aid, [])
             keyed = sorted(e.rows, key=lambda r: (r["role"] or "", order[r["status"]], r["y"], r["x"], str(r["object_id"])))
             for n, r in enumerate(keyed, 1):
                 counts[r["status"]] = counts.get(r["status"], 0) + 1
@@ -948,9 +990,8 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
         for e in exts:
             for rec in e.regions:
                 role_crops = dict(rec["crops"])
-                for c in live_crops:
-                    if c.analysis_id == e.src.analysis_id and c.region_id == rec["region_id"]:
-                        role_crops[f"{c.region_id}:{c.channel_role}"] = {"crop_id": c.crop_id, "split": c.split}
+                for c in crops_of_region.get((e.src.analysis_id, rec["region_id"]), ()):
+                    role_crops[f"{c.region_id}:{c.channel_role}"] = {"crop_id": c.crop_id, "split": c.split}
                 rlines.append(json.dumps(dict(rec, crops=role_crops), sort_keys=True, ensure_ascii=False))
         regions_text = "\n".join(rlines) + ("\n" if rlines else "")
         if stage is not None:
@@ -977,7 +1018,7 @@ def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, s
             tot = {"n_raw_proposals": 0, "n_unmarked": 0, "n_unmarked_bright": 0, "n_confirmed_proposals": 0}
             have_raw = False
             for e in exts:
-                mine = [c for c in live_crops if c.analysis_id == e.src.analysis_id]
+                mine = crops_of.get(e.src.analysis_id, [])
                 for role in {c.channel_role for c in mine}:
                     boxes = [c.box_reference_frame for c in mine if c.channel_role == role]
                     inb = lambda r: any(b[0] <= r["x"] < b[2] and b[1] <= r["y"] < b[3] for b in boxes)  # noqa: E731
