@@ -17,6 +17,7 @@ Identity recovered from file names is *inferred*: unless ``allow_unconfirmed`` i
 from __future__ import annotations
 
 import hashlib
+import math
 import json
 from dataclasses import dataclass, field
 from typing import Optional
@@ -87,7 +88,8 @@ def assign_splits(
     confirmed_slides: Optional[set[str]] = None,
 ) -> SplitAssignment:
     fractions = dict(fractions or DEFAULT_FRACTIONS)
-    if any(v < 0 for v in fractions.values()) or abs(sum(fractions.values()) - 1.0) > 1e-9:
+    if (any(not math.isfinite(v) or v < 0 for v in fractions.values())
+            or not math.isfinite(sum(fractions.values())) or abs(sum(fractions.values()) - 1.0) > 1e-9):
         raise SplitError(f"fractions must be non-negative and sum to 1, got {fractions}")
     if level != "auto" and level not in LEVELS:
         raise SplitError(f"level must be 'auto' or one of {LEVELS}")

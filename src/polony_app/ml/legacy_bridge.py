@@ -936,7 +936,7 @@ def plan_source(sc: SourceScan, *, pages: dict, origin: str, opts: BridgeOptions
         reviewer_identity_source="unknown", provenance_engine="",
         n_regions_total=sc.n_cells, identity={})
     info = SourceInfo(analysis_id=sc.source_id, name=sc.rel, sha256=hash_obj({sc.rel: sc.sha256}), file_names=[sc.rel],
-                      width=sc.width, height=sc.height, dtype=sc.dtype, bit_depth=int(np.dtype(sc.dtype).itemsize * 8),
+                      file_sha256s=[sc.sha256], width=sc.width, height=sc.height, dtype=sc.dtype, bit_depth=int(np.dtype(sc.dtype).itemsize * 8),
                       n_planes=sc.n_planes)
     warnings: list[str] = [f"{sc.rel}: {m}" for _c, m in sc.notes]
     if n_no_counter and sc.has_counters:

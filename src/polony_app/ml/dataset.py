@@ -476,7 +476,8 @@ def extract_analysis(store, aid: str, opts: BuildOptions) -> _Extract:
     src.n_crops = len(base.cands)
     base.info = SourceInfo(
         analysis_id=aid, name=a.name, sha256=hash_obj(shas), file_names=sorted(shas), width=img.width, height=img.height,
-        dtype=img.dtype, bit_depth=img.bit_depth, n_planes=len(img.channels), slide_meta_id=a.slide.slide_id)
+        dtype=img.dtype, bit_depth=img.bit_depth, n_planes=len(img.channels), slide_meta_id=a.slide.slide_id,
+        file_sha256s=sorted(shas.values()))
     return base
 
 
@@ -581,6 +582,10 @@ def unmarked_proposals(raw: list, marks: list, positives: list, radius: float = 
 
 # ====================================================================== snapshot
 def snapshot_path(data_dir: str | Path, version: str) -> Path:
+    # a snapshot is addressed by its published name only: never an unpublished '.staging-*' directory or a path
+    if not version or version.startswith(".") or "/" in version or "\\" in version:
+        raise MLError(f"invalid snapshot name {version!r} (snapshots are named ds-<hash>; unpublished staging directories "
+                      "are not snapshots)")
     return datasets_dir(data_dir) / version
 
 
@@ -1098,9 +1103,10 @@ def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, 
         if s.split != "test" or not s.group_id:
             continue
         info = SourceInfo(analysis_id=s.analysis_id, name=s.name, sha256=hash_obj(s.tiff_sha256),
-                          file_names=sorted(s.tiff_sha256))
+                          file_names=sorted(s.tiff_sha256), file_sha256s=sorted(s.tiff_sha256.values()))
         rec = _record(info, s.identity or {"source": "unknown", "confirmed": False}, None)
-        imgs.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": rec.sha256, "group": s.group_id,
+        imgs.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": rec.sha256,
+                     "file_sha256s": sorted(s.tiff_sha256.values()), "group": s.group_id,
                      "keys": {"specimen": group_key(rec, "specimen"), "slide": group_key(rec, "slide"),
                               "source_image": group_key(rec, "source_image")}})
     groups = sorted({c.group_id for c in test_crops})

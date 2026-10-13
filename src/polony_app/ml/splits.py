@@ -46,6 +46,9 @@ class SourceInfo:
     bit_depth: int = 16
     n_planes: int = 1
     slide_meta_id: Optional[str] = None
+    # sha256 of the plain bytes of each source file (independent of the file NAME): lets a renamed byte-identical copy of
+    # a locked test file be recognised (``sha256`` above combines names and hashes)
+    file_sha256s: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -128,12 +131,18 @@ def _lock_keys(lock: dict) -> tuple[set[str], set[str], set[str], set[str]]:
     return shas, spec, slide, groups
 
 
-def locked_reason(rec: ImageRecord, lock: Optional[dict]) -> Optional[str]:
-    """Why this image belongs to the locked test set (None = not locked)."""
+def _lock_file_shas(lock: dict) -> set[str]:
+    return {s for i in lock.get("images", []) for s in (i.get("file_sha256s") or [])}
+
+
+def locked_reason(rec: ImageRecord, lock: Optional[dict], file_sha256s=()) -> Optional[str]:
+    """Why this image belongs to the locked test set (None = not locked). ``file_sha256s`` = plain sha256 of the source
+    file(s): a byte-identical copy under another name is locked too (locks written before this field existed only
+    carry the name-dependent ``sha256``)."""
     if not lock:
         return None
     shas, spec, slide, groups = _lock_keys(lock)
-    if rec.sha256 in shas:
+    if rec.sha256 in shas or (set(file_sha256s) & _lock_file_shas(lock)):
         return "identical file bytes as a locked test image"
     k = group_key(rec, "specimen")
     if k and k in spec:
@@ -188,7 +197,7 @@ def assign_groups(sources: list[SourceInfo], *, seed: int = 0, fractions: Option
     recs = []
     for s in sources:
         r0 = _record(s, idents[s.analysis_id], None)
-        why = locked_reason(r0, lock)
+        why = locked_reason(r0, lock, s.file_sha256s)
         if why:
             locked[s.analysis_id] = why
             warnings.append(f"analysis {s.analysis_id} ({s.name}) is in the LOCKED test set ({why}); it goes to test only "
@@ -227,7 +236,8 @@ def lock_images_from(sources: list[SourceInfo], ga: GroupAssignment, split: str 
         if ga.split_of.get(s.analysis_id) != split:
             continue
         rec = _record(s, ga.identity_of[s.analysis_id], None)
-        out.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": s.sha256, "group": ga.group_of[s.analysis_id],
+        out.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": s.sha256, "file_sha256s": sorted(s.file_sha256s),
+                    "group": ga.group_of[s.analysis_id],
                     "keys": {"specimen": group_key(rec, "specimen"), "slide": group_key(rec, "slide"),
                              "source_image": group_key(rec, "source_image")}})
     return out
