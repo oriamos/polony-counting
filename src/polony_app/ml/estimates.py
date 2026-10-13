@@ -31,7 +31,8 @@ def estimate_training(n_train_crops: int, n_val_crops: int, batch_size: int, epo
                       num_train_samples: Optional[int] = None, downscale: int = 1,
                       crop_hw: Sequence[int] = (316, 316), dtype_bytes: int = 4,
                       train_shapes_hw: Optional[Sequence[Sequence[int]]] = None,
-                      val_shapes_hw: Optional[Sequence[Sequence[int]]] = None) -> dict:
+                      val_shapes_hw: Optional[Sequence[Sequence[int]]] = None,
+                      optimize_threshold: bool = True) -> dict:
     """Optimiser steps, batches and prepared (in-memory) size of a fine-tuning run.
 
     ``crop_hw`` is the native shape assumed for every crop unless exact ``train_shapes_hw`` / ``val_shapes_hw`` are given."""
@@ -55,6 +56,10 @@ def estimate_training(n_train_crops: int, n_val_crops: int, batch_size: int, epo
         "validation_batches": n_val,                   # per validation pass (batch size 1)
         "validation_passes": ep,                       # one per epoch (+ a 2-batch sanity check before epoch 1)
         "validation_batches_total": n_val * ep,
+        "sanity_check_batches": min(2, n_val),         # Lightning's num_sanity_val_steps=2, before epoch 1 (not in the totals)
+        # at the end of training Spotiflow runs optimize_threshold over the validation set twice (last and best weights),
+        # batch size 1, plus a CPU threshold search
+        "final_threshold_batches": 2 * n_val if optimize_threshold else 0,
         "downscale": d,
         "prepared_train_bytes": tr_bytes, "prepared_val_bytes": va_bytes,
         "prepared_bytes": tr_bytes + va_bytes,
@@ -62,3 +67,53 @@ def estimate_training(n_train_crops: int, n_val_crops: int, batch_size: int, epo
         "assumed_crop_hw": [h, w] if train_shapes_hw is None else None,
         "basis": "Spotiflow 0.6.5: steps/epoch = ceil(samples/batch_size), validation batch size 1, all crops resident as float32",
     }
+
+
+def available_memory_bytes() -> Optional[int]:
+    """RAM that could be allocated now (psutil if present, else /proc/meminfo, else os.sysconf free pages); None if unknown."""
+    try:
+        import psutil
+        return int(psutil.virtual_memory().available)
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    try:
+        import os
+        return int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+    except Exception:
+        return None
+
+
+def format_bytes(n: Optional[float]) -> str:
+    if n is None:
+        return "unknown"
+    n = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if abs(n) < 1024 or unit == "GiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} GiB"       # pragma: no cover
+
+
+LAZY_FRACTION_OF_RAM = 0.25
+LAZY_ABSOLUTE_BYTES = 8 * 1024 ** 3
+
+
+def choose_load_mode(prepared_bytes: int, available_bytes: Optional[int], requested: str = "auto",
+                     allow_large_memory: bool = False) -> tuple[str, str]:
+    """(mode, reason). ``auto`` = lazy only when the prepared float32 size would exceed 25 % of the available RAM or 8 GiB.
+    An explicit ``eager`` that cannot fit in the available RAM is refused by the caller unless ``allow_large_memory``."""
+    if requested in ("eager", "lazy"):
+        return requested, f"--load-mode {requested}"
+    if prepared_bytes > LAZY_ABSOLUTE_BYTES:
+        return "lazy", f"prepared size {format_bytes(prepared_bytes)} > {format_bytes(LAZY_ABSOLUTE_BYTES)}"
+    if available_bytes and prepared_bytes > LAZY_FRACTION_OF_RAM * available_bytes:
+        return "lazy", (f"prepared size {format_bytes(prepared_bytes)} > {LAZY_FRACTION_OF_RAM:.0%} of the available RAM "
+                        f"({format_bytes(available_bytes)})")
+    return "eager", "prepared data is small relative to the RAM"

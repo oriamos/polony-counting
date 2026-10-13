@@ -11,19 +11,24 @@ runs in a staging directory so a failed run leaves nothing in the registry.
 from __future__ import annotations
 
 import csv
+import hashlib
+import os
 import random
 import shutil
 import time
 import uuid
+from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
+import tifffile
 
-from .common import (DEFAULT_NORMALISER, LO_HI_POLICY, MLError, check_downscale, check_normaliser, hash_obj, models_dir,
-                     prepare_crop, sha256_file, utc_now)
-from .dataset import list_snapshots, load_crop, load_manifest, snapshot_path, verify_snapshot
+from .common import (DEFAULT_NORMALISER, LO_HI_POLICY, MLError, check_downscale, check_normaliser, grid_offset, hash_obj,
+                     labels_in_frame, models_dir, prepare_crop, sha256_file, to_downscaled, utc_now)
+from .dataset import list_snapshots, load_crop, load_manifest, read_labels_csv, snapshot_path, verify_snapshot
 from .manifest import CropRecord, SnapshotManifest
 from .registry import Registry
 from .splits import load_lock, lock_fingerprint
@@ -39,14 +44,18 @@ class TrainOptions:
     lr: float = 1e-4
     crop_size: int = 256
     seed: int = 0
-    device: str = "cpu"                 # 'auto' = CUDA/MPS when present
+    device: str = "cpu"                 # auto | cpu | cuda | rocm (= alias of cuda) | mps ; see spotiflow_io.pick_device
     num_train_samples: Optional[int] = None
     pos_weight: float = 10.0
     smart_crop: bool = True
     augment: bool = True
     optimize_threshold: bool = True
     early_stopping_patience: int = 0
-    num_workers: int = 0
+    num_workers: int = 0                # DataLoader workers of Spotiflow.fit (train AND validation loaders)
+    load_mode: str = "auto"             # auto | eager | lazy : how the prepared (normalised, downscaled) crops are held
+    allow_large_memory: bool = False    # eager load although the prepared data exceeds the available RAM
+    lazy_cache_mb: int = 256            # lazy mode: LRU cache of prepared crops, per dataset (train / val) and per process
+    max_val_crops: Optional[int] = None  # deterministic validation subsample (stable hash order); None = all val crops
     notes: str = ""
     # safeguards against "fine-tuning" on a handful of fields of one or two slides (unstable, and not evidence of anything)
     min_train_groups: int = 4           # independent groups (specimen/slide level of the split) in TRAIN
@@ -66,6 +75,8 @@ class TrainPlan:
     warnings: list[str]
     lock_sha256: Optional[str]
     config: dict = None            # {downscale, normaliser} the snapshot was built for = what the model is trained at
+    val_total: int = 0             # number of valid val crops in the snapshot (``val`` may be a --max-val-crops subset)
+    val_excluded: list = None      # crop ids left out of ``val`` by --max-val-crops
 
 
 def _locked_sources(data_dir, lock: dict) -> tuple[set[str], set[str]]:
@@ -76,6 +87,38 @@ def _locked_sources(data_dir, lock: dict) -> tuple[set[str], set[str]]:
         if s.split == "test":
             shas |= set(s.tiff_sha256.values())
     return shas, set(lock.get("groups", []))
+
+
+LOAD_MODES = ("auto", "eager", "lazy")
+
+
+def _check_examination_provenance(m: SnapshotManifest) -> str:
+    """Bridge imports (non-empty ``import_summary``) must prove that every crop was examined by the researcher.
+    ``legacy_bridge.verify_examination_provenance`` re-checks the recorded provenance of every train / val / test crop; on top,
+    ANY crop that carries provenance (or any crop of an import) must say ``researcher_examined == true``."""
+    is_import = bool(m.import_summary)
+    problems: list[str] = []
+    if is_import:
+        from . import legacy_bridge as lb
+        problems += lb.verify_examination_provenance(m)
+    for c in m.crops:
+        prov = c.provenance or {}
+        if (is_import or prov) and prov.get("researcher_examined") is not True:
+            msg = f"crop {c.crop_id} ({c.split}): provenance.researcher_examined is not true"
+            if msg not in problems:
+                problems.append(msg)
+    if problems:
+        raise MLError(f"REFUSED: {len(problems)} crop(s) of snapshot {m.version} are not proven researcher-examined; training on "
+                      f"them would teach the model from unexamined cells. First problems: {'; '.join(problems[:5])}")
+    return ("every crop of this bridge import carries researcher_examined provenance" if is_import
+            else "no bridge-import provenance to verify (snapshot built from reviewed analyses)")
+
+
+def subsample_val(val: list, n: int) -> tuple[list, list]:
+    """Deterministic validation subsample: the first ``n`` crops in sha256(crop_id) order (independent of seed, platform and
+    manifest order). Returns (kept in that order, excluded crop ids)."""
+    ranked = sorted(val, key=lambda c: hashlib.sha256(c.crop_id.encode("utf-8")).hexdigest())
+    return ranked[:n], sorted(c.crop_id for c in ranked[n:])
 
 
 def plan_training(data_dir: str | Path, version: str, opts: TrainOptions) -> TrainPlan:
@@ -90,6 +133,12 @@ def plan_training(data_dir: str | Path, version: str, opts: TrainOptions) -> Tra
     checks.append(f"snapshot {version} is intact ({len(m.files)} files verified)")
     if opts.epochs < 1 or opts.batch_size < 1 or opts.lr <= 0 or opts.crop_size < 16:
         raise MLError("invalid hyper-parameters: need epochs >= 1, batch_size >= 1, lr > 0, crop_size >= 16")
+    if opts.num_workers < 0 or (opts.max_val_crops is not None and opts.max_val_crops < 1) or \
+            (opts.num_train_samples is not None and opts.num_train_samples < 1):
+        raise MLError("invalid options: need num_workers >= 0, max_val_crops >= 1, num_train_samples >= 1")
+    if opts.load_mode not in LOAD_MODES:
+        raise MLError(f"unknown --load-mode '{opts.load_mode}' (choose one of {', '.join(LOAD_MODES)})")
+    checks.append(_check_examination_provenance(m))
     train = [c for c in m.crops if c.split == "train"]
     val = [c for c in m.crops if c.split == "val"]
     if not train:
@@ -100,6 +149,13 @@ def plan_training(data_dir: str | Path, version: str, opts: TrainOptions) -> Tra
                       "(validation crops of the training slides would leak). Nothing was trained.")
     if sum(c.n_positive for c in train) == 0:
         raise MLError("the train crops contain no human-confirmed positive points; nothing to learn from")
+    val_total, val_excluded = len(val), []
+    if opts.max_val_crops is not None and opts.max_val_crops < len(val):
+        groups_all = len({c.group_id for c in val})
+        val, val_excluded = subsample_val(val, opts.max_val_crops)
+        warns.append(f"validation uses only {len(val)} of {val_total} val crops (--max-val-crops, stable sha256 order of the crop "
+                     "id; the excluded ids are recorded). Best-checkpoint selection, early stopping and threshold optimisation "
+                     f"see only this subset ({len({c.group_id for c in val})} of {groups_all} val group(s)).")
     if sum(c.n_positive for c in val) == 0:
         warns.append("the validation crops contain no positives: validation loss / threshold optimisation are weak")
     cfgs = {(c.downscale, c.normaliser) for c in train + val}
@@ -148,7 +204,7 @@ def plan_training(data_dir: str | Path, version: str, opts: TrainOptions) -> Tra
     checks.append("train and validation groups are disjoint")
     base = describe_base(opts.base, data_dir)
     checks.append(f"base model resolves to {base['kind']} '{base['name']}'")
-    return TrainPlan(version, m, train, val, base, checks, warns + list(m.warnings), lock_sha, config)
+    return TrainPlan(version, m, train, val, base, checks, warns + list(m.warnings), lock_sha, config, val_total, val_excluded)
 
 
 def _seed_all(seed: int) -> None:
@@ -167,8 +223,8 @@ def _seed_all(seed: int) -> None:
 
 
 def _load_xy(data_dir, version, crops, config):
-    """Network inputs: native crop -> page-level normalisation -> block-mean downscale; labels mapped with the exact
-    pixel-centre rule x_s = (x - (d-1)/2) / d. Returns (images, spots, n_labels_dropped_outside_the_downscaled_frame)."""
+    """EAGER loading. Network inputs: native crop -> page-level normalisation -> block-mean downscale; labels mapped with the
+    exact pixel-centre rule x_s = (x - (d-1)/2) / d. Returns (images, spots, n_labels_dropped_outside_the_downscaled_frame)."""
     imgs, spots, dropped = [], [], 0
     for c in crops:
         im, lab = load_crop(data_dir, version, c)
@@ -178,6 +234,180 @@ def _load_xy(data_dir, version, crops, config):
         spots.append(lab_s)
         dropped += n
     return imgs, spots, dropped
+
+
+def prepared_hw(crop: CropRecord, downscale: int) -> tuple[int, int]:
+    """Shape (h, w) of the network input of ``crop`` after the grid trim and the block mean, from the manifest alone."""
+    oy, ox = grid_offset(crop.box_xyxy[:2], downscale)
+    h, w = crop.shape_hw
+    return (max(0, h - oy) // downscale, max(0, w - ox) // downscale)
+
+
+class LazyCropImages(Sequence):
+    """Prepared network inputs read from disk on demand (``--load-mode lazy``).
+
+    ``seq[i]`` = exactly what :func:`_load_xy` puts at position i (it calls the same :func:`prepare_crop`), kept in a small LRU
+    cache bounded in bytes (read-only arrays: a consumer that tried to modify one in place would raise, not corrupt the cache).
+    ITERATION yields zero-memory stand-ins of the right shape (``np.broadcast_to``): Spotiflow's start-up passes only iterate to
+    look at ``.shape`` / ``.ndim`` (input validation, minimum crop size, 'smaller than the crop size' scan), so they cost no I/O;
+    pixels only ever come from indexing, which is what the DataLoader does. ``seq[i] = padded`` (Spotiflow pads images
+    smaller than the crop size by assignment) is kept as an override. Picklable (the cache is dropped), so DataLoader workers
+    work with any start method; every process has its own cache."""
+
+    def __init__(self, root: str, items: list, shapes: list, downscale: int, normaliser: str, labels: list,
+                 cache_bytes: int = 256 * 1024 ** 2):
+        self._root, self._items, self._shapes = str(root), list(items), [tuple(s) for s in shapes]
+        self._d, self._norm, self._labels = int(downscale), normaliser, labels   # labels: native (y, x) arrays
+        self._cache_bytes = int(cache_bytes)
+        self._cache: OrderedDict = OrderedDict()
+        self._cache_used = 0
+        self._override: dict = {}
+        self.loads = 0          # disk reads in THIS process
+        self.hits = 0
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getstate__(self):
+        st = dict(self.__dict__)
+        st["_cache"], st["_cache_used"], st["loads"], st["hits"] = OrderedDict(), 0, 0, 0
+        return st
+
+    def _load(self, i: int) -> np.ndarray:
+        rel, lo, hi, origin = self._items[i]
+        img = tifffile.imread(os.path.join(self._root, rel))
+        x, _, _, _ = prepare_crop(img, self._labels[i], lo=lo, hi=hi, downscale=self._d, normaliser=self._norm, origin_xy=origin)
+        if tuple(x.shape) != self._shapes[i]:
+            raise MLError(f"{rel}: the prepared crop is {tuple(x.shape)} but the manifest says {self._shapes[i]} "
+                          "(the snapshot does not match its manifest)")
+        x.flags.writeable = False
+        return x
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(len(self)))]
+        i = int(i)
+        if i < 0:
+            i += len(self)
+        if not 0 <= i < len(self):
+            raise IndexError(i)
+        if i in self._override:
+            return self._override[i]
+        if i in self._cache:
+            self._cache.move_to_end(i)
+            self.hits += 1
+            return self._cache[i]
+        x = self._load(i)
+        self.loads += 1
+        if x.nbytes <= self._cache_bytes:
+            self._cache[i] = x
+            self._cache_used += x.nbytes
+            while self._cache_used > self._cache_bytes:
+                _, old = self._cache.popitem(last=False)
+                self._cache_used -= old.nbytes
+        return x
+
+    def __setitem__(self, i, value):
+        self._override[int(i) % len(self)] = value
+
+    def __iter__(self):
+        for i in range(len(self)):
+            if i in self._override:
+                yield self._override[i]
+            else:
+                yield np.broadcast_to(np.float32(0), self._shapes[i])
+
+
+def load_lazy(data_dir, version, crops, config, cache_mb: int = 256):
+    """(LazyCropImages, spots, n_labels_dropped). Labels are small, so they are read and mapped up front (this is what gives the
+    dropped-label count, with no pixels read); the labels equal those of :func:`_load_xy` bit for bit (tested)."""
+    d, root = config["downscale"], snapshot_path(data_dir, version)
+    items, shapes, native_labels, spots, dropped = [], [], [], [], 0
+    for c in crops:
+        lab = read_labels_csv(root / c.path_csv)
+        oy, ox = grid_offset(c.box_xyxy[:2], d)
+        shape = prepared_hw(c, d)
+        lab_s, n = labels_in_frame(to_downscaled(np.asarray(lab, float).reshape(-1, 2) - [oy, ox], d), shape)
+        items.append((c.path_tif, c.norm_lo, c.norm_hi, tuple(c.box_xyxy[:2])))
+        shapes.append(shape)
+        native_labels.append(lab)
+        spots.append(lab_s.astype("float32"))
+        dropped += n
+    return LazyCropImages(root, items, shapes, d, config["normaliser"], native_labels, cache_mb * 1024 ** 2), spots, dropped
+
+
+# ------------------------------------------------------------------------------------------------ scale of a run
+def scale_summary(plan: TrainPlan, opts: TrainOptions, data_dir) -> dict:
+    """Actual numbers of the run (from the snapshot manifest) for ``--dry-run`` and for the memory guard."""
+    from .estimates import available_memory_bytes, choose_load_mode, estimate_training
+    m, d = plan.manifest, plan.config["downscale"]
+
+    def trimmed(c):
+        oy, ox = grid_offset(c.box_xyxy[:2], d)
+        return (c.shape_hw[0] - oy, c.shape_hw[1] - ox)
+
+    est = estimate_training(len(plan.train), len(plan.val), opts.batch_size, opts.epochs, opts.num_train_samples, d,
+                            train_shapes_hw=[trimmed(c) for c in plan.train], val_shapes_hw=[trimmed(c) for c in plan.val],
+                            optimize_threshold=opts.optimize_threshold)
+    avail = available_memory_bytes()
+    mode, why = choose_load_mode(est["prepared_bytes"], avail, opts.load_mode, opts.allow_large_memory)
+    native = 0
+    root = snapshot_path(data_dir, plan.version)
+    for dirpath, _, names in os.walk(root):
+        for n in names:
+            try:
+                native += os.path.getsize(os.path.join(dirpath, n))
+            except OSError:
+                pass
+    by_split = {k: sum(1 for c in m.crops if c.split == k) for k in ("train", "val", "test")}
+    return {"estimate": est, "available_ram_bytes": avail, "load_mode": mode, "load_mode_reason": why,
+            "native_snapshot_bytes": native, "sources": len(m.sources), "sources_with_crops": sum(1 for s in m.sources if s.n_crops),
+            "eligible_crops": len(m.crops), "crops_by_split": by_split, "val_used": len(plan.val), "val_total": plan.val_total,
+            "eager_exceeds_ram": bool(avail and est["prepared_bytes"] > avail)}
+
+
+def format_scale(sc: dict, plan: TrainPlan, opts: TrainOptions, device: str, version: str) -> list[str]:
+    from .estimates import format_bytes
+    e, bs = sc["estimate"], sc["crops_by_split"]
+    L = [f"SCALE OF THIS RUN (actual numbers from snapshot {version}):",
+         f"  sources (source images): {sc['sources']} in the manifest, {sc['sources_with_crops']} with crops",
+         f"  eligible crops: {sc['eligible_crops']}  (train {bs['train']}, val {bs['val']}, test {bs['test']} - locked/held out, never trained on)",
+         f"  used here: {e['n_train_crops']} train crop(s), {e['n_val_crops']} val crop(s)"
+         + (f"  (--max-val-crops {opts.max_val_crops}: {sc['val_used']} of {sc['val_total']})" if sc['val_used'] != sc['val_total'] else ""),
+         f"  epochs: {e['epochs']}   batch size: {e['batch_size']}   downscale: {e['downscale']}   device: {device}   workers: {opts.num_workers}",
+         f"  num_train_samples: {e['num_train_samples'] if e['num_train_samples'] else 'not set'}  -> {e['samples_per_epoch']} sample(s) drawn per epoch"
+         + ("" if e['num_train_samples'] else " (one pass over the train crops)"),
+         f"  steps per epoch: {e['steps_per_epoch']}   estimated optimizer steps: {e['optimizer_steps']}",
+         f"  validation: {e['validation_batches']} batch(es) per pass (Spotiflow validates with batch size 1) x {e['validation_passes']} pass(es) "
+         f"= {e['validation_batches_total']} batches, + {e['sanity_check_batches']} sanity-check batch(es) before epoch 1"
+         + (f", + {e['final_threshold_batches']} for the final threshold optimisation" if e['final_threshold_batches'] else ""),
+         f"  prepared in-memory size (float32 network inputs): {format_bytes(e['prepared_bytes'])} "
+         f"(train {format_bytes(e['prepared_train_bytes'])}, val {format_bytes(e['prepared_val_bytes'])}); available RAM: {format_bytes(sc['available_ram_bytes'])}",
+         f"  load mode: {sc['load_mode']} ({sc['load_mode_reason']})",
+         f"  native snapshot size on disk: {format_bytes(sc['native_snapshot_bytes'])}"]
+    if sc["load_mode"] == "eager" and sc["eager_exceeds_ram"]:
+        L.append("  WARNING: the prepared data would not fit in the available RAM in eager mode; use --load-mode lazy "
+                 "(or --allow-large-memory to try anyway)")
+    return L
+
+
+def format_recommendations(version: str, opts: TrainOptions, sc: dict) -> list[str]:
+    dev = f" --device {opts.device}" if opts.device != "cpu" else ""
+    base = f"python -m polony_app.ml train --snapshot {version} --base {opts.base}{dev} --batch-size {opts.batch_size}"
+    if opts.num_workers:
+        base += f" --num-workers {opts.num_workers}"
+    e = sc["estimate"]
+    return ["RECOMMENDATIONS",
+            f"  1. Benchmark first (does not need to finish a long run): {base} --epochs 1   -> note the seconds per epoch, then "
+            f"estimate the total as seconds/epoch x epochs ({e['steps_per_epoch']} steps per epoch here).",
+            f"  2. Then train about 10 epochs with early stopping: {base} --epochs 10 --early-stopping-patience 3   "
+            "(the BEST validation checkpoint is the one registered, not the last).",
+            "  3. --num-train-samples N bounds an epoch: each epoch draws N crops (with replacement) instead of one pass over all "
+            f"{e['n_train_crops']} train crops, so an epoch costs ceil(N/batch_size) steps whatever the snapshot size; validation still "
+            "runs over all validation crops once per epoch" +
+            (" (--max-val-crops N limits that, recorded)." if opts.max_val_crops is None else "."),
+            "  4. Nothing is promoted automatically: after training run eval-model for the candidate and for 'general', "
+            "compare, and promote only if the locked-test evidence supports it."]
 
 
 def _val_curve(logdir: Path) -> list:
@@ -231,21 +461,41 @@ def train_candidate(data_dir: str | Path, version: str, opts: TrainOptions, *, d
            "finetuned_from": plan.base["name"], "downscale": plan.config["downscale"],
            "normaliser": plan.config["normaliser"]}
     from .spotiflow_io import hardware_info, load_model, pick_device
-    device = pick_device(opts.device)
+    device = pick_device(opts.device, say=say)          # MLError for an explicitly requested GPU that is not available
+    say(f"  device: requested '{opts.device}' -> resolved '{device}'"
+        + (" ('rocm' is an alias of 'cuda': PyTorch ROCm builds use the cuda API)" if opts.device == "rocm" else ""))
+    sc = scale_summary(plan, opts, data_dir)
+    cfg.update(num_workers=opts.num_workers, max_val_crops=opts.max_val_crops)
     if dry_run:
         say(f"[dry-run] would fine-tune '{plan.base['name']}' for {opts.epochs} epoch(s) on {device} with {cfg}; "
             "nothing was trained and nothing was written")
+        for line in format_scale(sc, plan, opts, device, version):
+            say(line)
+        say("Training will not start because --dry-run was supplied.")
+        for line in format_recommendations(version, opts, sc):
+            say(line)
         return {"dry_run": True, "snapshot": version, "base": plan.base, "device": device, "train_config": cfg,
-                "inference_config": plan.config,
+                "inference_config": plan.config, "scale": sc, "recommendations": format_recommendations(version, opts, sc),
                 "n_train": len(plan.train), "n_val": len(plan.val), "checks": plan.checks, "warnings": plan.warnings}
+    load_mode = sc["load_mode"]
+    if load_mode == "eager" and sc["eager_exceeds_ram"] and not opts.allow_large_memory:
+        from .estimates import format_bytes
+        raise MLError(f"the prepared training data ({format_bytes(sc['estimate']['prepared_bytes'])}) exceeds the available RAM "
+                      f"({format_bytes(sc['available_ram_bytes'])}) in eager mode. Use --load-mode lazy (crops are read from the "
+                      "snapshot on demand with a small cache) or pass --allow-large-memory to try anyway. Nothing was trained.")
+    say(f"  load mode: {load_mode} ({sc['load_mode_reason']}); prepared size {sc['estimate']['prepared_bytes'] / 1024 ** 2:.0f} MiB")
 
     stage = models_dir(data_dir) / f".staging-{uuid.uuid4().hex[:10]}"
     stage.mkdir(parents=True, exist_ok=True)
     try:
         _seed_all(opts.seed)
-        say(f"loading images ({len(plan.train)} train, {len(plan.val)} val) ...")
-        tri, trs, d1 = _load_xy(data_dir, version, plan.train, plan.config)
-        vai, vas, d2 = _load_xy(data_dir, version, plan.val, plan.config)
+        say(f"loading images ({len(plan.train)} train, {len(plan.val)} val; {load_mode}) ...")
+        if load_mode == "lazy":
+            tri, trs, d1 = load_lazy(data_dir, version, plan.train, plan.config, opts.lazy_cache_mb)
+            vai, vas, d2 = load_lazy(data_dir, version, plan.val, plan.config, opts.lazy_cache_mb)
+        else:
+            tri, trs, d1 = _load_xy(data_dir, version, plan.train, plan.config)
+            vai, vas, d2 = _load_xy(data_dir, version, plan.val, plan.config)
         if d1 + d2:
             plan.warnings.append(f"{d1 + d2} label(s) fell outside the downscaled image (remainder rows/columns trimmed) and were dropped")
             say(f"  WARNING: {plan.warnings[-1]}")
@@ -262,10 +512,12 @@ def train_candidate(data_dir: str | Path, version: str, opts: TrainOptions, *, d
         if fit_fn is not None:
             fit_fn(model, (tri, trs), (vai, vas), save_dir, cfg, device, logger)
         else:
-            fit_cfg = {k: v for k, v in cfg.items() if k not in ("downscale", "normaliser")}    # Spotiflow's own config keys only
+            fit_cfg = {k: v for k, v in cfg.items() if k not in ("downscale", "normaliser", "num_workers", "max_val_crops")}
+            extra = {"defer_normalization": True} if load_mode == "lazy" else {}   # else SpotsDataset would materialise every crop
             model.fit(tri, trs, vai, vas, augment_train=opts.augment, save_dir=save_dir, train_config=fit_cfg, device=device,
                       logger=logger, num_workers=opts.num_workers, deterministic=True,
-                      normalizer=None)      # inputs are ALREADY normalised with the page lo/hi: no per-image re-normalisation
+                      normalizer=None,      # inputs are ALREADY normalised with the page lo/hi: no per-image re-normalisation
+                      **extra)
         dur = time.time() - t0
         logs = _val_loss_from_logs(stage / "logs", opts.divergence_factor)
         if (save_dir / "best.pt").is_file():
@@ -300,20 +552,31 @@ def train_candidate(data_dir: str | Path, version: str, opts: TrainOptions, *, d
             "split_membership": {"train": [c.crop_id for c in plan.train], "val": [c.crop_id for c in plan.val],
                                  "train_groups": sorted({c.group_id for c in plan.train}),
                                  "val_groups": sorted({c.group_id for c in plan.val}),
+                                 "val_excluded_by_max_val_crops": list(plan.val_excluded or []),
                                  "test_excluded": len([c for c in plan.manifest.crops if c.split == "test"]),
                                  "lock_sha256": plan.lock_sha256},
             "inference_config": plan.config, "lo_hi_policy": LO_HI_POLICY, "page_normalization": pages,
-            "hyperparameters": dict(cfg, augment=opts.augment, device=device, num_workers=opts.num_workers,
-                                    allow_small=opts.allow_small),
-            "seed": opts.seed, "duration_s": round(dur, 2), "hardware": hardware_info(device),
+            "hyperparameters": dict(cfg, augment=opts.augment, device=device, device_requested=opts.device,
+                                    num_workers=opts.num_workers, allow_small=opts.allow_small, load_mode=load_mode,
+                                    load_mode_requested=opts.load_mode, lazy_cache_mb=opts.lazy_cache_mb,
+                                    max_val_crops=opts.max_val_crops, n_val_total=plan.val_total,
+                                    allow_large_memory=opts.allow_large_memory),
+            "seed": opts.seed, "duration_s": round(dur, 2), "hardware": dict(hardware_info(device), requested_device=opts.device, resolved_device=device),
             "metrics": {"training": dict(logs, weights_epoch=("best" if wfile == "best.pt" else "last")), "n_train_positives": sum(c.n_positive for c in plan.train),
                         "n_val_positives": sum(c.n_positive for c in plan.val)},
             "weights_file": wfile, "weights_sha256": wsha, "artifact": mid, "artifact_files": files,
             "artifact_sha256": hash_obj(files), "created_at": utc_now(), "notes": opts.notes,
             "warnings": plan.warnings}
         Registry(data_dir).add(entry)
-        say(f"registered candidate {mid} (weights sha256 {wsha[:16]}..., {dur:.1f}s). It is NOT active: evaluate it on the "
-            f"locked test set and promote it explicitly.")
+        say(f"registered candidate {mid} (weights sha256 {wsha[:16]}..., {dur:.1f}s; "
+            f"registered weights: {'BEST validation checkpoint' if wfile == 'best.pt' else 'LAST epoch'}). It is NOT active: "
+            "evaluate it on the locked test set and promote it explicitly.")
+        dev = f" --device {opts.device}" if opts.device != "cpu" else ""
+        say("next (nothing is promoted automatically):")
+        say(f"  python -m polony_app.ml eval-model --model {mid}{dev}")
+        say(f"  python -m polony_app.ml eval-model --model general{dev}      # the baseline, same locked test crops")
+        say(f"  python -m polony_app.ml compare --models {mid} general")
+        say(f"  python -m polony_app.ml promote {mid} --reason \"...\"        # only if the comparison supports it")
         return entry
     finally:
         shutil.rmtree(stage, ignore_errors=True)

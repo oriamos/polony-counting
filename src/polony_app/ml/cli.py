@@ -1,7 +1,11 @@
 """``python -m polony_app.ml <command>`` - explicit, step-by-step; nothing trains or promotes by itself.
 
 Commands: build, import-legacy, split, verify, train, gpu-smoke, eval-model, evaluate, compare, promote, rollback, list, show.
-(``dataset build`` is accepted as an alias of ``build``.)"""
+(``dataset build`` is accepted as an alias of ``build``.)
+
+Large trainings: ``train --dry-run`` prints the scale (crops, steps, validation batches, memory) and recommends a 1-epoch benchmark
+first; ``--device auto|cuda|rocm`` (rocm = alias of cuda), ``--num-workers``, ``--num-train-samples``, ``--load-mode``,
+``--max-val-crops`` and ``--early-stopping-patience`` control cost; ``gpu-smoke`` checks the GPU first."""
 from __future__ import annotations
 
 import argparse
@@ -107,24 +111,47 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--lr", type=float, default=1e-4)
     t.add_argument("--crop-size", type=int, default=256)
     t.add_argument("--seed", type=int, default=0)
-    t.add_argument("--device", default="cpu", choices=["cpu", "auto", "cuda", "mps"])
-    t.add_argument("--num-train-samples", type=int)
+    t.add_argument("--device", default="cpu", choices=["auto", "cpu", "cuda", "rocm", "mps"],
+                   help="cpu (default) | cuda | rocm | mps | auto. 'rocm' is an ALIAS of 'cuda' (PyTorch ROCm builds expose AMD GPUs "
+                        "through the torch.cuda API). An explicitly requested GPU that is not visible is an error (no silent CPU "
+                        "run); 'auto' picks cuda/ROCm, else mps, else cpu (printed). Check with: ml gpu-smoke")
+    t.add_argument("--num-workers", type=int, default=0,
+                   help="DataLoader worker processes of Spotiflow.fit for the train AND validation loaders (default 0). Runs are "
+                        "reproducible for a given value; different values give different (not bit-identical) random streams")
+    t.add_argument("--num-train-samples", type=int,
+                   help="draw this many crops (with replacement) per epoch instead of one pass over all train crops; bounds the "
+                        "epoch length (steps/epoch = ceil(N / batch size)) on a large snapshot")
+    t.add_argument("--max-val-crops", type=int,
+                   help="validate on a deterministic subset of N val crops (stable sha256 order of the crop id; excluded ids and the "
+                        "subset are recorded). Default: all. Spotiflow validates with batch size 1, so this bounds the per-epoch cost")
+    t.add_argument("--load-mode", default="auto", choices=["auto", "eager", "lazy"],
+                   help="eager: all prepared crops in RAM; lazy: read from the snapshot on demand with a small cache; auto: lazy only "
+                        "if the prepared float32 size exceeds 25%% of the available RAM or 8 GiB")
+    t.add_argument("--allow-large-memory", action="store_true",
+                   help="eager loading although the prepared data exceeds the available RAM (otherwise refused)")
+    t.add_argument("--lazy-cache-mb", type=int, default=256, help="lazy mode: LRU cache per dataset and process (default 256)")
     t.add_argument("--pos-weight", type=float, default=10.0)
     t.add_argument("--no-augment", action="store_true")
     t.add_argument("--no-optimize-threshold", action="store_true")
-    t.add_argument("--early-stopping-patience", type=int, default=0)
+    t.add_argument("--early-stopping-patience", type=int, default=0,
+                   help="stop when the validation loss has not improved for this many epochs (0 = off). The BEST validation "
+                        "checkpoint is registered either way. Suggested: --epochs 10 --early-stopping-patience 3")
     t.add_argument("--notes", default="")
     t.add_argument("--allow-small", action="store_true",
                    help="train even with fewer than 4 independent training groups / fewer than --min-train-crops crops")
     t.add_argument("--min-train-groups", type=int, default=4)
     t.add_argument("--min-train-crops", type=int, default=20)
-    t.add_argument("--dry-run", action="store_true", help="validate everything, train nothing, write nothing")
+    t.add_argument("--dry-run", action="store_true",
+                   help="validate everything, print the scale (crops, steps, validation batches, memory) and recommendations; "
+                        "train nothing, write nothing")
 
     e = sub.add_parser("eval-model", help="score a model on the LOCKED test crops and record it in the registry")
     e.add_argument("--model", required=True, help="registry id, official pretrained name, or model folder")
     e.add_argument("--snapshot", help="default: the snapshot the test lock refers to")
     e.add_argument("--tolerance", type=float, default=10.0, help="headline matching tolerance in px (5, 10 and 15 are always reported)")
-    e.add_argument("--device", default="cpu", choices=["cpu", "auto", "cuda", "mps"])
+    e.add_argument("--device", default="cpu", choices=["auto", "cpu", "cuda", "rocm", "mps"],
+                   help="as for train ('rocm' = alias of 'cuda'; an unavailable explicit GPU is an error). Crops are scored one at "
+                        "a time (batching was not faster on the CPU and is not used)")
     e.add_argument("--prob-thresh", type=float)
     e.add_argument("--downscale", type=int, choices=[1, 2, 4, 8],
                    help="official pretrained models only (default 1): a fine-tuned model is always run at the downscale it was "
@@ -234,7 +261,9 @@ def _run(a, data_dir: str) -> int:
                          device=a.device, num_train_samples=a.num_train_samples, pos_weight=a.pos_weight,
                          augment=not a.no_augment, optimize_threshold=not a.no_optimize_threshold,
                          early_stopping_patience=a.early_stopping_patience, notes=a.notes, allow_small=a.allow_small,
-                         min_train_groups=a.min_train_groups, min_train_crops=a.min_train_crops)
+                         min_train_groups=a.min_train_groups, min_train_crops=a.min_train_crops, num_workers=a.num_workers,
+                         max_val_crops=a.max_val_crops, load_mode=a.load_mode, allow_large_memory=a.allow_large_memory,
+                         lazy_cache_mb=a.lazy_cache_mb)
         _p(f"training request: snapshot {a.snapshot}, base {a.base}" + (" (dry run)" if a.dry_run else ""))
         out = train_candidate(data_dir, a.snapshot, o, dry_run=a.dry_run, say=_p)
         if not a.dry_run:
