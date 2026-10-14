@@ -72,9 +72,19 @@ def write_workbook(openpyxl, path, summary, fields, filerows):
     for line in README:
         rd.append([line])
     rd.column_dimensions["A"].width = 140
+    path = Path(path)
     tmp_path = Path(str(path) + ".part")
     wb.save(tmp_path)
-    tmp_path.replace(path)
+    # On Windows the target can be locked for a moment (Excel open, OneDrive sync, antivirus): retry, never crash the run.
+    for attempt in range(6):
+        try:
+            tmp_path.replace(path)
+            return
+        except PermissionError:
+            time.sleep(1 + attempt)
+    alt = path.with_name(f"{path.stem}_{time.strftime('%H%M%S')}{path.suffix}")
+    tmp_path.replace(alt)
+    print(f"   WARNING: {path.name} is locked (open in Excel?); wrote {alt.name} instead", file=sys.stderr)
 
 
 def main() -> int:
@@ -97,7 +107,9 @@ def main() -> int:
     if not src.is_dir():
         ap.error(f"not a folder: {src}")
     pat = "**/*" if a.recursive else "*"
-    files = sorted(p for p in src.glob(pat) if p.suffix.lower() in (".tif", ".tiff") and p.is_file())
+    # skip macOS AppleDouble sidecars ("._name.tif": resource-fork stubs copied from a Mac, not images) and __MACOSX folders
+    files = sorted(p for p in src.glob(pat) if p.suffix.lower() in (".tif", ".tiff") and p.is_file()
+                   and not p.name.startswith("._") and "__MACOSX" not in p.parts)
     if a.limit:
         files = files[: a.limit]
     if not files:
