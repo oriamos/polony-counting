@@ -545,6 +545,8 @@ def train_candidate(data_dir: str | Path, version: str, opts: TrainOptions, *, d
         if fit_fn is None:
             from pytorch_lightning.loggers import CSVLogger
             logger = CSVLogger(save_dir=str(stage / "logs"), name="fit")
+        if opts.num_workers:
+            _prepare_worker_sharing(say)
         t0 = time.time()
         say(f"training {opts.epochs} epoch(s) (seed {opts.seed}) ...")
         if fit_fn is not None:
@@ -618,3 +620,23 @@ def train_candidate(data_dir: str | Path, version: str, opts: TrainOptions, *, d
         return entry
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+
+
+def _prepare_worker_sharing(say) -> None:
+    """DataLoader workers hand every batch over as shared-memory file descriptors; with many small tensors the default soft
+    limit (often 1024) is exhausted at the epoch end ("Too many open files ... Communication with the workers is no longer
+    possible"). Raise the soft limit to the hard limit (max 65536) and pass tensors by file name instead of by descriptor."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = 65536 if hard == resource.RLIM_INFINITY else min(hard, 65536)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+            say(f"  raised the open-files limit {soft} -> {want} for the DataLoader workers")
+    except (ImportError, ValueError, OSError):
+        pass
+    try:
+        import torch.multiprocessing as tmp
+        tmp.set_sharing_strategy("file_system")
+    except Exception:   # noqa: BLE001 - best effort; training still works with the default strategy
+        pass
