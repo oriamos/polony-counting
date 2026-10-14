@@ -44,6 +44,8 @@ export interface ImageMeta {
   embedded_rois: EmbeddedRoi[];
   warnings: string[];
   composite_only: boolean;
+  /** absolute path the scan was opened from ('Open from disk'); null/absent for browser uploads */
+  source_path?: string | null;
 }
 
 export type RegionKind = 'counting' | 'exclusion';
@@ -358,6 +360,8 @@ export interface SlideMeta {
   concentration_formula_confirmed?: boolean;
   pixel_size_um: number | null;
   csv_color_mapping: Record<string, string> | null;
+  /** grid fields switched off for counting (blank in the CSVs); geometry kept so they can be switched back on */
+  skipped_fields?: SkippedField[];
 }
 
 export interface Provenance {
@@ -535,4 +539,32 @@ export interface AutoChamberResponse {
   method: string;
   warnings: string[];
   suggested_exclusions: [number, number][][];
+}
+
+export interface SkippedField {
+  field_index: number;
+  name: string;
+  polygon: [number, number][];
+}
+
+export interface FsListing {
+  path: string;
+  parent: string | null;
+  dirs: string[];
+  files: string[];
+}
+
+export type CountClass = 'red' | 'green' | 'yellow';
+
+export interface SaveSelection {
+  classes: CountClass[];
+  label?: string;
+}
+
+export interface SaveSlideReport {
+  directory: string;
+  files: string[];
+  slide_id: string;
+  warnings: string[];
+  rows: { what_counted: string; nofpol: number; nofgrids: number; fields: Record<string, number> }[];
 }

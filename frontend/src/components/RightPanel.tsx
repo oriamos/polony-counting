@@ -7,6 +7,7 @@ import { GlyphIcon } from './ViewerToolbar';
 import { RegionsTab } from './RegionsTab';
 import { DetectTab } from './DetectTab';
 import { FinishTab } from './FinishTab';
+import { SaveTab } from './SaveTab';
 import { TotalsTab } from './TotalsTab';
 import { AgreementInfo } from './EngineLayers';
 import { SCORE_LABEL, STATUS_LABEL, filteredQueue, hasEngineInfo, objectStatus } from '../lib/consensus';
@@ -18,6 +19,7 @@ const TABS: { id: RightTab; label: string }[] = [
   { id: 'detect', label: 'Detect' },
   { id: 'totals', label: 'Totals' },
   { id: 'finish', label: 'Finish' },
+  { id: 'save', label: 'Save' },
 ];
 
 export function RightPanel() {
@@ -44,6 +46,7 @@ export function RightPanel() {
         {tab === 'detect' && <DetectTab />}
         {tab === 'totals' && <TotalsTab />}
         {tab === 'finish' && <FinishTab />}
+        {tab === 'save' && <SaveTab />}
       </div>
     </aside>
   );

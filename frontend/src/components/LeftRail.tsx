@@ -3,6 +3,7 @@ import { api, ApiError, batchLabExport, type LabFormat, type LabStyle } from '..
 import type { AnalysisStatus, CsvImport } from '../api/types';
 import { useApp } from '../state/store';
 import { BatchPanel } from './BatchPanel';
+import { OpenFromDisk } from './OpenFromDisk';
 
 export const STATUS_LABEL: Record<AnalysisStatus, string> = {
   created: 'created',
@@ -44,6 +45,7 @@ function AnalysesList() {
           ↻
         </button>
       </header>
+      <OpenFromDisk />
       <UploadBox />
       {loading && analyses.length === 0 && <div className="empty"><span className="spinner" /> Loading…</div>}
       {err && (

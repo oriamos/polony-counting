@@ -60,6 +60,26 @@ def _env_int(name: str, default: int) -> int:
 
 
 # ------------------------------------------------------------------ request models
+class OpenPathBody(BaseModel):
+    path: str
+    name: Optional[str] = None
+
+
+class GridSelectionBody(BaseModel):
+    field_index: int
+    counted: bool
+
+
+class CountSelectionBody(BaseModel):
+    classes: list[Literal["red", "green", "yellow"]]
+    label: Optional[str] = None
+
+
+class SaveSlideBody(BaseModel):
+    selections: list[CountSelectionBody]
+    output_dir: Optional[str] = None
+
+
 class ChannelMap(BaseModel):
     index: int
     role: Literal["red", "green", "ignore"]
@@ -353,6 +373,121 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             raise
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    # ------------------------------------------------------------- open from disk / save next to the original
+    @api.get("/fs/list")
+    def fs_list(path: Optional[str] = None):
+        """Folders and .tif/.tiff files of a local folder (the app runs on the researcher's own machine)."""
+        p = Path(path).expanduser() if path else Path.home()
+        try:
+            p = p.resolve()
+            if not p.is_dir():
+                return err(422, "not_a_folder", f"not a folder: {p}")
+            entries = sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+        except OSError as e:
+            return err(422, "cannot_list", f"cannot read {p}: {e.strerror or e}")
+        dirs = [e.name for e in entries if not e.name.startswith(".") and e.is_dir()]
+        files = [e.name for e in entries if e.is_file() and e.suffix.lower() in (".tif", ".tiff")]
+        return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "dirs": dirs, "files": files}
+
+    @api.post("/analyses/open-path")
+    def open_path(body: OpenPathBody):
+        """Open a TIFF in place: it is copied (read-only) like an upload, but its folder is remembered so that
+        Save can write the labelled scan and CSVs next to it."""
+        src = Path(body.path).expanduser()
+        if not src.is_file():
+            return err(422, "file_not_found", f"file not found: {src}")
+        if src.suffix.lower() not in (".tif", ".tiff"):
+            return err(415, "unsupported_file", f"'{src.name}': only .tif/.tiff files are accepted")
+        src = src.resolve()
+        if src.stat().st_size > max_upload:
+            return err(413, "too_large", f"'{src.name}' exceeds the {max_upload // 2**20} MB limit")
+        from polony_app.imaging.ingest import IngestError, _safe_name, ingest_files
+
+        aid = store.create_analysis((body.name or "").strip()[:120] or src.stem)
+        try:
+            try:
+                meta = ingest_files([(safe_filename(src.name, "file0.tif"), src)], store.originals_dir(aid))
+            except IngestError as e:
+                store.delete_analysis(aid)
+                return err(422, "ingest_error", str(e))
+            except Exception as e:  # noqa: BLE001  unreadable/corrupt TIFF
+                store.delete_analysis(aid)
+                return err(422, "unreadable_image", f"could not read image: {type(e).__name__}: {e}")
+            meta.source_path = str(src)
+            try:
+                (store.originals_dir(aid) / "upload_manifest.json").write_text(
+                    json.dumps({_safe_name(0, safe_filename(src.name, "file0.tif")): src.name}, indent=1,
+                               ensure_ascii=False), encoding="utf-8")
+            except Exception:  # noqa: BLE001  provenance aid only
+                pass
+            with store.edit(aid) as st:
+                st.analysis.image = meta
+                engine.refresh_status(st)
+                out_json = st.analysis.model_dump_json()
+            return Response(out_json, media_type="application/json", status_code=200)
+        except Exception:
+            try:
+                store.delete_analysis(aid)
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
+    @api.put("/analyses/{aid}/grid-selection")
+    def put_grid_selection(aid: str, body: GridSelectionBody):
+        """Switch one grid field on/off for counting. Off = its region is removed (blank in the CSVs) and its geometry
+        is remembered in slide.skipped_fields; on = the region is recreated from that geometry."""
+        from polony_app.schemas import RegionKind, SkippedField
+
+        with store.edit(aid_ok(aid)) as st:
+            a = st.analysis
+            fi = body.field_index
+            cur = next((r for r in a.regions if r.kind == RegionKind.counting and r.field_index == fi), None)
+            skipped = [s_ for s_ in a.slide.skipped_fields if s_.field_index == fi]
+            if body.counted:
+                if cur is not None:
+                    return _respond(st)
+                if not skipped:
+                    raise ReviewError("unknown_field", f"field {fi} is not part of the grid", 404)
+                sk = skipped[0]
+                rid = new_id()
+                while any(r.id == rid for r in a.regions):
+                    rid = new_id()
+                new = Region(id=rid, kind=RegionKind.counting, name=sk.name, field_index=fi,
+                             polygon=[tuple(p) for p in sk.polygon])
+                regs = [r for r in a.regions if r.kind == RegionKind.counting and r.field_index is not None] + [new]
+                regs.sort(key=lambda r: r.field_index or 0)
+                regions = regs + [r for r in a.regions if not (r.kind == RegionKind.counting and r.field_index is not None)]
+                engine.set_regions(st, regions)
+                st.analysis.slide.skipped_fields = [s_ for s_ in st.analysis.slide.skipped_fields if s_.field_index != fi]
+            else:
+                if cur is None:
+                    if skipped:
+                        return _respond(st)
+                    raise ReviewError("unknown_field", f"field {fi} is not part of the grid", 404)
+                sk = SkippedField(field_index=fi, name=cur.name, polygon=[tuple(p) for p in cur.polygon])
+                engine.set_regions(st, [r for r in a.regions if r.id != cur.id])
+                st.analysis.slide.skipped_fields = [s_ for s_ in st.analysis.slide.skipped_fields
+                                                    if s_.field_index != fi] + [sk]
+            return _respond(st)
+
+    @api.post("/analyses/{aid}/save-slide")
+    def save_slide_route(aid: str, body: SaveSlideBody):
+        """Researcher's Save: <name>_labeled.tif + <name>.csv (+ experiment_counts.csv) next to the original scan."""
+        from polony_app.export import slide_save as ss
+
+        sels = []
+        for c in body.selections:
+            classes = ss.parse_classes(c.classes)
+            label = (c.label or "").strip() or ss.default_label(classes)
+            sels.append((label, classes))
+        with store.view(aid_ok(aid)) as st:
+            a = st.analysis
+            out_dir = ss.resolve_output_dir(a, body.output_dir)
+            ss.count_fields(a, ss.COUNTABLE)   # refuses early when no grid field is selected
+            red, green = images.raw_pair(st)
+            report = ss.save_slide(a, red, green, sels, out_dir)
+        return report
 
     @api.get("/analyses")
     def list_analyses():

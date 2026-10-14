@@ -21,6 +21,7 @@ import type {
   ReferenceInfo,
   AutoChamberResponse,
   ReviewQueueItem,
+  SaveSelection,
 } from '../api/types';
 import type { PreviewCell } from '../lib/reference';
 import { centerOn, fitBox, fitView, type View } from '../lib/geometry';
@@ -58,7 +59,7 @@ export interface RawSlot {
 }
 export const rawKey = (engine: EngineName, page: number, excluded: boolean) => `${engine}|${page}|${excluded ? 'all' : 'valid'}`;
 
-export type RightTab = 'review' | 'regions' | 'detect' | 'totals' | 'finish';
+export type RightTab = 'review' | 'regions' | 'detect' | 'totals' | 'finish' | 'save';
 
 const NO_DISPLAY: DisplayParams = { lo: null, hi: null, gamma: 1 };
 let toastSeq = 1;
@@ -124,6 +125,8 @@ export interface AppState {
   chamberPreview: AutoChamberResponse | null;
 
   rightTab: RightTab;
+  /** Save tab: what to count (one CSV row per entry) */
+  saveSel: SaveSelection[];
   mappingOpen: boolean;
   helpOpen: boolean;
   theme: 'auto' | 'light' | 'dark';
@@ -239,6 +242,7 @@ export const useApp = create<AppState>((set, get) => ({
   chamberPreview: null,
 
   rightTab: 'review',
+  saveSel: [{ classes: ['red'] }],
   mappingOpen: false,
   helpOpen: false,
   theme: (() => {

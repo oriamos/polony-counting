@@ -14,6 +14,9 @@ import type {
   QcSampleResponse,
   EngineInfo,
   EngineName,
+  FsListing,
+  SaveSelection,
+  SaveSlideReport,
   EngineRunInfo,
   RawDetection,
   DetectionRequest,
@@ -91,6 +94,12 @@ export const api = {
     if (name) fd.append('name', name);
     return request<Analysis>('POST', '/analyses', undefined, fd);
   },
+  fsList: (path?: string) => request<FsListing>('GET', `/fs/list${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  openPath: (path: string, name?: string) => request<Analysis>('POST', '/analyses/open-path', { path, name }),
+  setGridField: (id: string, field_index: number, counted: boolean) =>
+    request<Analysis>('PUT', `/analyses/${id}/grid-selection`, { field_index, counted }),
+  saveSlide: (id: string, selections: SaveSelection[], output_dir?: string) =>
+    request<SaveSlideReport>('POST', `/analyses/${id}/save-slide`, { selections, output_dir: output_dir || null }),
   setChannels: (id: string, mapping: { index: number; role: 'red' | 'green' | 'ignore' }[]) =>
     request<Analysis>('PUT', `/analyses/${id}/channels`, { mapping }),
   putRegions: (id: string, regions: Region[]) => request<Analysis>('PUT', `/analyses/${id}/regions`, { regions }),

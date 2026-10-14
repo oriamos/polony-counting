@@ -1641,3 +1641,19 @@ aside.right {
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* Save tab */
+.savetab section { margin: 12px 0; }
+.save-row { border: 1px solid var(--border, #8884); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; display: grid; gap: 4px; }
+.gridmap { width: 100%; height: auto; max-height: 260px; margin: 6px 0; }
+.gridmap-bg { fill: none; stroke: currentColor; stroke-opacity: 0.25; }
+.gridmap-cell { cursor: pointer; }
+.gridmap-cell rect { stroke: currentColor; stroke-width: 3; }
+.gridmap-cell.on rect { fill: #2e9e5b55; }
+.gridmap-cell.off rect { fill: none; stroke-dasharray: 10 8; stroke-opacity: 0.5; }
+.gridmap-cell.off text { opacity: 0.5; }
+.gridmap-cell text { fill: currentColor; pointer-events: none; }
+.gridmap-cell:focus-visible rect { stroke: #3b82f6; stroke-width: 6; }
+.opendisk-list { max-height: 260px; overflow: auto; border: 1px solid var(--border, #8884); border-radius: 6px; margin: 6px 0; padding: 0; list-style: none; }
+.opendisk-list li { padding: 3px 8px; cursor: pointer; }
+.opendisk-list li:hover, .opendisk-list li.sel { background: #3b82f622; }

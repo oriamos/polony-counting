@@ -54,6 +54,7 @@ class ImageMeta(BaseModel):
     warnings: list[str] = []
     composite_only: bool = False     # True => detection of per-channel signal is
                                      # an approximation; UI must say so
+    source_path: Optional[str] = None  # absolute path the scan was opened from ('Open from disk'); None for uploads
 
 
 class EmbeddedRoi(BaseModel):
@@ -379,6 +380,13 @@ class LabSeries(BaseModel):
     sheet_title: Optional[str] = None  # title used in the Counts-style workbook (e.g. "Clade A")
 
 
+class SkippedField(BaseModel):
+    """A grid cell the researcher switched off ('not counted'): its geometry is kept so it can be switched back on."""
+    field_index: int
+    name: str
+    polygon: list[tuple[float, float]]
+
+
 class SlideMeta(BaseModel):
     """Explicit scientific inputs. None = not provided (gates concentration)."""
     slide_id: Optional[str] = None          # lab slide ID, e.g. "AI_A" (sample + "_" + replicate letter)
@@ -397,6 +405,7 @@ class SlideMeta(BaseModel):
     pixel_size_um: Optional[float] = None
     concentration_formula_confirmed: bool = False  # researcher must confirm formula+geometry; gates ALL concentration output
     csv_color_mapping: Optional[dict[str, str]] = None  # e.g. {"T7A": "red"} ONLY if user set
+    skipped_fields: list[SkippedField] = []   # grid cells switched off (blank in the CSVs); see /grid-selection
 
 
 class Provenance(BaseModel):

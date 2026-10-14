@@ -90,6 +90,21 @@ Edited automatic objects get `origin = edited`; added ones `origin = manual`.
 
 ![Inspector](img/06-edit-inspector.png)
 
+## Save: labelled scan and CSV next to the original
+
+1. **Open from disk** (left rail) opens a TIFF in place, so the app knows its folder. (A dragged-in upload has no folder: the Save tab then asks for an output folder.) Confirm the channel mapping as usual.
+2. Create the grid (Regions tab, same size as in ImageJ), run detection and review the labels.
+3. **Save tab**
+   * *What to count*: tick red only / green only / yellow (red + green). The text written in the CSV is generated (`red, not yellow`, `yellow`, `red and yellow`, ...) and can be edited. **+ Count something else too** adds another row; every row becomes its own row in the experiment CSV.
+   * *Grid fields to count*: click a field to switch it off (bad area) or back on. Off = blank in the CSV; counted with no polonies = 0. Numbers above 24 are not allowed (the lab template ends at Field24).
+   * **Save** writes, next to the original scan (`<name>` = file name without extension; the original is never modified):
+     * `<name>_labeled.tif`: RGB scan with the grid, per-field counts and a ring around every counted object (orange red-only, cyan green-only, yellow yellow).
+     * `<name>.csv`: `SlideID, Total number of polonies, Field1 ... Field24`. With several rows: `<name>__<what-counted>.csv`, one per row.
+     * `experiment_counts.csv` (one per folder): `Slide name, What counted, NofPol, NofGrids, Field1 ... Field24`. Saving the same slide + "what counted" again replaces its row; other slides are kept. An existing file with a different header is never overwritten.
+   * Save does not require finalizing; uncertain objects are never counted, and the report lists unapproved fields.
+
+API: `GET /api/fs/list`, `POST /api/analyses/open-path`, `PUT /api/analyses/{id}/grid-selection`, `POST /api/analyses/{id}/save-slide`.
+
 ## 8. Keyboard shortcuts
 
 | Key | Action |
