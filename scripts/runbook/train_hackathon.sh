@@ -63,8 +63,17 @@ c["confirmed_by"] = f"{user} (automatic: template defaults accepted without per-
 c["confirmed_on"] = today
 c["source_of_truth"] = "template default layout validated on the research stacks; NOT re-checked against lab records"
 json.dump(c, open(f"{w}/channels.json", "w"), indent=2)
+# Identities: the name-inferred specimen ids ('5', 'FS', 'S') collide across colour folders and dates and made train
+# refuse the snapshot (leakage with the locked test set). Conservative rule instead: specimen = the file's relative
+# path with the replicate suffix (-A / -B) removed, so A/B replicates stay together and nothing else is merged.
+import re
 i = json.load(open(f"{w}/tpl/identities.template.json"))
-json.dump(i, open(f"{w}/identities.json", "w"), indent=2)   # stays confirmed:false, inferred from file names
+for r in i["rows"]:
+    stem = re.sub(r"\.tiff?$", "", r["file"], flags=re.I)
+    spec = re.sub(r"[-_][AB](?=(_[A-Za-z]+)?$)", "", stem)
+    r.update(specimen_id=spec, slide_id=stem, assay=None, confirmed=True,
+             inferred_from="driver script: path minus replicate suffix (automatic, not reviewed against lab records)")
+json.dump(i, open(f"{w}/identities.json", "w"), indent=2)
 PY
 fi
 
