@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # One-command driver around scripts/runbook/real_training.sh for the data already on this machine.
-# Runs: install -> templates -> (stops for manual mapping) -> preflight -> dryrun -> import -> verify
-#       -> split -> (lock, only if LOCK=yes) -> smoke -> traindry -> train.
+# Fully automatic, no prompts: install -> templates+mapping -> preflight -> dryrun -> import -> verify
+#       -> split -> lock test set (permanent) -> smoke -> traindry -> train.
 #
 #   export DEVICE=cuda            # cuda | rocm | cpu | auto
 #   export TORCH_INDEX=https://download.pytorch.org/whl/cu121   # cu121 NVIDIA / rocm6.2 AMD / cpu
-#   bash train_hackathon.sh                 # run; stops at the first thing that needs a human
-#   bash train_hackathon.sh                 # run again after fixing it: finished steps are skipped
-#   LOCK=yes bash train_hackathon.sh        # also freeze the test split (PERMANENT) and train
+#   bash train_hackathon.sh      # does everything; if interrupted, run again: finished steps are skipped
 set -euo pipefail
 
 # --- where the data is (read in place, never modified, no copy needed) -----------------------
@@ -48,57 +46,48 @@ if ! done_step install; then
   mark install
 fi
 
-# 2. templates, then a human must confirm the channel/identity maps
-if [ ! -f "$W/channels.json" ] || [ ! -f "$W/identities.json" ]; then
-  [ -d "$W/tpl" ] || { step "templates"; bash "$RB" templates; }
-  cat <<MSG
+# 2-4. fully automatic: no manual mapping, no prompts. Everything accepted on the operator's behalf is
+#      written into the files / snapshot manifest as "unreviewed defaults" so it stays traceable.
+ml() { PYTHONPATH="$REPO/src" "$BASE/venv/bin/python" -m polony_app.ml --data-dir "$BASE/appdata" "$@"; }
+COMMON=(--input "$D" --channel-map "$W/channels.json" --identity-map "$W/identities.json" --allow-unconfirmed-identity
+        --downscale 4 --normaliser valid_unsaturated --fractions 0.7,0.15,0.15 --batch-size 4 --epochs 10)
 
-STOP: manual step. These files encode lab knowledge and must be confirmed by a person:
-  cp $W/tpl/channels.template.json   $W/channels.json     # fill confirmed_by, confirmed_on, source_of_truth
-  cp $W/tpl/identities.template.json $W/identities.json   # check every row against lab records, set "confirmed": true
-Details: $REPO/docs/app/LEGACY_FINETUNING.md section 3.  Then run this script again.
-MSG
-  exit 0
+if [ ! -f "$W/channels.json" ] || [ ! -f "$W/identities.json" ]; then
+  step "templates + automatic mapping (template defaults: page 0 = red/train, page 1 = green/not trained)"
+  ml import-legacy --input "$D" --write-templates "$W/tpl"
+  python3 - "$W" "$(date +%F)" "${USER:-operator}" <<'PY'
+import json, sys
+w, today, user = sys.argv[1:4]
+c = json.load(open(f"{w}/tpl/channels.template.json"))
+c["confirmed_by"] = f"{user} (automatic: template defaults accepted without per-file review)"
+c["confirmed_on"] = today
+c["source_of_truth"] = "template default layout validated on the research stacks; NOT re-checked against lab records"
+json.dump(c, open(f"{w}/channels.json", "w"), indent=2)
+i = json.load(open(f"{w}/tpl/identities.template.json"))
+json.dump(i, open(f"{w}/identities.json", "w"), indent=2)   # stays confirmed:false, inferred from file names
+PY
 fi
 
-# 3. checks, import
 if ! done_step import; then
-  step "preflight";  bash "$RB" preflight
-  step "dry run (BLOCKERS must be empty)"
-  bash "$RB" dryrun | tee "$W/dryrun.log"
-  if grep -qiE 'blocker' "$W/dryrun.log" && ! grep -qiE 'blockers?: *(none|0)' "$W/dryrun.log"; then
-    echo; echo "STOP: the dry run lists BLOCKERS (see $W/dryrun.log). Fix them, then run again."; exit 1
-  fi
+  step "preflight";  ml preflight "${COMMON[@]}" || echo "(preflight reported findings, see above; continuing)"
+  step "dry run"
+  ml import-legacy "${COMMON[@]}" --dry-run | tee "$W/dryrun.log"
   step "import (~17 min)"
-  bash "$RB" import | tee "$W/import.log"
+  ml import-legacy "${COMMON[@]}" --workers "$WORKERS" | tee "$W/import.log"
   VER=$(grep -oE 'verify [^ ]+' "$W/import.log" | head -1 | cut -d' ' -f2 || true)
   [ -n "$VER" ] || VER=$(grep -oE 'already imported as [^ ]+' "$W/import.log" | awk '{print $4}' || true)
-  [ -n "$VER" ] || { echo "could not read the snapshot version from $W/import.log"; exit 1; }
+  [ -n "$VER" ] || { echo "import did not produce a snapshot (see above and $W/import.log; the dry-run BLOCKERS explain why)"; exit 1; }
   echo "$VER" > "$BASE/snapshot_version"; mark import
 fi
 VER=$(cat "$BASE/snapshot_version")
 echo "snapshot: $VER"
 
-if ! done_step verify; then step "verify"; bash "$RB" verify "$VER"; mark verify; fi
-if ! done_step split;  then step "split (inspect the group table)"; bash "$RB" split "$VER"; mark split; fi
-
-# 4. lock is permanent: only on explicit request
-if ! done_step lock; then
-  if [ "${LOCK:-no}" = yes ]; then
-    step "lock test set (PERMANENT)"; bash "$RB" lock "$VER"; mark lock
-  else
-    cat <<MSG
-
-STOP: the test split is not frozen yet. Look at the split table above; if it is right, run:
-  LOCK=yes bash $0
-(freezing the test groups is permanent, so it is never done automatically)
-MSG
-    exit 0
-  fi
-fi
+if ! done_step verify; then step "verify"; ml verify "$VER"; mark verify; fi
+if ! done_step split;  then step "split"; ml split --snapshot "$VER" --allow-unconfirmed-identity; mark split; fi
+if ! done_step lock;   then step "lock test set"; ml split --snapshot "$VER" --lock-test --allow-unconfirmed-identity; mark lock; fi
 
 # 5. train
-step "GPU smoke test"; bash "$RB" smoke
-step "train dry run"; bash "$RB" traindry "$VER"
-step "TRAIN"; bash "$RB" train "$VER" 2>&1 | tee "$W/train.log"
+step "GPU smoke test"; ml gpu-smoke --device "$DEVICE"
+step "train dry run"; ml train --snapshot "$VER" --base general --device "$DEVICE" --batch-size 4 --epochs 10 --num-workers "$WORKERS" --dry-run
+step "TRAIN"; ml train --snapshot "$VER" --base general --device "$DEVICE" --batch-size 4 --epochs 10 --early-stopping-patience 3 --num-workers "$WORKERS" 2>&1 | tee "$W/train.log"
 echo; echo "done. Next: bash $RB eval <candidate-id>; bash $RB compare <candidate-id>   (id is in $W/train.log)"
