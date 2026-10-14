@@ -87,7 +87,7 @@ if ! done_step split;  then step "split"; ml split --snapshot "$VER" --allow-unc
 if ! done_step lock;   then step "lock test set"; ml split --snapshot "$VER" --lock-test --allow-unconfirmed-identity; mark lock; fi
 
 # 5. train
-step "GPU smoke test"; ml gpu-smoke --device "$DEVICE"
+if [ "$DEVICE" != cpu ]; then step "GPU smoke test"; ml gpu-smoke --device "$DEVICE"; else echo "device=cpu: skipping GPU smoke test"; fi
 step "train dry run"; ml train --snapshot "$VER" --base general --device "$DEVICE" --batch-size 4 --epochs 10 --num-workers "$WORKERS" --dry-run
 step "TRAIN"; ml train --snapshot "$VER" --base general --device "$DEVICE" --batch-size 4 --epochs 10 --early-stopping-patience 3 --num-workers "$WORKERS" 2>&1 | tee "$W/train.log"
 echo; echo "done. Next: bash $RB eval <candidate-id>; bash $RB compare <candidate-id>   (id is in $W/train.log)"
