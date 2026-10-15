@@ -1,20 +1,44 @@
-import type { Analysis, CompareCountType, CompareResponse, Counts, CountsResponse, DetectionRequest, EngineChoice, FieldImportRequest, Job, ReferenceInfo, Region } from '../api/types';
+import type { Analysis, CompareCountType, CompareResponse, Counts, CountsResponse, DetectionRequest, EngineChoice, ExaminedFieldsResult, FieldImportRequest, Job, ReferenceInfo, Region } from '../api/types';
 import { DEFAULT_SPOTIFLOW } from '../api/types';
 
 /** Batch upload: one analysis per TIFF (each file is a multi-channel scan), run in sequence. */
 
 export type BatchStage = 'queued' | 'uploading' | 'mapping' | 'region' | 'detecting' | 'counting' | 'done' | 'failed' | 'cancelled';
 
-/** Agreement of the app's per-field counts with the researcher's embedded marks for one plane / count type. */
+/**
+ * Agreement of the app's per-field counts with the researcher's embedded marks for one plane / count type, over
+ * the fields the researcher provably examined on THAT plane only. A field without marks on the plane is never read as zero.
+ * Metrics are null when no field is eligible.
+ */
 export interface CompareLine {
   plane: number;
   countType: CompareCountType;
+  /** all field regions (examined or not) */
   nFields: number;
+  eligibleExaminedFields: number;
+  positiveMarkedFields: number;
+  verifiedZeroFields: number;
+  unknownFieldsExcluded: number;
+  conflictFieldsExcluded: number;
+  eligibilitySource: string;
   pearsonR: number | null;
   slope: number | null;
   mae: number | null;
-  totalReference: number;
-  totalApp: number;
+  totalReference: number | null;
+  totalApp: number | null;
+}
+
+/** Map a compare response to one batch line (the only place the response shape is read). */
+export function compareLine(plane: number, countType: CompareCountType, cmp: CompareResponse): CompareLine {
+  const sm = cmp.summary;
+  return {
+    plane, countType, nFields: sm.n_fields,
+    eligibleExaminedFields: sm.eligible_examined_fields ?? 0, positiveMarkedFields: sm.positive_marked_fields ?? 0,
+    verifiedZeroFields: sm.verified_zero_fields ?? 0, unknownFieldsExcluded: sm.unknown_fields_excluded ?? 0,
+    conflictFieldsExcluded: sm.conflict_fields_excluded ?? 0, eligibilitySource: sm.eligibility_source ?? 'none',
+    pearsonR: sm.pearson_r ?? null, slope: sm.slope ?? null, mae: sm.mae ?? null,
+    totalReference: sm.total_reference ?? null, totalApp: sm.total_app ?? null,
+  };
 }
 
 export interface BatchRow {
@@ -37,6 +61,8 @@ export interface BatchOptions {
   rimPx: number;
   /** import the researcher's fields (when the TIFF carries them) and compare per field */
   compare: boolean;
+  /** optional examined-fields manifest (JSON/CSV), uploaded to every analysis before the fields are imported */
+  manifest?: File | null;
 }
 
 /** The slice of the API client the batch needs (injected so the flow is testable). */
@@ -52,6 +78,7 @@ export interface BatchApi {
   reference: (id: string) => Promise<ReferenceInfo>;
   importFields: (id: string, body: FieldImportRequest) => Promise<Analysis>;
   compareFields: (id: string, plane: number | null, countType: CompareCountType) => Promise<CompareResponse>;
+  uploadExamined?: (id: string, file: File) => Promise<ExaminedFieldsResult>;
 }
 
 export const isTiff = (name: string) => /\.tiff?$/i.test(name);
@@ -130,7 +157,14 @@ export async function runBatch(
         try {
           const ref = await api.reference(id);
           if (ref.available && ref.grid) {
-            await api.importFields(id, { mode: 'counted', shift: [0, 0], plane: null, replace: false });
+            const withManifest = !!(opts.manifest && api.uploadExamined);
+            if (withManifest) {
+              const m = await api.uploadExamined!(id, opts.manifest as File);
+              set(i, { notes: [...rows[i].notes, `examined-fields manifest: ${m.n_entries} entr${m.n_entries === 1 ? 'y' : 'ies'} for this file`, ...m.warnings] });
+            }
+            // 'counted' = fields with marks on any page. Which plane a field was examined on is decided per plane at compare time.
+            // With a manifest every grid cell is imported so that counted-zero fields have a region to be compared in.
+            await api.importFields(id, { mode: withManifest ? 'all' : 'counted', shift: [0, 0], plane: null, replace: false });
             hasFields = true;
             set(i, { refStatus: 'fields imported', notes: [...rows[i].notes, ...ref.warnings] });
           } else {
@@ -162,8 +196,7 @@ export async function runBatch(
           for (const t of types) {
             try {
               const cmp = await api.compareFields(id, plane, t);
-              const sm = cmp.summary;
-              lines.push({ plane, countType: t, nFields: sm.n_fields, pearsonR: sm.pearson_r, slope: sm.slope, mae: sm.mae, totalReference: sm.total_reference, totalApp: sm.total_app });
+              lines.push(compareLine(plane, t, cmp));
             } catch (e) {
               set(i, { notes: [...rows[i].notes, `compare plane ${plane} ${t}: ${errText(e)}`] });
             }
@@ -206,20 +239,27 @@ export function summaryCsv(rows: BatchRow[], engine: EngineChoice): string {
   return lines.join('\r\n') + '\r\n';
 }
 
+/**
+ * `fields_compared` was dropped: it counted every imported field. Use `eligible_examined_fields` (= positive_marked +
+ * verified_zero); unknown/conflict fields are counted separately and enter no total or metric.
+ */
 export const COMPARE_HEADER = [
-  'file', 'analysis_id', 'export_status', 'reference_plane', 'app_count_type', 'fields_compared',
-  'total_reference', 'total_app', 'delta_total', 'pearson_r', 'slope', 'mae',
+  'file', 'analysis_id', 'export_status', 'reference_plane', 'app_count_type',
+  'eligible_examined_fields', 'positive_marked_fields', 'verified_zero_fields', 'unknown_fields_excluded', 'conflict_fields_excluded',
+  'eligibility_source', 'total_reference', 'total_app', 'delta_total', 'pearson_r', 'slope', 'mae',
 ] as const;
 
-/** Long format: one row per file x plane x count type. Agreement with the researcher's marks, not accuracy. */
+/** Long format: one row per file x plane x count type. Agreement with the researcher's marks, not accuracy. Blank = not defined. */
 export function comparisonCsv(rows: BatchRow[]): string {
   const lines = [COMPARE_HEADER.join(',')];
   for (const r of rows) {
     for (const c of r.compare) {
       lines.push(
         [
-          r.file, r.analysisId ?? '', 'DRAFT', c.plane, c.countType, c.nFields,
-          c.totalReference, c.totalApp, c.totalApp - c.totalReference,
+          r.file, r.analysisId ?? '', 'DRAFT', c.plane, c.countType,
+          c.eligibleExaminedFields, c.positiveMarkedFields, c.verifiedZeroFields, c.unknownFieldsExcluded, c.conflictFieldsExcluded,
+          c.eligibilitySource, c.totalReference, c.totalApp,
+          c.totalReference == null || c.totalApp == null ? '' : c.totalApp - c.totalReference,
           c.pearsonR == null ? '' : c.pearsonR.toFixed(3), c.slope == null ? '' : c.slope.toFixed(3), c.mae == null ? '' : c.mae.toFixed(2),
         ].map(csvCell).join(','),
       );

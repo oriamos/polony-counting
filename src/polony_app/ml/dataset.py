@@ -13,11 +13,14 @@ real spots would teach the model that spots are background.
 """
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import json
 import os
+import re
 import shutil
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,6 +60,8 @@ from .common import (
     pretty_json,
     rect_of,
     sha256_bytes,
+    staging_lock_path,
+    try_file_lock,
     sha256_file,
     utc_now,
 )
@@ -216,10 +221,28 @@ class _CropCand:
     points: list           # positives (rows), already in crop coordinates (y, x)
     n_rejected: int
     n_edge: int
-    crop: np.ndarray
+    crop: Optional[np.ndarray]
     dy_dx: tuple
     source_sha: str
-    norm: Optional[dict] = None     # page lo/hi record (filled after the region loop)
+    norm: Optional[dict] = None     # page lo/hi record (filled after the region loop, or by ``_Extract.prepare``)
+    # --- bridge sources (``ml import-legacy``): crops can be LAZY so that tens of thousands of crops never sit in memory
+    shape_hw: tuple = ()            # (h, w) of the crop; derived from ``crop`` when it is given
+    dtype: str = ""
+    provenance: dict = field(default_factory=dict)
+    loader: Optional[Callable[[], np.ndarray]] = None
+
+    def pixels(self) -> np.ndarray:
+        if self.crop is not None:
+            return self.crop
+        if self.loader is None:
+            raise MLError("internal error: a crop candidate has neither pixels nor a loader")
+        return self.loader()
+
+    def size_bytes(self) -> int:
+        if self.crop is not None:
+            return int(self.crop.nbytes)
+        h, w = self.shape_hw
+        return int(h) * int(w) * int(np.dtype(self.dtype).itemsize)
 
 
 @dataclass
@@ -231,6 +254,12 @@ class _Extract:
     cands: list
     warnings: list
     skipped_crops: list
+    # Optional hooks of bridge sources. ``prepare`` runs right before this source's crops are written (it may read pages,
+    # fill ``src.page_normalization`` / ``cand.norm`` and append to ``late_warnings``); ``release`` frees what it loaded.
+    prepare: Optional[Callable[[], None]] = None
+    release: Optional[Callable[[], None]] = None
+    finalize: Optional[Callable[[], None]] = None      # runs once per source after ALL sources are written (summary bookkeeping)
+    late_warnings: list = field(default_factory=list)
 
 
 def _shift_for(a: Analysis, role: str) -> tuple[int, int]:
@@ -453,7 +482,8 @@ def extract_analysis(store, aid: str, opts: BuildOptions) -> _Extract:
     src.n_crops = len(base.cands)
     base.info = SourceInfo(
         analysis_id=aid, name=a.name, sha256=hash_obj(shas), file_names=sorted(shas), width=img.width, height=img.height,
-        dtype=img.dtype, bit_depth=img.bit_depth, n_planes=len(img.channels), slide_meta_id=a.slide.slide_id)
+        dtype=img.dtype, bit_depth=img.bit_depth, n_planes=len(img.channels), slide_meta_id=a.slide.slide_id,
+        file_sha256s=sorted(shas.values()))
     return base
 
 
@@ -501,12 +531,17 @@ def _csv_text(header: list[str], rows: list[list]) -> str:
     return buf.getvalue()
 
 
+def labels_csv_text(yx: list) -> str:
+    """The exact text of a label CSV (header y,x); its sha256 is the expected ``csv_sha256`` of a planned crop."""
+    return _csv_text(["y", "x"], [[repr(float(y)), repr(float(x))] for y, x in yx])
+
+
 def write_crop_files(dirpath: Path, crop_id: str, image: np.ndarray, yx: list) -> tuple[str, str]:
     """Write ``<id>.tif`` (original dtype, single page, uncompressed) and ``<id>.csv`` (columns y,x)."""
     dirpath.mkdir(parents=True, exist_ok=True)
     tif = dirpath / f"{crop_id}.tif"
     tifffile.imwrite(str(tif), image, photometric="minisblack", metadata=None, software=False)
-    txt = _csv_text(["y", "x"], [[repr(float(y)), repr(float(x))] for y, x in yx])
+    txt = labels_csv_text(yx)
     (dirpath / f"{crop_id}.csv").write_text(txt, encoding="utf-8", newline="")
     return sha256_file(tif), sha256_file(dirpath / f"{crop_id}.csv")
 
@@ -558,6 +593,10 @@ def unmarked_proposals(raw: list, marks: list, positives: list, radius: float = 
 
 # ====================================================================== snapshot
 def snapshot_path(data_dir: str | Path, version: str) -> Path:
+    # a snapshot is addressed by its published name only: never an unpublished '.staging-*' directory or a path
+    if not version or version.startswith(".") or "/" in version or "\\" in version:
+        raise MLError(f"invalid snapshot name {version!r} (snapshots are named ds-<hash>; unpublished staging directories "
+                      "are not snapshots)")
     return datasets_dir(data_dir) / version
 
 
@@ -577,17 +616,49 @@ def list_snapshots(data_dir: str | Path) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.is_dir() and not p.name.startswith(".") and (p / "manifest.json").is_file())
 
 
+def rel_path_problem(root: Path, rel) -> Optional[str]:
+    """Why ``rel`` is not a plain relative path that stays inside ``root`` (None = fine): absolute paths, '..' components,
+    backslashes, NUL, and symlinks that resolve outside the snapshot directory are all refused."""
+    if not isinstance(rel, str) or not rel:
+        return f"path {rel!r} is not a non-empty string"
+    if "\x00" in rel or "\\" in rel or rel.startswith("/") or re.match(r"^[A-Za-z]:", rel):
+        return f"path {rel!r} is absolute or contains a forbidden character: it escapes the snapshot directory"
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return f"path {rel!r} contains an empty / '.' / '..' component: it escapes the snapshot directory"
+    try:
+        real_root = Path(os.path.realpath(root))
+        (Path(os.path.realpath(Path(root) / rel))).relative_to(real_root)
+    except ValueError:
+        return f"path {rel!r} resolves outside the snapshot directory (symlink escape)"
+    except OSError as exc:
+        return f"path {rel!r} cannot be resolved ({exc})"
+    return None
+
+
 def verify_snapshot(data_dir: str | Path, version: str) -> list[str]:
-    """Problems found when re-hashing a snapshot (empty list = intact)."""
+    """Problems found when re-hashing a snapshot (empty list = intact). Every path the manifest names (``files`` keys and each
+    crop's ``path_tif`` / ``path_csv``) must stay inside the snapshot directory and every crop file must be listed in ``files``."""
     m = load_manifest(data_dir, version)
     root = snapshot_path(data_dir, version)
     bad = []
     for rel, sha in m.files.items():
+        why = rel_path_problem(root, rel)
+        if why:
+            bad.append(why)
+            continue
         p = root / rel
         if not p.is_file():
             bad.append(f"missing {rel}")
         elif sha256_file(p) != sha:
             bad.append(f"modified {rel}")
+    for c in m.crops:
+        for rel in (c.path_tif, c.path_csv):
+            why = rel_path_problem(root, rel)
+            if why:
+                bad.append(f"crop {c.crop_id}: {why}")
+            elif rel not in m.files:
+                bad.append(f"crop {c.crop_id}: {rel} is not listed (hashed) in the manifest files")
     if _version_of(m) != m.version:
         bad.append("manifest content does not match its version")
     return bad
@@ -595,7 +666,6 @@ def verify_snapshot(data_dir: str | Path, version: str) -> list[str]:
 
 def _version_of(m: SnapshotManifest) -> str:
     return "ds-" + hash_obj(m.hash_payload())[:16]
-
 
 def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: Optional[BuildOptions] = None, *,
                    say: Say = print, dry_run: bool = False) -> BuildResult:
@@ -619,7 +689,51 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
             + (f" [skipped: {e.src.skipped}]" if e.src.skipped else ""))
         exts.append(e)
         warnings += e.warnings
+    return assemble_snapshot(data_dir, exts, opts, say=say, dry_run=dry_run, warnings=warnings, lock=lock)
 
+
+# ====================================================================== assembly (shared by every source of crops)
+def _estimate_free_bytes(path: Path) -> int:
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return int(shutil.disk_usage(p).free)
+
+
+def fmt_bytes(n: float) -> str:
+    n = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if n < 1024 or unit == "TiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}"
+        n /= 1024.0
+    return f"{n:.2f} TiB"  # pragma: no cover
+
+
+def assemble_snapshot(data_dir: str | Path, exts: list, opts: BuildOptions, *, say: Say = print, dry_run: bool = False,
+                      warnings: Optional[list[str]] = None, lock: Optional[dict] = None,
+                      extra_options: Optional[dict] = None, extra_assumptions: Optional[list[str]] = None,
+                      import_summary: Optional[dict] = None, resume_key: Optional[str] = None, workers: int = 1,
+                      materialize_on_dry_run: bool = True, progress_every: int = 2000,
+                      min_free_factor: float = 1.1) -> BuildResult:
+    """Group, split, write and seal a snapshot from already-extracted sources (``_Extract``).
+
+    Both ``build`` (reviewed analyses) and ``import-legacy`` (historical ImageJ annotations) end here, so they share the
+    group split, the locked-test carry-over, the manifest, the content-addressed version and the atomic publication.
+
+    * ``crops`` of a source may be lazy (``loader``); sources are written one at a time (``workers`` > 1 writes several
+      sources concurrently; ids are assigned beforehand and results are merged in source order, so the snapshot is identical).
+    * ``resume_key``: the staging directory is named after it and every finished source leaves a verified marker, so an
+      interrupted run restarts where it stopped (same key = identical inputs and options; nothing is ever half-published).
+    * ``dry_run`` with ``materialize_on_dry_run=False`` writes NOTHING and does not compute the version (it needs the crop
+      hashes); the manifest is returned with the planned crops. The default keeps the old behaviour (write to a staging
+      directory, compute the version, delete it).
+    """
+    opts.downscale = check_downscale(opts.downscale)
+    opts.normaliser = check_normaliser(opts.normaliser)
+    data_dir = Path(data_dir)
+    if lock is None:
+        lock = load_lock(data_dir)
+    warnings = list(warnings or [])
     with_crops = [e for e in exts if e.cands and e.info]
     live_infos = [e.info for e in with_crops]
     ga = None
@@ -629,44 +743,192 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
         warnings += ga.warnings
     elif not lock:
         raise MLError("none of the selected analyses yields a usable crop (see the warnings above): "
-                      "need fully reviewed (approved) rectangular regions and a confirmed channel mapping")
+                      "need fully reviewed (approved) rectangular regions and a confirmed channel mapping "
+                      "(historical imports: eligible fields and a confirmed page mapping)")
 
-    stage = datasets_dir(data_dir) / f".staging-{uuid.uuid4().hex[:10]}"
-    stage.mkdir(parents=True, exist_ok=True)
+    # ---- deterministic crop ids and the storage estimate (before anything is written)
+    cid_of: dict[int, str] = {}
+    used_ids: set[str] = set()
+    est_bytes = 0
+    for e in with_crops:
+        aid = e.src.analysis_id
+        if aid in ga.locked_analyses:
+            continue
+        for c in e.cands:
+            cid = safe_id(f"{aid}_p{c.page}_{c.region.id}_{c.role}")
+            if cid in used_ids:
+                cid = f"{cid}_{len(used_ids)}"
+            used_ids.add(cid)
+            cid_of[id(c)] = cid
+            est_bytes += c.size_bytes() + 400
+    free = _estimate_free_bytes(datasets_dir(data_dir))
+    if est_bytes:
+        say(f"estimated native crop storage: {fmt_bytes(est_bytes)} (free on the target volume: {fmt_bytes(free)})")
+    will_write = not (dry_run and not materialize_on_dry_run)
+    if will_write and est_bytes * min_free_factor > free:
+        raise MLError(f"not enough free disk space: the snapshot needs about {fmt_bytes(est_bytes)} (+10 % margin) but only "
+                      f"{fmt_bytes(free)} are free under {datasets_dir(data_dir)}. Nothing was written. Free space, or point "
+                      "--data-dir at a larger volume.")
+
+    stage: Optional[Path]
+    resume = bool(resume_key) and will_write
+    lock_stack = contextlib.ExitStack()      # holds the lock of the staging directory until this function ends
+    if not will_write:
+        stage = None
+    else:
+        stage = None
+        if resume:
+            cand = datasets_dir(data_dir) / f".staging-{safe_id(str(resume_key))}"
+            if lock_stack.enter_context(try_file_lock(staging_lock_path(data_dir, cand.name))):
+                stage = cand
+            else:
+                say(f"another import of the identical plan is running right now (lock {staging_lock_path(data_dir, cand.name)}): "
+                    "this run writes a private, non-resumable copy so that neither run can disturb the other; the first one to "
+                    "publish wins, the other ends with a clear message")
+                resume = False
+        if stage is None:
+            stage = datasets_dir(data_dir) / f".staging-{uuid.uuid4().hex[:10]}"
+            lock_stack.enter_context(try_file_lock(staging_lock_path(data_dir, stage.name)))
+    published = False
     try:
+        if stage is not None:
+            reclaim_staging(data_dir, keep=stage.name, say=say, superseded=False)
+            stage.mkdir(parents=True, exist_ok=True)
         crops: list[CropRecord] = []
-        used_ids: set[str] = set()
-        for e in with_crops:
+
+        def make_rec(e, c, split, tsha, csha) -> CropRecord:
+            aid = e.src.analysis_id
+            cid = cid_of[id(c)]
+            rel = f"spotiflow/{split}"
+            shape = list(c.crop.shape) if c.crop is not None else [int(c.shape_hw[0]), int(c.shape_hw[1])]
+            dt = str(c.crop.dtype) if c.crop is not None else str(np.dtype(c.dtype))
+            return CropRecord(
+                crop_id=cid, analysis_id=aid, region_id=c.region.id, region_name=c.region.name,
+                field_index=c.region.field_index, page=c.page, channel_role=c.role, source_file=c.source_file,
+                source_sha256=c.source_sha, box_xyxy=list(c.box_file),
+                box_reference_frame=list(pixel_box(c.rect_ref)), alignment_dy_dx=list(c.dy_dx),
+                shape_hw=shape, dtype=dt, n_positive=len(c.points),
+                n_rejected=c.n_rejected, n_edge_dropped=c.n_edge, split=split, group_id=ga.group_of[aid],
+                tif_sha256=tsha, csv_sha256=csha, bbox_of_polygon=c.bbox_only,
+                norm_lo=(c.norm or {}).get("lo"), norm_hi=(c.norm or {}).get("hi"), normaliser=opts.normaliser,
+                downscale=opts.downscale, path_tif=f"{rel}/{cid_of[id(c)]}.tif", path_csv=f"{rel}/{cid_of[id(c)]}.csv",
+                provenance=dict(c.provenance))
+
+        def marker_path(e) -> Optional[Path]:
+            return (stage / ".done" / f"{safe_id(e.src.analysis_id)}.json") if (resume and stage is not None) else None
+
+        def reuse_marker(e, split) -> Optional[list[CropRecord]]:
+            """A finished source of an interrupted run is reused ONLY if everything the marker claims is re-derived from the
+            current plan: same resume key (inputs, options, code), the expected label CSV bytes (recomputed from the planned
+            labels), every planned record field (box, labels, page, role, source sha, split, group, normaliser, provenance),
+            the sha256 of both files on disk, and a readable single-page TIFF of the planned shape and dtype. Hashes written
+            in the marker alone are never trusted."""
+            mp = marker_path(e)
+            if mp is None or not mp.is_file():
+                return None
+            try:
+                m = json.loads(mp.read_text(encoding="utf-8"))
+                if m.get("resume_key") != resume_key:
+                    return None
+                recs = [CropRecord.model_validate(x) for x in m["crops"]]
+                if [r.crop_id for r in recs] != [cid_of[id(c)] for c in e.cands] or any(r.split != split for r in recs):
+                    return None
+                norms = m.get("page_normalization", {})
+                for r, c in zip(recs, e.cands):
+                    expected_csv = sha256_bytes(labels_csv_text(c.points).encode("utf-8"))
+                    if r.csv_sha256 != expected_csv or sha256_file(stage / r.path_csv) != expected_csv:
+                        return None
+                    if sha256_file(stage / r.path_tif) != r.tif_sha256:
+                        return None
+                    nb = norms.get(c.role) or {}
+                    if r.norm_lo != nb.get("lo") or r.norm_hi != nb.get("hi"):
+                        return None
+                    want = make_rec(e, c, split, r.tif_sha256, r.csv_sha256).model_copy(
+                        update={"norm_lo": r.norm_lo, "norm_hi": r.norm_hi})
+                    if want.model_dump(mode="json") != r.model_dump(mode="json"):
+                        return None
+                    with tifffile.TiffFile(str(stage / r.path_tif)) as tf:
+                        sr = tf.series[0]
+                        if len(tf.pages) != 1 or tuple(sr.shape) != tuple(want.shape_hw) or str(np.dtype(sr.dtype)) != want.dtype:
+                            return None
+                e.src.page_normalization = norms
+                e.late_warnings += list(m.get("late_warnings", []))
+                return recs
+            except Exception:  # a damaged marker is never trusted: the source is simply written again
+                return None
+
+        def write_source(e) -> list[CropRecord]:
             aid = e.src.analysis_id
             split = ga.split_of[aid]
-            e.src.group_id, e.src.split = ga.group_of[aid], split
+            if aid in ga.locked_analyses:
+                return []
+            if stage is None:                              # dry run without materialisation: planned records only
+                if e.prepare:
+                    pass                                    # lo/hi need the pixels; the plan does not
+                return [make_rec(e, c, split, "", "") for c in e.cands]
+            got = reuse_marker(e, split)
+            if got is not None:
+                return got
+            n_late = len(e.late_warnings)
+            if e.prepare:
+                e.prepare()
+            recs = []
+            try:
+                for c in e.cands:
+                    tsha, csha = write_crop_files(stage / f"spotiflow/{split}", cid_of[id(c)], c.pixels(), c.points)
+                    recs.append(make_rec(e, c, split, tsha, csha))
+            finally:
+                if e.release:
+                    e.release()
+            mp = marker_path(e)
+            if mp is not None:
+                atomic_write_text(mp, pretty_json({"resume_key": resume_key, "crops": [r.model_dump(mode="json") for r in recs],
+                                                   "page_normalization": e.src.page_normalization,
+                                                   "late_warnings": e.late_warnings[n_late:]}))
+            return recs
+
+        targets = with_crops
+        total_crops = sum(len(e.cands) for e in targets if e.src.analysis_id not in ga.locked_analyses)
+        if will_write and total_crops:
+            say(f"writing {total_crops} crop(s) from {len(targets)} source(s)" + (f" with {workers} workers" if workers > 1 else "")
+                + (f" (resumable: {stage.name})" if resume else "") + " ...")
+        done_crops = 0
+        next_report = progress_every
+        if workers > 1 and len(targets) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                results = pool.map(write_source, targets)
+                for e, recs in zip(targets, results):
+                    crops += recs
+                    done_crops += len(recs)
+                    if will_write and done_crops >= next_report:
+                        say(f"  {done_crops}/{total_crops} crops written")
+                        next_report = done_crops + progress_every
+        else:
+            for e in targets:
+                recs = write_source(e)
+                crops += recs
+                done_crops += len(recs)
+                if will_write and done_crops >= next_report:
+                    say(f"  {done_crops}/{total_crops} crops written")
+                    next_report = done_crops + progress_every
+        for e in exts:
+            if e.finalize is not None:
+                e.finalize()
+        for e in exts:
+            warnings += [w for w in e.late_warnings if w not in warnings]
+        for e in with_crops:
+            aid = e.src.analysis_id
+            e.src.group_id, e.src.split = ga.group_of[aid], ga.split_of[aid]
             e.src.identity = ga.identity_of[aid]
             if aid in ga.locked_analyses:
                 e.src.skipped = "belongs to the locked test set: not exported again (locked test labels never change)"
                 e.src.n_crops = 0
-                continue
-            for c in e.cands:
-                cid = safe_id(f"{aid}_p{c.page}_{c.region.id}_{c.role}")
-                if cid in used_ids:
-                    cid = f"{cid}_{len(used_ids)}"
-                used_ids.add(cid)
-                rel = f"spotiflow/{split}"
-                tsha, csha = write_crop_files(stage / rel, cid, c.crop, c.points)
-                dyx = list(c.dy_dx)
-                rec = CropRecord(
-                    crop_id=cid, analysis_id=aid, region_id=c.region.id, region_name=c.region.name,
-                    field_index=c.region.field_index, page=c.page, channel_role=c.role, source_file=c.source_file,
-                    source_sha256=c.source_sha, box_xyxy=list(c.box_file),
-                    box_reference_frame=list(pixel_box(c.rect_ref)), alignment_dy_dx=dyx,
-                    shape_hw=list(c.crop.shape), dtype=str(c.crop.dtype), n_positive=len(c.points),
-                    n_rejected=c.n_rejected, n_edge_dropped=c.n_edge, split=split, group_id=ga.group_of[aid],
-                    tif_sha256=tsha, csv_sha256=csha, bbox_of_polygon=c.bbox_only,
-                    norm_lo=(c.norm or {}).get("lo"), norm_hi=(c.norm or {}).get("hi"), normaliser=opts.normaliser,
-                    downscale=opts.downscale,
-                    path_tif=f"{rel}/{cid}.tif", path_csv=f"{rel}/{cid}.csv")
-                crops.append(rec)
+        n_by_analysis: dict[str, int] = {}
+        for c in crops:
+            n_by_analysis[c.analysis_id] = n_by_analysis.get(c.analysis_id, 0) + 1
         for e in exts:  # crops per analysis for the manifest
-            e.src.n_crops = sum(1 for c in crops if c.analysis_id == e.src.analysis_id)
+            e.src.n_crops = n_by_analysis.get(e.src.analysis_id, 0)
 
         # ---- carry the locked test crops over verbatim
         test_lock_info = None
@@ -678,10 +940,11 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
                               "refusing to build on top of a corrupted test set")
             frozen = [c for c in lm.crops if c.split == "test"]
             for c in frozen:
-                for rel in (c.path_tif, c.path_csv):
-                    dst = stage / rel
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(snapshot_path(data_dir, lock["snapshot"]) / rel, dst)
+                if stage is not None:
+                    for rel in (c.path_tif, c.path_csv):
+                        dst = stage / rel
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(snapshot_path(data_dir, lock["snapshot"]) / rel, dst)
                 fc = c.model_copy(update={"frozen_from": lock["snapshot"]})
                 if fc.crop_id in used_ids:
                     raise MLError(f"crop id clash with a locked test crop: {fc.crop_id}")
@@ -702,22 +965,33 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
             raise MLError("no crop could be exported (see the warnings); refusing to create an empty snapshot")
 
         # ---- points.csv / regions.jsonl
-        order = {"confirmed": 0, "human_added": 1, "rejected": 2, "unresolved": 3, "unreviewed": 4, "raw_proposal": 5}
+        order = {"confirmed": 0, "human_added": 1, "rejected": 2, "unresolved": 3, "unreviewed": 4, "raw_proposal": 5,
+                 "dropped": 6}
         live_crops = [c for c in crops if not c.frozen_from]
+        # indexes (a snapshot of ~50,000 crops must not cost sources x crops / regions x crops comparisons)
+        crops_of: dict[str, list] = {}
+        crops_of_region: dict[tuple, list] = {}
+        for c in live_crops:
+            crops_of.setdefault(c.analysis_id, []).append(c)
+            crops_of_region.setdefault((c.analysis_id, c.region_id), []).append(c)
         prow: list[list] = []
         counts: dict[str, int] = {}
         for e in exts:
             aid = e.src.analysis_id
             sp = e.src.split or ""
-            mine = [c for c in live_crops if c.analysis_id == aid]
+            mine = crops_of.get(aid, [])
             keyed = sorted(e.rows, key=lambda r: (r["role"] or "", order[r["status"]], r["y"], r["x"], str(r["object_id"])))
             for n, r in enumerate(keyed, 1):
                 counts[r["status"]] = counts.get(r["status"], 0) + 1
                 cid = ""
-                if r["status"] != "raw_proposal":
+                if r["status"] not in ("raw_proposal", "dropped"):
                     for c in mine:
                         x0, y0, x1, y1 = c.box_reference_frame
-                        if c.channel_role == r["role"] and x0 <= r["x"] < x1 and y0 <= r["y"] < y1:
+                        if r.get("footprint_cell"):      # bridge rows: the cell was assigned by pixel footprint already
+                            if c.channel_role == r["role"] and c.region_id == r.get("region_id"):
+                                cid = c.crop_id
+                                break
+                        elif c.channel_role == r["role"] and x0 <= r["x"] < x1 and y0 <= r["y"] < y1:
                             cid = c.crop_id
                             break
                 dy, dx = _shift_for_rows(e, r["role"])
@@ -727,18 +1001,20 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
                              r.get("consensus_status") or "", r.get("engine") or "", fnum(r.get("score")),
                              r.get("score_kind") or "", "" if r.get("valid") is None else int(bool(r.get("valid"))),
                              sp, cid])
-        (stage / "points.csv").write_text(_csv_text(POINT_COLUMNS, prow), encoding="utf-8", newline="")
+        points_text = _csv_text(POINT_COLUMNS, prow)
         rlines = []
         for e in exts:
             for rec in e.regions:
                 role_crops = dict(rec["crops"])
-                for c in live_crops:
-                    if c.analysis_id == e.src.analysis_id and c.region_id == rec["region_id"]:
-                        role_crops[f"{c.region_id}:{c.channel_role}"] = {"crop_id": c.crop_id, "split": c.split}
+                for c in crops_of_region.get((e.src.analysis_id, rec["region_id"]), ()):
+                    role_crops[f"{c.region_id}:{c.channel_role}"] = {"crop_id": c.crop_id, "split": c.split}
                 rlines.append(json.dumps(dict(rec, crops=role_crops), sort_keys=True, ensure_ascii=False))
-        (stage / "regions.jsonl").write_text("\n".join(rlines) + ("\n" if rlines else ""), encoding="utf-8", newline="")
-
-        files = {"points.csv": sha256_file(stage / "points.csv"), "regions.jsonl": sha256_file(stage / "regions.jsonl")}
+        regions_text = "\n".join(rlines) + ("\n" if rlines else "")
+        if stage is not None:
+            atomic_write_text(stage / "points.csv", points_text)
+            atomic_write_text(stage / "regions.jsonl", regions_text)
+        files = {"points.csv": sha256_bytes(points_text.encode("utf-8")),
+                 "regions.jsonl": sha256_bytes(regions_text.encode("utf-8"))}
         for c in crops:
             files[c.path_tif] = c.tif_sha256
             files[c.path_csv] = c.csv_sha256
@@ -758,7 +1034,7 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
             tot = {"n_raw_proposals": 0, "n_unmarked": 0, "n_unmarked_bright": 0, "n_confirmed_proposals": 0}
             have_raw = False
             for e in exts:
-                mine = [c for c in live_crops if c.analysis_id == e.src.analysis_id]
+                mine = crops_of.get(e.src.analysis_id, [])
                 for role in {c.channel_role for c in mine}:
                     boxes = [c.box_reference_frame for c in mine if c.channel_role == role]
                     inb = lambda r: any(b[0] <= r["x"] < b[2] and b[1] <= r["y"] < b[3] for b in boxes)  # noqa: E731
@@ -795,13 +1071,16 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
                         if not opts.strict_reviewed else "strict review: only objects the reviewer touched are positives"]
         if any(r.src.reviewer_identity_source == "unknown" for r in exts):
             assumptions.append("reviewer identity unknown for at least one analysis (not in the action log)")
+        assumptions += list(extra_assumptions or [])
+        options = {"seed": opts.seed, "fractions": (ga.fractions if ga else None), "level": opts.level,
+                   "allow_unconfirmed_identity": opts.allow_unconfirmed_identity, "allow_bbox": opts.allow_bbox,
+                   "strict_reviewed": opts.strict_reviewed, "roles": list(opts.roles), "min_crop_px": opts.min_crop_px,
+                   "include_raw": opts.include_raw, "downscale": opts.downscale, "normaliser": opts.normaliser,
+                   "percentiles": [float(x) for x in opts.percentiles], "lo_hi_policy": LO_HI_POLICY}
+        options.update(extra_options or {})
         manifest = SnapshotManifest(
             version="", created_at=opts.created_at or utc_now(), app_version=app_version(),
-            options={"seed": opts.seed, "fractions": (ga.fractions if ga else None), "level": opts.level,
-                     "allow_unconfirmed_identity": opts.allow_unconfirmed_identity, "allow_bbox": opts.allow_bbox,
-                     "strict_reviewed": opts.strict_reviewed, "roles": list(opts.roles), "min_crop_px": opts.min_crop_px,
-                     "include_raw": opts.include_raw, "downscale": opts.downscale, "normaliser": opts.normaliser,
-                     "percentiles": [float(x) for x in opts.percentiles], "lo_hi_policy": LO_HI_POLICY},
+            options=options,
             sources=[e.src for e in exts], crops=crops,
             skipped_crops=sorted((s for e in exts for s in e.skipped_crops),
                                  key=lambda s: (s["analysis_id"], s["region_id"], str(s.get("page")))),
@@ -813,23 +1092,47 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
                      "analysis_to_split": dict(sorted(ga.split_of.items())), "analysis_to_group": dict(sorted(ga.group_of.items())),
                      "locked_analyses": ga.locked_analyses, "unconfirmed_identity": ga.unconfirmed} if ga else {}),
             test_lock=test_lock_info, files=dict(sorted(files.items())), warnings=warnings,
-            unresolved_assumptions=_dedupe(assumptions))
+            unresolved_assumptions=_dedupe(assumptions), import_summary=dict(import_summary or {}))
+        if not will_write:
+            say(f"[dry-run] nothing written: {len(crops)} planned crop(s), {n_pos_total} positive(s); the snapshot version is "
+                "computed from the crop hashes at build time")
+            return BuildResult("", None, manifest, dry_run=True)
         version = _version_of(manifest)
         manifest.version = version
         final = snapshot_path(data_dir, version)
         if final.exists():
+            if stage is not None:
+                shutil.rmtree(stage, ignore_errors=True)      # nothing to resume: the identical snapshot is published
             raise MLError(f"snapshot {version} already exists at {final}: an identical snapshot was built before. "
                           "Snapshots are immutable and are never overwritten.")
         if dry_run:
             say(f"[dry-run] would create snapshot {version}: {len(crops)} crop(s), {n_pos_total} positive(s)")
             return BuildResult(version, None, manifest, dry_run=True)
         atomic_write_text(stage / "manifest.json", pretty_json(manifest.model_dump(mode="json")))
-        os.rename(stage, final)
+        if resume:
+            shutil.rmtree(stage / ".done", ignore_errors=True)
+        try:
+            os.rename(stage, final)
+        except OSError as exc:
+            if final.exists():            # a concurrent identical import published first (rename onto a non-empty directory)
+                shutil.rmtree(stage, ignore_errors=True)
+                raise MLError(f"snapshot {version} already exists at {final}: an identical snapshot was published by another run "
+                              "while this one was writing. Snapshots are immutable and are never overwritten; nothing was changed "
+                              "and this run's staging copy was removed.") from exc
+            raise
+        published = True
         _read_only(final)
-        stage = None  # type: ignore[assignment]
     finally:
-        if stage is not None and stage.exists():
+        if stage is not None and stage.exists() and not published and not (resume and not dry_run):
             shutil.rmtree(stage, ignore_errors=True)
+        lock_stack.close()
+        if stage is not None and not stage.exists():
+            _drop_lock_file(data_dir, stage.name)
+    if published:
+        try:
+            reclaim_staging(data_dir, keep=stage.name, say=say, superseded=True)
+        except OSError:                   # housekeeping only: never turns a published snapshot into an error
+            pass
     say(f"created snapshot {version} at {final}")
     for sp in ("train", "val", "test"):
         d = label_counts["by_split"].get(sp, {"crops": 0, "positives": 0, "groups": 0})
@@ -838,6 +1141,83 @@ def build_snapshot(store, data_dir: str | Path, analysis_ids: list[str], opts: O
     for w in manifest.warnings:
         say(f"  WARNING: {w}")
     return BuildResult(version, final, manifest)
+
+
+STALE_STAGING_DAYS = 7
+
+
+def _stage_age_days(path: Path) -> float:
+    newest = path.stat().st_mtime
+    done = path / ".done"
+    try:
+        if done.is_dir():
+            newest = max([newest, done.stat().st_mtime] + [q.stat().st_mtime for q in done.iterdir()])
+    except OSError:
+        pass
+    return max(0.0, (time.time() - newest) / 86400.0)
+
+
+def _drop_lock_file(data_dir: str | Path, name: str) -> None:
+    """Delete the (now unneeded) lock file of a staging directory, and the ``.locks`` directory when it became empty."""
+    lp = staging_lock_path(data_dir, name)
+    try:
+        lp.unlink()
+    except OSError:
+        pass
+    try:
+        lp.parent.rmdir()
+    except OSError:
+        pass
+
+
+def remove_staging_if_free(data_dir: str | Path, name: str) -> bool:
+    """Delete ``datasets/<name>`` (a ``.staging-*`` directory) unless a live run holds its lock. True when it was removed."""
+    d = datasets_dir(data_dir) / name
+    if not name.startswith(".staging-") or not d.is_dir():
+        return False
+    lp = staging_lock_path(data_dir, name)
+    with try_file_lock(lp) as got:
+        if not got:
+            return False
+        shutil.rmtree(d, ignore_errors=True)
+    _drop_lock_file(data_dir, name)
+    return True
+
+
+def reclaim_staging(data_dir: str | Path, *, keep: str = "", say: Optional[Callable] = None, superseded: bool = False,
+                    max_age_days: float = STALE_STAGING_DAYS) -> list[str]:
+    """Remove leftover ``.staging-*`` directories nobody is using. NEVER a directory whose lock is held by a live run.
+
+    * always: older than ``max_age_days`` (default 7) and with a free lock;
+    * ``superseded=True`` (after a successful publish): every other ``.staging-*`` whose lock is free - it belongs to inputs
+      that were superseded (a crashed run whose inputs or options changed afterwards has another resume key and could never be
+      resumed by this plan);
+    plus lock files of directories that no longer exist. Returns the removed names."""
+    d = datasets_dir(data_dir)
+    removed: list[str] = []
+    if not d.is_dir():
+        return removed
+    for q in sorted(d.iterdir()):
+        if not q.name.startswith(".staging-") or q.name == keep or not q.is_dir():
+            continue
+        try:
+            old = _stage_age_days(q) > max_age_days
+        except OSError:
+            continue
+        if (superseded or old) and remove_staging_if_free(data_dir, q.name):
+            removed.append(q.name)
+    locks = Path(data_dir) / ".locks"
+    if locks.is_dir():
+        for lf in sorted(locks.glob("staging-*.lock")):
+            name = "." + lf.name[:-len(".lock")]
+            if name != keep and not (d / name).exists():
+                with try_file_lock(lf) as got:
+                    if got:
+                        _drop_lock_file(data_dir, name)
+    if removed and say is not None:
+        say(f"removed {len(removed)} stale staging director{'y' if len(removed) == 1 else 'ies'} of superseded or abandoned imports "
+            f"({', '.join(removed[:3])}{', ...' if len(removed) > 3 else ''})")
+    return removed
 
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -887,9 +1267,15 @@ def split_report(data_dir: str | Path, version: str) -> dict:
             "locked": m.test_lock}
 
 
+ACK_ASSUMPTIONS = ("acknowledge_no_counters", "acknowledge_field_equals_counter_plus_one", "acknowledge_lab_csv_field_numbering")
+
+
 def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, reason: str = "",
-                  allow_unconfirmed_identity: bool = False) -> dict:
-    """Freeze the test groups of snapshot ``version`` (``test_lock.json``)."""
+                  allow_unconfirmed_identity: bool = False, allow_acknowledged_assumptions: bool = False) -> dict:
+    """Freeze the test groups of snapshot ``version`` (``test_lock.json``). The overrides the snapshot was built with are
+    recorded in the lock. A snapshot built with an ``--acknowledge-*`` assumption (counter-less marks, field N = counter N-1,
+    lab-CSV numbering) is REFUSED unless ``allow_acknowledged_assumptions`` is given: a permanent test set must not rest on an
+    unverified reading of the data."""
     from .splits import SourceInfo, _record, group_key, write_lock
 
     m = load_manifest(data_dir, version)
@@ -902,6 +1288,16 @@ def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, 
     if m.splits.get("unconfirmed_identity") and not allow_unconfirmed_identity:
         raise MLError("the test groups of this snapshot rest on UNCONFIRMED (file-name-inferred) identities; confirm "
                       "them (--identity-map) and rebuild, or pass --allow-unconfirmed-identity to lock anyway")
+    used = (m.import_summary or {}).get("options") or {}
+    acks = [k for k in ACK_ASSUMPTIONS if used.get(k)]
+    if acks and not allow_acknowledged_assumptions:
+        raise MLError(f"snapshot {version} was built with {', '.join('--' + k.replace('_', '-') for k in acks)}: the test set would "
+                      "rest on an assumption the operator acknowledged but nobody verified. Rebuild without it, or pass "
+                      "--allow-acknowledged-assumptions-in-test-lock to lock anyway (recorded in the lock).")
+    overrides = {"snapshot_options": {k: bool(used.get(k)) for k in (*ACK_ASSUMPTIONS, "allow_unconfirmed_identity")},
+                 "allow_unconfirmed_identity_flag": bool(allow_unconfirmed_identity),
+                 "allow_acknowledged_assumptions_flag": bool(allow_acknowledged_assumptions),
+                 "snapshot_built_with_allow_unconfirmed_identity": bool((m.options or {}).get("allow_unconfirmed_identity"))}
     if m.test_lock and not replace:
         raise MLError(f"snapshot {version} was itself built on a locked test set ({m.test_lock.get('snapshot')}); "
                       "to re-lock use --replace-lock --reason ...")
@@ -910,11 +1306,14 @@ def lock_test_set(data_dir: str | Path, version: str, *, replace: bool = False, 
         if s.split != "test" or not s.group_id:
             continue
         info = SourceInfo(analysis_id=s.analysis_id, name=s.name, sha256=hash_obj(s.tiff_sha256),
-                          file_names=sorted(s.tiff_sha256))
+                          file_names=sorted(s.tiff_sha256), file_sha256s=sorted(s.tiff_sha256.values()))
         rec = _record(info, s.identity or {"source": "unknown", "confirmed": False}, None)
-        imgs.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": rec.sha256, "group": s.group_id,
+        imgs.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": rec.sha256,
+                     "file_sha256s": sorted(s.tiff_sha256.values()), "group": s.group_id,
+                     "identity": {"specimen_id": rec.specimen_id, "slide_id": rec.slide_id, "assay": rec.assay},
                      "keys": {"specimen": group_key(rec, "specimen"), "slide": group_key(rec, "slide"),
                               "source_image": group_key(rec, "source_image")}})
     groups = sorted({c.group_id for c in test_crops})
     return write_lock(data_dir, snapshot=version, test_content_sha256=test_content_hash(m.crops), groups=groups, images=imgs,
-                      level=m.splits.get("level") or "auto", seed=int(m.splits.get("seed") or 0), replace=replace, reason=reason)
+                      level=m.splits.get("level") or "auto", seed=int(m.splits.get("seed") or 0), replace=replace, reason=reason,
+                      overrides=overrides)

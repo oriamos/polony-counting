@@ -6,6 +6,7 @@ import type {
   AutoChamberResponse,
   CompareCountType,
   CompareResponse,
+  ExaminedFieldsResult,
   FieldImportRequest,
   ReferenceInfo,
   CountsResponse,
@@ -121,6 +122,11 @@ export const api = {
   importFields: (id: string, body: FieldImportRequest) => request<Analysis>('POST', `/analyses/${id}/fields/import`, body),
   compareFields: (id: string, plane: number | null, countType: CompareCountType) =>
     request<CompareResponse>('GET', `/analyses/${id}/fields/compare?${plane != null ? `plane=${plane}&` : ''}count_type=${countType}`),
+  uploadExamined: (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    return request<ExaminedFieldsResult>('POST', `/analyses/${id}/examined-fields`, undefined, fd);
+  },
   autoChamber: (id: string, rim_px: number) => request<AutoChamberResponse>('POST', `/analyses/${id}/regions/auto-chamber`, { rim_px }),
   engines: () => request<EngineInfo[]>('GET', '/engines'),
   prepareSpotiflow: (model_name: string) => request<Job>('POST', '/engines/spotiflow/prepare', { model_name }),

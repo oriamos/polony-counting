@@ -413,16 +413,21 @@ def _convert_annotations(rec: ImageRecord, bundle: roimod.RoiBundle, src_files: 
                 warn.add("counter_spans_cells", "info",
                          f"counter {c} has {off} point(s) outside its majority cell (clicked across a cell border?)",
                          file=file, image_id=iid)
+        # index once (cells x points would be quadratic for dense grids / many points)
+        page_counts: dict[str, Counter] = defaultdict(Counter)
+        for p in ok_pts:
+            if p.field_id is not None:
+                page_counts[p.field_id]["unspecified" if p.page is None else str(p.page)] += 1
+        counters_of: dict[str, list[int]] = defaultdict(list)
+        for k, v in majority.items():
+            counters_of[v].append(k)
         for r, c, (x0, y0, x1, y1) in cells:
             fid = f"{iid}:r{r}c{c}"
-            counts: Counter = Counter()
-            for p in ok_pts:
-                if p.field_id == fid:
-                    counts["unspecified" if p.page is None else str(p.page)] += 1
+            counts: Counter = page_counts.get(fid) or Counter()
             fields.append(FieldRecord(
                 field_id=fid, image_id=iid, grid_row=r, grid_col=c,
                 polygon=[(a - 0.5, b - 0.5) for a, b in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]],
-                counters=sorted(k for k, v in majority.items() if v == fid),
+                counters=sorted(counters_of.get(fid, [])),
                 n_points_by_page=dict(sorted(counts.items())),
                 status=FieldStatus.has_points if counts else FieldStatus.no_points))
         if not grid.regular:
@@ -483,6 +488,10 @@ def _reconcile(ds: Dataset, csv_paths: list[Path], root: Path, warn: _Warn) -> N
             by_slide[im.slide_id].append(im)
     seen_slides: set[str] = set()
     unmatched_rows: list[str] = []
+    ok_points_by_image: dict[str, list[PointLabel]] = defaultdict(list)     # one pass instead of images x points
+    for p in ds.points:
+        if p.status == PointStatus.ok:
+            ok_points_by_image[p.image_id].append(p)
     for cp in csv_paths:
         data = cp.read_bytes()
         imp = parse_csv(data, cp.name, import_id=cp.stem)
@@ -505,7 +514,7 @@ def _reconcile(ds: Dataset, csv_paths: list[Path], root: Path, warn: _Warn) -> N
             vals = [v for v in seq if v is not None]
             planes: list[PlaneMatch] = []
             for pos in range(1, im.n_planes + 1):
-                pts = [p for p in ds.points if p.image_id == im.image_id and p.status == PointStatus.ok and p.position == pos]
+                pts = [p for p in ok_points_by_image.get(im.image_id, []) if p.position == pos]
                 cnt = Counter(p.counter for p in pts if p.counter is not None)
                 by_idx = [cnt.get(c, 0) for c in range(max(cnt) + 1)] if cnt else []
                 if len(by_idx) < len(vals):          # fields counted beyond the last marked one are zeros

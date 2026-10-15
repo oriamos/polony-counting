@@ -1,0 +1,3068 @@
+{
+  "created_at": "2026-10-14T10:47:36Z",
+  "groups": [
+    "specimen:None|red_not_yellow/29-09-2026_T7_AB_PS",
+    "specimen:None|red_only/02_12_2025/C2_UT",
+    "specimen:None|red_only/02_12_2025/D_P2-1",
+    "specimen:None|red_only/02_12_2025/D_P2-2_D",
+    "specimen:None|red_only/03-08-2026_D_FS",
+    "specimen:None|red_only/03-08-2026_D_S_N",
+    "specimen:None|red_only/05-08-2026_D_SF",
+    "specimen:None|red_only/05_03_2026/D-1_61-B-D",
+    "specimen:None|red_only/05_03_2026/D-2_E2",
+    "specimen:None|red_only/07_01_2026/D_1E",
+    "specimen:None|red_only/07_01_2026/D_4E",
+    "specimen:None|red_only/07_01_2026/D_5",
+    "specimen:None|red_only/07_01_2026/D_5E",
+    "specimen:None|red_only/08_03_2026/D-1_E2",
+    "specimen:None|red_only/08_03_2026/D-2_M1",
+    "specimen:None|red_only/10_03_2026/D_21",
+    "specimen:None|red_only/10_03_2026/D_61",
+    "specimen:None|red_only/10_12_2025/C2_L",
+    "specimen:None|red_only/10_12_2025/D_E",
+    "specimen:None|red_only/11-06-2026_D_29-05_new_200",
+    "specimen:None|red_only/11-06-2026_D_29-05_old_15",
+    "specimen:None|red_only/11_02_2026/415",
+    "specimen:None|red_only/11_02_2026/97-A-D",
+    "specimen:None|red_only/15-06-2026_D_ST_10_200",
+    "specimen:None|red_only/15-06-2026_D_ST_10_45_D",
+    "specimen:None|red_only/15-06-2026_D_ST_12_15",
+    "specimen:None|red_only/15-06-2026_D_ST_17_120",
+    "specimen:None|red_only/16-03-2026_C2_FS",
+    "specimen:None|red_only/16_12_2025/C2_P2-L-1",
+    "specimen:None|red_only/16_12_2025/C2_P2-T-1",
+    "specimen:None|red_only/22_02_2026/1_C2",
+    "specimen:None|red_only/22_02_2026/1_FS",
+    "specimen:None|red_only/22_02_2026/2_C1",
+    "specimen:None|red_only/23-04-2026_D_2-5_60",
+    "specimen:None|red_only/25_02_2026/D_E-2B",
+    "specimen:None|red_only/26-03-2026_D_200",
+    "specimen:None|red_only/26-03-2026_D_25",
+    "specimen:None|red_only/26-03-2026_D_5-A-D",
+    "specimen:None|red_only/28-04-2026_D_12-4-2019_15",
+    "specimen:None|red_only/28-04-2026_D_12-4-2019_25",
+    "specimen:None|red_only/28-04-2026_D_21-04-2026_100",
+    "specimen:None|red_only/28-04-2026_D_21-04-2026_125-B-D",
+    "specimen:None|red_only/28-04-2026_D_21-04-2026_15",
+    "specimen:None|red_only/28-04-2026_D_21-04-2026_25",
+    "specimen:None|red_only/28-04-2026_D_21-04-2026_75",
+    "specimen:None|red_only/29_12_2025/L-E-1-A-D",
+    "specimen:None|red_only/30-06-2026_D_20-04-2019_45",
+    "specimen:None|red_only/30-06-2026_D_20-04-2019_60",
+    "specimen:None|red_only/31-03-2026_D_25",
+    "specimen:None|red_only/9-4-2026_D_120",
+    "specimen:None|red_only/9-4-2026_D_15",
+    "specimen:None|red_only/9-4-2026_D_5",
+    "specimen:None|red_only/9-4-2026_D_60",
+    "specimen:None|red_only/9-4-2026_D_R60_D",
+    "specimen:None|yellow/03-08-2026_C_FS",
+    "specimen:None|yellow/03-08-2026_C_P-C_N",
+    "specimen:None|yellow/03-08-2026_C_PF",
+    "specimen:None|yellow/04-08-2026_C_SF",
+    "specimen:None|yellow/07_01_2026/C_2E",
+    "specimen:None|yellow/07_01_2026/C_3",
+    "specimen:None|yellow/07_01_2026/C_3E_D",
+    "specimen:None|yellow/09_02_2026/P1-10",
+    "specimen:None|yellow/09_02_2026/UT",
+    "specimen:None|yellow/11-05-2026_C_20-04-2019_15",
+    "specimen:None|yellow/11-05-2026_C_20-04-2019_60",
+    "specimen:None|yellow/11-05-2026_C_FS",
+    "specimen:None|yellow/13-05-2026_C_12-04-2019_25",
+    "specimen:None|yellow/13-05-2026_C_21-04-2019_15",
+    "specimen:None|yellow/13-05-2026_C_24-04-2019_25",
+    "specimen:None|yellow/15-03-2026_C_MN-2A-2",
+    "specimen:None|yellow/16-03-2026_C1_E2",
+    "specimen:None|yellow/16-04-2026_C_5",
+    "specimen:None|yellow/16-04-2026_C_80",
+    "specimen:None|yellow/16_12_2025/C1_P1-L-2",
+    "specimen:None|yellow/17-06-2026_C_11_45",
+    "specimen:None|yellow/17-06-2026_C_11_DCM",
+    "specimen:None|yellow/17-06-2026_C_12_DCM_D",
+    "specimen:None|yellow/17-06-2026_C_FS",
+    "specimen:None|yellow/17_02_2026/59_T1",
+    "specimen:None|yellow/17_02_2026/MN_1_STRANGE",
+    "specimen:None|yellow/17_02_2026_2/59_T1",
+    "specimen:None|yellow/17_02_2026_2/59_T2",
+    "specimen:None|yellow/17_02_2026_2/EM_1",
+    "specimen:None|yellow/17_02_2026_2/P1_T1",
+    "specimen:None|yellow/18-03-2026_C_M",
+    "specimen:None|yellow/18-03-2026_C_T2-A-D",
+    "specimen:None|yellow/18-06-2026_C_9_15",
+    "specimen:None|yellow/18-06-2026_C_FS",
+    "specimen:None|yellow/20_01_2026/59_10_T",
+    "specimen:None|yellow/20_01_2026/FS",
+    "specimen:None|yellow/20_01_2026/MN_UT",
+    "specimen:None|yellow/26-03-2026_C_200",
+    "specimen:None|yellow/29-06-2026_C_12-04-2019_5",
+    "specimen:None|yellow/9-4-2026_C_200",
+    "specimen:None|yellow/9-4-2026_C_200_D",
+    "specimen:None|yellow/9-4-2026_C_5",
+    "specimen:None|yellow/9-4-2026_C_R75"
+  ],
+  "history": [],
+  "images": [
+    {
+      "analysis_id": "img_0196b60f4b25",
+      "file_sha256s": [
+        "0196b60f4b2564b6ce8294bf1793e47041be3db6c41fcdce101facaada761d7e"
+      ],
+      "group": "specimen:None|red_only/05_03_2026/D-1_61-B-D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/05_03_2026/D-1_61-B-D",
+        "specimen_id": "red_only/05_03_2026/D-1_61-B-D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/05_03_2026/D-1_61-B-D",
+        "source_image": "source_image:6b2e9f7069e8f117977c021326879a5d136df10c1b1688d53e0faf0167c4767d",
+        "specimen": "specimen:None|red_only/05_03_2026/D-1_61-B-D"
+      },
+      "name": "red_only/05_03_2026/D-1_61-B-D.tif",
+      "sha256": "6b2e9f7069e8f117977c021326879a5d136df10c1b1688d53e0faf0167c4767d"
+    },
+    {
+      "analysis_id": "img_03a72ae1569e",
+      "file_sha256s": [
+        "03a72ae1569ee5afcbbe929fbde810a12788091ff17163cda4f29d1abc26c22b"
+      ],
+      "group": "specimen:None|red_only/05-08-2026_D_SF",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/05-08-2026_D_SF-A",
+        "specimen_id": "red_only/05-08-2026_D_SF"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/05-08-2026_D_SF-A",
+        "source_image": "source_image:9eb295f90a611563711e3c65b31e6e22d15cdd4a40d5bab8bde9ebf3de7fcd57",
+        "specimen": "specimen:None|red_only/05-08-2026_D_SF"
+      },
+      "name": "red_only/05-08-2026_D_SF-A.tif",
+      "sha256": "9eb295f90a611563711e3c65b31e6e22d15cdd4a40d5bab8bde9ebf3de7fcd57"
+    },
+    {
+      "analysis_id": "img_04221c27e19f",
+      "file_sha256s": [
+        "04221c27e19fab8affb62d3011d7c93598d18ab10e9b6b246b7b751e9f1c7d02"
+      ],
+      "group": "specimen:None|red_only/16-03-2026_C2_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/16-03-2026_C2_FS-B",
+        "specimen_id": "red_only/16-03-2026_C2_FS"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/16-03-2026_C2_FS-B",
+        "source_image": "source_image:9e6909d55fa8cce995df222e0977b5e4dcb45447f6995ef8d9795be0e7d127f5",
+        "specimen": "specimen:None|red_only/16-03-2026_C2_FS"
+      },
+      "name": "red_only/16-03-2026_C2_FS-B.tif",
+      "sha256": "9e6909d55fa8cce995df222e0977b5e4dcb45447f6995ef8d9795be0e7d127f5"
+    },
+    {
+      "analysis_id": "img_054b50d3a485",
+      "file_sha256s": [
+        "054b50d3a485075999bec5cc4ee352fd0b90189df369ba58f5763cb04b1da1d7"
+      ],
+      "group": "specimen:None|yellow/18-06-2026_C_9_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/18-06-2026_C_9_15-B",
+        "specimen_id": "yellow/18-06-2026_C_9_15"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/18-06-2026_C_9_15-B",
+        "source_image": "source_image:b6dcfb3ebf1ba4d74a7ef3b72e6d8bc417af530f811e9af7ab8b6796018d88b2",
+        "specimen": "specimen:None|yellow/18-06-2026_C_9_15"
+      },
+      "name": "yellow/18-06-2026_C_9_15-B.tif",
+      "sha256": "b6dcfb3ebf1ba4d74a7ef3b72e6d8bc417af530f811e9af7ab8b6796018d88b2"
+    },
+    {
+      "analysis_id": "img_080d91ccbcb6",
+      "file_sha256s": [
+        "080d91ccbcb633b7b79d1f3ddc45c7c4814cf0619b530a4a979e28b31ec91135"
+      ],
+      "group": "specimen:None|yellow/13-05-2026_C_21-04-2019_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/13-05-2026_C_21-04-2019_15-A",
+        "specimen_id": "yellow/13-05-2026_C_21-04-2019_15"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/13-05-2026_C_21-04-2019_15-A",
+        "source_image": "source_image:b3475b581932e95a678a8f55d0bd350216bbea54a526874e8782bc831969cbf4",
+        "specimen": "specimen:None|yellow/13-05-2026_C_21-04-2019_15"
+      },
+      "name": "yellow/13-05-2026_C_21-04-2019_15-A.tif",
+      "sha256": "b3475b581932e95a678a8f55d0bd350216bbea54a526874e8782bc831969cbf4"
+    },
+    {
+      "analysis_id": "img_0a7764b0e2d9",
+      "file_sha256s": [
+        "0a7764b0e2d985f20533c277628e2ea9d4936f01a477e0126a7bef83499f6099"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/EM_1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/EM_1-A",
+        "specimen_id": "yellow/17_02_2026_2/EM_1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/EM_1-A",
+        "source_image": "source_image:8199253827520cd782a8c22fa38c9b93d0e128017c9011051cffed3c63bda08a",
+        "specimen": "specimen:None|yellow/17_02_2026_2/EM_1"
+      },
+      "name": "yellow/17_02_2026_2/EM_1-A.tif",
+      "sha256": "8199253827520cd782a8c22fa38c9b93d0e128017c9011051cffed3c63bda08a"
+    },
+    {
+      "analysis_id": "img_0c246970eaef",
+      "file_sha256s": [
+        "0c246970eaef51eeb0040edc2801137905b3e5bba2381c45b9c930d9cc9e6ee1"
+      ],
+      "group": "specimen:None|yellow/16-04-2026_C_80",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/16-04-2026_C_80-A",
+        "specimen_id": "yellow/16-04-2026_C_80"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/16-04-2026_C_80-A",
+        "source_image": "source_image:b7c7f282724f4be7067939de7905cd61796016b9b0356c03d8d0dbfa44799ab1",
+        "specimen": "specimen:None|yellow/16-04-2026_C_80"
+      },
+      "name": "yellow/16-04-2026_C_80-A.tif",
+      "sha256": "b7c7f282724f4be7067939de7905cd61796016b9b0356c03d8d0dbfa44799ab1"
+    },
+    {
+      "analysis_id": "img_0e13d7ec09c7",
+      "file_sha256s": [
+        "0e13d7ec09c7838545afff9f2f1a305edd14771aee3da0424db5523a031c7133"
+      ],
+      "group": "specimen:None|yellow/16-03-2026_C1_E2",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/16-03-2026_C1_E2-B",
+        "specimen_id": "yellow/16-03-2026_C1_E2"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/16-03-2026_C1_E2-B",
+        "source_image": "source_image:03681d6a253a378df8db1c34ef4a3a3ef53ad6968ccd0deab52ef5fd00c2da68",
+        "specimen": "specimen:None|yellow/16-03-2026_C1_E2"
+      },
+      "name": "yellow/16-03-2026_C1_E2-B.tif",
+      "sha256": "03681d6a253a378df8db1c34ef4a3a3ef53ad6968ccd0deab52ef5fd00c2da68"
+    },
+    {
+      "analysis_id": "img_111994b95c43",
+      "file_sha256s": [
+        "111994b95c43ce208f333e1bd739e137e29db5af98868b5306775b1a38e72994"
+      ],
+      "group": "specimen:None|red_only/22_02_2026/2_C1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/22_02_2026/2_C1-B",
+        "specimen_id": "red_only/22_02_2026/2_C1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/22_02_2026/2_C1-B",
+        "source_image": "source_image:4df922d23ddcfe8c8f1c56680462fa6c320ba4db0f2053bfc08d28d21b64f458",
+        "specimen": "specimen:None|red_only/22_02_2026/2_C1"
+      },
+      "name": "red_only/22_02_2026/2_C1-B.tif",
+      "sha256": "4df922d23ddcfe8c8f1c56680462fa6c320ba4db0f2053bfc08d28d21b64f458"
+    },
+    {
+      "analysis_id": "img_17617bc580c0",
+      "file_sha256s": [
+        "17617bc580c0b2678f4a22cea5f2bad61df5e4b9cf09d322dcd6cfe80057fe94"
+      ],
+      "group": "specimen:None|red_only/07_01_2026/D_4E",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/07_01_2026/D_4E-A",
+        "specimen_id": "red_only/07_01_2026/D_4E"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/07_01_2026/D_4E-A",
+        "source_image": "source_image:e640641d3e4ba3e50263cdaef1966bdf236c8d817690f1b5a1f0669adb8dbe75",
+        "specimen": "specimen:None|red_only/07_01_2026/D_4E"
+      },
+      "name": "red_only/07_01_2026/D_4E-A.tif",
+      "sha256": "e640641d3e4ba3e50263cdaef1966bdf236c8d817690f1b5a1f0669adb8dbe75"
+    },
+    {
+      "analysis_id": "img_1c1731dc70f3",
+      "file_sha256s": [
+        "1c1731dc70f3984146d3c10bb669f05a101c94cc0cf4ef950ed4c627682f6d4d"
+      ],
+      "group": "specimen:None|yellow/20_01_2026/MN_UT",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/20_01_2026/MN_B_UT",
+        "specimen_id": "yellow/20_01_2026/MN_UT"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/20_01_2026/MN_B_UT",
+        "source_image": "source_image:551560d2cb18a3a31d235e191dfa3015d9c99ede1b493b62d3306c1fb8dfb405",
+        "specimen": "specimen:None|yellow/20_01_2026/MN_UT"
+      },
+      "name": "yellow/20_01_2026/MN_B_UT.tif",
+      "sha256": "551560d2cb18a3a31d235e191dfa3015d9c99ede1b493b62d3306c1fb8dfb405"
+    },
+    {
+      "analysis_id": "img_1ce855204fab",
+      "file_sha256s": [
+        "1ce855204fab5a592a35d376e0db5a5de85af9a52495c3cffefab168878f2e78"
+      ],
+      "group": "specimen:None|yellow/09_02_2026/P1-10",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/09_02_2026/P1-10-A",
+        "specimen_id": "yellow/09_02_2026/P1-10"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/09_02_2026/P1-10-A",
+        "source_image": "source_image:5de0f7cb7b4f1aef5943ba73c33db40a944d2f7e4f7d0da26b24b43c9608a1d0",
+        "specimen": "specimen:None|yellow/09_02_2026/P1-10"
+      },
+      "name": "yellow/09_02_2026/P1-10-A.tif",
+      "sha256": "5de0f7cb7b4f1aef5943ba73c33db40a944d2f7e4f7d0da26b24b43c9608a1d0"
+    },
+    {
+      "analysis_id": "img_1e070b4c8ce5",
+      "file_sha256s": [
+        "1e070b4c8ce57605036f78cb200abc8bde07710e4b2a295e7bbeafaf9c6b6951"
+      ],
+      "group": "specimen:None|yellow/9-4-2026_C_R75",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/9-4-2026_C_R75-B",
+        "specimen_id": "yellow/9-4-2026_C_R75"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/9-4-2026_C_R75-B",
+        "source_image": "source_image:1c85fc8ea9cdfb64fd5d97fc662160eb712368a19fd25cfa105740f05053b09a",
+        "specimen": "specimen:None|yellow/9-4-2026_C_R75"
+      },
+      "name": "yellow/9-4-2026_C_R75-B.tif",
+      "sha256": "1c85fc8ea9cdfb64fd5d97fc662160eb712368a19fd25cfa105740f05053b09a"
+    },
+    {
+      "analysis_id": "img_1edc97b41900",
+      "file_sha256s": [
+        "1edc97b41900343773e389a9a91242ad4899bc96e1ccb3d29e3d3ca92fdb6eb6"
+      ],
+      "group": "specimen:None|red_only/07_01_2026/D_1E",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/07_01_2026/D_1E-A",
+        "specimen_id": "red_only/07_01_2026/D_1E"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/07_01_2026/D_1E-A",
+        "source_image": "source_image:9f04ed272853b5f2eb923502f32584eaeeb2103fd07dfe90d4731f021c60c23e",
+        "specimen": "specimen:None|red_only/07_01_2026/D_1E"
+      },
+      "name": "red_only/07_01_2026/D_1E-A.tif",
+      "sha256": "9f04ed272853b5f2eb923502f32584eaeeb2103fd07dfe90d4731f021c60c23e"
+    },
+    {
+      "analysis_id": "img_215c18d9fbfe",
+      "file_sha256s": [
+        "215c18d9fbfea23f7b117410d761eb86b91e13baadf456a9024ba43e1f4b8ce9"
+      ],
+      "group": "specimen:None|red_only/15-06-2026_D_ST_10_200",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/15-06-2026_D_ST_10_200-B",
+        "specimen_id": "red_only/15-06-2026_D_ST_10_200"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/15-06-2026_D_ST_10_200-B",
+        "source_image": "source_image:9426d024cb3c6662f607a4b04abcf3144e3b3a4b809437bf13fb5e99eca2f7a5",
+        "specimen": "specimen:None|red_only/15-06-2026_D_ST_10_200"
+      },
+      "name": "red_only/15-06-2026_D_ST_10_200-B.tif",
+      "sha256": "9426d024cb3c6662f607a4b04abcf3144e3b3a4b809437bf13fb5e99eca2f7a5"
+    },
+    {
+      "analysis_id": "img_26188a1ae6e8",
+      "file_sha256s": [
+        "26188a1ae6e8a3f0b30a6bcded7e377f852405450f9bbf80b37bf04e74dda194"
+      ],
+      "group": "specimen:None|yellow/03-08-2026_C_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/03-08-2026_C_FS-A",
+        "specimen_id": "yellow/03-08-2026_C_FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/03-08-2026_C_FS-A",
+        "source_image": "source_image:af673bef49a4096ab01a12dae4768eb1e749c4a068b8b60befc86dae39847cf7",
+        "specimen": "specimen:None|yellow/03-08-2026_C_FS"
+      },
+      "name": "yellow/03-08-2026_C_FS-A.tif",
+      "sha256": "af673bef49a4096ab01a12dae4768eb1e749c4a068b8b60befc86dae39847cf7"
+    },
+    {
+      "analysis_id": "img_270cffe0b1ce",
+      "file_sha256s": [
+        "270cffe0b1ce1f969b15f980f846acf4f412ee72b422837870e7c650c5c3e0c7"
+      ],
+      "group": "specimen:None|red_only/25_02_2026/D_E-2B",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/25_02_2026/D_E-2B",
+        "specimen_id": "red_only/25_02_2026/D_E-2B"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/25_02_2026/D_E-2B",
+        "source_image": "source_image:8ff968b4d700f7b8bb197b73e9fa3f3b3cd33cf5107a462de72c373df0883794",
+        "specimen": "specimen:None|red_only/25_02_2026/D_E-2B"
+      },
+      "name": "red_only/25_02_2026/D_E-2B.tif",
+      "sha256": "8ff968b4d700f7b8bb197b73e9fa3f3b3cd33cf5107a462de72c373df0883794"
+    },
+    {
+      "analysis_id": "img_2795b02d160f",
+      "file_sha256s": [
+        "2795b02d160f5018c74cc8fb2b15ffabaca2f4c69ddfa2142ac0abf0511404c0"
+      ],
+      "group": "specimen:None|red_only/31-03-2026_D_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/31-03-2026_D_25-B",
+        "specimen_id": "red_only/31-03-2026_D_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/31-03-2026_D_25-B",
+        "source_image": "source_image:510d429f8f2fe11dd6e6c698373ae918509f93e88eabd57f372b81047dd86406",
+        "specimen": "specimen:None|red_only/31-03-2026_D_25"
+      },
+      "name": "red_only/31-03-2026_D_25-B.tif",
+      "sha256": "510d429f8f2fe11dd6e6c698373ae918509f93e88eabd57f372b81047dd86406"
+    },
+    {
+      "analysis_id": "img_28391850b8a9",
+      "file_sha256s": [
+        "28391850b8a9981a75718fd089c55e51948c97aab28f7b19b385dc1e24c12ac9"
+      ],
+      "group": "specimen:None|yellow/18-03-2026_C_M",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/18-03-2026_C_M-B",
+        "specimen_id": "yellow/18-03-2026_C_M"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/18-03-2026_C_M-B",
+        "source_image": "source_image:0ccb4120f1398b5d172bb029fd8cf951bcfff37cd00eba1c19538547222c1a7e",
+        "specimen": "specimen:None|yellow/18-03-2026_C_M"
+      },
+      "name": "yellow/18-03-2026_C_M-B.tif",
+      "sha256": "0ccb4120f1398b5d172bb029fd8cf951bcfff37cd00eba1c19538547222c1a7e"
+    },
+    {
+      "analysis_id": "img_2aaadca46241",
+      "file_sha256s": [
+        "2aaadca46241e058a0871028744dd47eb91cc062a530b4f85bcdf72018823117"
+      ],
+      "group": "specimen:None|yellow/20_01_2026/FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/20_01_2026/FS-A",
+        "specimen_id": "yellow/20_01_2026/FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/20_01_2026/FS-A",
+        "source_image": "source_image:dd7beef51bd87f1b86a7db9b3bf32552f4dae726944deafbee3b598dd3f5c164",
+        "specimen": "specimen:None|yellow/20_01_2026/FS"
+      },
+      "name": "yellow/20_01_2026/FS-A.tif",
+      "sha256": "dd7beef51bd87f1b86a7db9b3bf32552f4dae726944deafbee3b598dd3f5c164"
+    },
+    {
+      "analysis_id": "img_2b7d0431d690",
+      "file_sha256s": [
+        "2b7d0431d690d4e62f3a34415cab0895ffbb5161883515e5d52a8a8a5cbbbe3a"
+      ],
+      "group": "specimen:None|yellow/9-4-2026_C_200",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/9-4-2026_C_200-B",
+        "specimen_id": "yellow/9-4-2026_C_200"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/9-4-2026_C_200-B",
+        "source_image": "source_image:c173fe10d55c3160126cbb4cd409b5ac12fe5fa38283109d2519f65953c9871a",
+        "specimen": "specimen:None|yellow/9-4-2026_C_200"
+      },
+      "name": "yellow/9-4-2026_C_200-B.tif",
+      "sha256": "c173fe10d55c3160126cbb4cd409b5ac12fe5fa38283109d2519f65953c9871a"
+    },
+    {
+      "analysis_id": "img_2ce81f25cff7",
+      "file_sha256s": [
+        "2ce81f25cff7c3b505f25b280d7fb870b44de378d91116d85efcbc4a2dd49b82"
+      ],
+      "group": "specimen:None|red_only/05_03_2026/D-2_E2",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/05_03_2026/D-2_E2-B",
+        "specimen_id": "red_only/05_03_2026/D-2_E2"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/05_03_2026/D-2_E2-B",
+        "source_image": "source_image:6fec5b3d0141ab8c8982ff5b151d426a2a2c70f935c867e22b5d508a39e1ef64",
+        "specimen": "specimen:None|red_only/05_03_2026/D-2_E2"
+      },
+      "name": "red_only/05_03_2026/D-2_E2-B.tif",
+      "sha256": "6fec5b3d0141ab8c8982ff5b151d426a2a2c70f935c867e22b5d508a39e1ef64"
+    },
+    {
+      "analysis_id": "img_2f0650bf6f68",
+      "file_sha256s": [
+        "2f0650bf6f68fb70aea7a23642f8219cc670d6782bcb2b570489ba23c25682b4"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_12-4-2019_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_12-4-2019_15-A",
+        "specimen_id": "red_only/28-04-2026_D_12-4-2019_15"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_12-4-2019_15-A",
+        "source_image": "source_image:b2102f53659e9bda8fdaef9a88a3c3815e93412b997f68ad7eb7b78a8c0993ba",
+        "specimen": "specimen:None|red_only/28-04-2026_D_12-4-2019_15"
+      },
+      "name": "red_only/28-04-2026_D_12-4-2019_15-A.tif",
+      "sha256": "b2102f53659e9bda8fdaef9a88a3c3815e93412b997f68ad7eb7b78a8c0993ba"
+    },
+    {
+      "analysis_id": "img_2f3bbb2255b3",
+      "file_sha256s": [
+        "2f3bbb2255b34c09a121770acb5fa2ee4e6dcdf516b62dd1dfe79595499960c4"
+      ],
+      "group": "specimen:None|red_only/30-06-2026_D_20-04-2019_45",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/30-06-2026_D_20-04-2019_45-B",
+        "specimen_id": "red_only/30-06-2026_D_20-04-2019_45"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/30-06-2026_D_20-04-2019_45-B",
+        "source_image": "source_image:44a78eddfb34ac47e3ae37566bbfbfe827018ef80d3de8e19f39b8773cc5f857",
+        "specimen": "specimen:None|red_only/30-06-2026_D_20-04-2019_45"
+      },
+      "name": "red_only/30-06-2026_D_20-04-2019_45-B.tif",
+      "sha256": "44a78eddfb34ac47e3ae37566bbfbfe827018ef80d3de8e19f39b8773cc5f857"
+    },
+    {
+      "analysis_id": "img_3546cf0ac592",
+      "file_sha256s": [
+        "3546cf0ac5923420b08bde930c35fda729de18186e4f1ec432363a2410e80830"
+      ],
+      "group": "specimen:None|yellow/17_02_2026/59_T1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026/59_T1-A",
+        "specimen_id": "yellow/17_02_2026/59_T1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026/59_T1-A",
+        "source_image": "source_image:3a6a1fc448ae21c97960521a97f003573d00e9c09baeb3c599b8cf0dd81479bc",
+        "specimen": "specimen:None|yellow/17_02_2026/59_T1"
+      },
+      "name": "yellow/17_02_2026/59_T1-A.tif",
+      "sha256": "3a6a1fc448ae21c97960521a97f003573d00e9c09baeb3c599b8cf0dd81479bc"
+    },
+    {
+      "analysis_id": "img_363ae679e379",
+      "file_sha256s": [
+        "363ae679e37942d9c0b63cf6c84393ecd293d55ebf645cdea9ef12b523cadbda"
+      ],
+      "group": "specimen:None|red_only/30-06-2026_D_20-04-2019_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/30-06-2026_D_20-04-2019_60-A",
+        "specimen_id": "red_only/30-06-2026_D_20-04-2019_60"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/30-06-2026_D_20-04-2019_60-A",
+        "source_image": "source_image:3cb8bc937fe08217fbecc35bda199eb60d89df1cb7330bb9add6a6a364eba6b7",
+        "specimen": "specimen:None|red_only/30-06-2026_D_20-04-2019_60"
+      },
+      "name": "red_only/30-06-2026_D_20-04-2019_60-A.tif",
+      "sha256": "3cb8bc937fe08217fbecc35bda199eb60d89df1cb7330bb9add6a6a364eba6b7"
+    },
+    {
+      "analysis_id": "img_368132221632",
+      "file_sha256s": [
+        "3681322216324314fb64c274adfe3314749730e0c2da12c238f1c55ee26d7636"
+      ],
+      "group": "specimen:None|red_only/26-03-2026_D_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/26-03-2026_D_25-B",
+        "specimen_id": "red_only/26-03-2026_D_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/26-03-2026_D_25-B",
+        "source_image": "source_image:32f93874334910d0a82677662753ac5aecc1b50a488d8c20bd6ab5ff8737921d",
+        "specimen": "specimen:None|red_only/26-03-2026_D_25"
+      },
+      "name": "red_only/26-03-2026_D_25-B.tif",
+      "sha256": "32f93874334910d0a82677662753ac5aecc1b50a488d8c20bd6ab5ff8737921d"
+    },
+    {
+      "analysis_id": "img_3727076cd968",
+      "file_sha256s": [
+        "3727076cd968e88fa4f5885cf1e33d4d734ebbd5daca4700629e6e9135540de5"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/P1_T1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/P1_T1-B",
+        "specimen_id": "yellow/17_02_2026_2/P1_T1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/P1_T1-B",
+        "source_image": "source_image:7f666fc4e48a3676fea9971e3399709d5d7f60e0c521feca4c2b3ae45673ac7e",
+        "specimen": "specimen:None|yellow/17_02_2026_2/P1_T1"
+      },
+      "name": "yellow/17_02_2026_2/P1_T1-B.tif",
+      "sha256": "7f666fc4e48a3676fea9971e3399709d5d7f60e0c521feca4c2b3ae45673ac7e"
+    },
+    {
+      "analysis_id": "img_376d78aaade6",
+      "file_sha256s": [
+        "376d78aaade651744401f9ac5252c14841150e15c99e6f2a82e030c5b7ee589f"
+      ],
+      "group": "specimen:None|yellow/03-08-2026_C_PF",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/03-08-2026_C_PF-A",
+        "specimen_id": "yellow/03-08-2026_C_PF"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/03-08-2026_C_PF-A",
+        "source_image": "source_image:e4ff1a51429ab38cf08d08ad17937c9516feba6db47f565bfff47ffddf0a4279",
+        "specimen": "specimen:None|yellow/03-08-2026_C_PF"
+      },
+      "name": "yellow/03-08-2026_C_PF-A.tif",
+      "sha256": "e4ff1a51429ab38cf08d08ad17937c9516feba6db47f565bfff47ffddf0a4279"
+    },
+    {
+      "analysis_id": "img_3ed19ae1aa47",
+      "file_sha256s": [
+        "3ed19ae1aa4700ac7dba673f2a573983dbe7e3be1ee837dffa1102a187097883"
+      ],
+      "group": "specimen:None|yellow/18-06-2026_C_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/18-06-2026_C_FS-B",
+        "specimen_id": "yellow/18-06-2026_C_FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/18-06-2026_C_FS-B",
+        "source_image": "source_image:4ad309ae4eaaf557b650fdb2c86a284d821861a35fae300df0df98eaae241777",
+        "specimen": "specimen:None|yellow/18-06-2026_C_FS"
+      },
+      "name": "yellow/18-06-2026_C_FS-B.tif",
+      "sha256": "4ad309ae4eaaf557b650fdb2c86a284d821861a35fae300df0df98eaae241777"
+    },
+    {
+      "analysis_id": "img_3f2581ab5e46",
+      "file_sha256s": [
+        "3f2581ab5e46f93e9dec4dc11275966175ba2551a0cb9f322ebd045222179898"
+      ],
+      "group": "specimen:None|red_only/10_03_2026/D_61",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/10_03_2026/D_61-A",
+        "specimen_id": "red_only/10_03_2026/D_61"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/10_03_2026/D_61-A",
+        "source_image": "source_image:089b483304b0db8a251e26cbcf87f7522366ef19daca1b9eabba05db018ad056",
+        "specimen": "specimen:None|red_only/10_03_2026/D_61"
+      },
+      "name": "red_only/10_03_2026/D_61-A.tif",
+      "sha256": "089b483304b0db8a251e26cbcf87f7522366ef19daca1b9eabba05db018ad056"
+    },
+    {
+      "analysis_id": "img_3faae3eda44f",
+      "file_sha256s": [
+        "3faae3eda44f310178eb6731e371a5bce6bd3edfc108eca06c34b291f0b2885e"
+      ],
+      "group": "specimen:None|red_only/02_12_2025/C2_UT",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/02_12_2025/C2_UT-A",
+        "specimen_id": "red_only/02_12_2025/C2_UT"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/02_12_2025/C2_UT-A",
+        "source_image": "source_image:802d659c062bd708e47503d77dc74933cd34f971797cbd9c6997c7d1b3c96a61",
+        "specimen": "specimen:None|red_only/02_12_2025/C2_UT"
+      },
+      "name": "red_only/02_12_2025/C2_UT-A.tif",
+      "sha256": "802d659c062bd708e47503d77dc74933cd34f971797cbd9c6997c7d1b3c96a61"
+    },
+    {
+      "analysis_id": "img_3ffc712215a4",
+      "file_sha256s": [
+        "3ffc712215a40e7b24a99c8170d09c2725670a6e00cc1bdc0bb189739a579683"
+      ],
+      "group": "specimen:None|red_only/07_01_2026/D_5E",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/07_01_2026/D_5E-A",
+        "specimen_id": "red_only/07_01_2026/D_5E"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/07_01_2026/D_5E-A",
+        "source_image": "source_image:9456faa0d99e1adf0a89c039e32136ce03ac60e3893b840ec8692da2f54ff861",
+        "specimen": "specimen:None|red_only/07_01_2026/D_5E"
+      },
+      "name": "red_only/07_01_2026/D_5E-A.tif",
+      "sha256": "9456faa0d99e1adf0a89c039e32136ce03ac60e3893b840ec8692da2f54ff861"
+    },
+    {
+      "analysis_id": "img_43e5fafc2873",
+      "file_sha256s": [
+        "43e5fafc28732ef8da3beb4ed21f31b26b090a8f68673a670758d25e29ad7625"
+      ],
+      "group": "specimen:None|red_only/22_02_2026/1_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/22_02_2026/1_FS-B",
+        "specimen_id": "red_only/22_02_2026/1_FS"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/22_02_2026/1_FS-B",
+        "source_image": "source_image:f993a088ffdfac7559ad650fd439dbe9008a4704d796de5fa0022182875cdac8",
+        "specimen": "specimen:None|red_only/22_02_2026/1_FS"
+      },
+      "name": "red_only/22_02_2026/1_FS-B.tif",
+      "sha256": "f993a088ffdfac7559ad650fd439dbe9008a4704d796de5fa0022182875cdac8"
+    },
+    {
+      "analysis_id": "img_490546be1220",
+      "file_sha256s": [
+        "490546be1220b8224bddd17573d91fc189ddc8dbd2a37b2dd9be55104bb9e9db"
+      ],
+      "group": "specimen:None|red_only/31-03-2026_D_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/31-03-2026_D_25-A",
+        "specimen_id": "red_only/31-03-2026_D_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/31-03-2026_D_25-A",
+        "source_image": "source_image:364ee3473e300a3c5b918ef99505442629fea38b4187279b710d7926d541d370",
+        "specimen": "specimen:None|red_only/31-03-2026_D_25"
+      },
+      "name": "red_only/31-03-2026_D_25-A.tif",
+      "sha256": "364ee3473e300a3c5b918ef99505442629fea38b4187279b710d7926d541d370"
+    },
+    {
+      "analysis_id": "img_49a3e64c0cd2",
+      "file_sha256s": [
+        "49a3e64c0cd2a656f4267dcf7c232e1a0e543838ef688ec36f03dbf8ab3bfefb"
+      ],
+      "group": "specimen:None|yellow/18-03-2026_C_M",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/18-03-2026_C_M-A",
+        "specimen_id": "yellow/18-03-2026_C_M"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/18-03-2026_C_M-A",
+        "source_image": "source_image:586ab2c3c151c6d77e7f361adb2f52f3b4b9c8b11ab54524b16f69264d5d6ff7",
+        "specimen": "specimen:None|yellow/18-03-2026_C_M"
+      },
+      "name": "yellow/18-03-2026_C_M-A.tif",
+      "sha256": "586ab2c3c151c6d77e7f361adb2f52f3b4b9c8b11ab54524b16f69264d5d6ff7"
+    },
+    {
+      "analysis_id": "img_4c5cb676bb65",
+      "file_sha256s": [
+        "4c5cb676bb65d2c2bda7cb2f0691555c0b3392232e8362e7980da759907f3b34"
+      ],
+      "group": "specimen:None|yellow/17-06-2026_C_11_DCM",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17-06-2026_C_11_DCM-A",
+        "specimen_id": "yellow/17-06-2026_C_11_DCM"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17-06-2026_C_11_DCM-A",
+        "source_image": "source_image:f7ef27bff06e05450ea0faa8dfd0f5e52849cd30b5d611de710771add39d96fe",
+        "specimen": "specimen:None|yellow/17-06-2026_C_11_DCM"
+      },
+      "name": "yellow/17-06-2026_C_11_DCM-A.tif",
+      "sha256": "f7ef27bff06e05450ea0faa8dfd0f5e52849cd30b5d611de710771add39d96fe"
+    },
+    {
+      "analysis_id": "img_504b939c5c49",
+      "file_sha256s": [
+        "504b939c5c491599e70886e126f29426febdd7972890a1d0afc179bac5806cda"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_15-A",
+        "specimen_id": "red_only/9-4-2026_D_15"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_15-A",
+        "source_image": "source_image:1635a3e4dc1cd61e918777a6a43506980252b1bdd3e98dc94a77093dd104504c",
+        "specimen": "specimen:None|red_only/9-4-2026_D_15"
+      },
+      "name": "red_only/9-4-2026_D_15-A.tif",
+      "sha256": "1635a3e4dc1cd61e918777a6a43506980252b1bdd3e98dc94a77093dd104504c"
+    },
+    {
+      "analysis_id": "img_5051b85ebc15",
+      "file_sha256s": [
+        "5051b85ebc15c56bab12497e72c2361a7f652b6b4c206d11274003fc1503d563"
+      ],
+      "group": "specimen:None|red_only/23-04-2026_D_2-5_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/23-04-2026_D_2-5_60-A",
+        "specimen_id": "red_only/23-04-2026_D_2-5_60"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/23-04-2026_D_2-5_60-A",
+        "source_image": "source_image:7516963ccb67c2c1fc579bd4f82f148755300b9601b763df106b6dc7c31c652e",
+        "specimen": "specimen:None|red_only/23-04-2026_D_2-5_60"
+      },
+      "name": "red_only/23-04-2026_D_2-5_60-A.tif",
+      "sha256": "7516963ccb67c2c1fc579bd4f82f148755300b9601b763df106b6dc7c31c652e"
+    },
+    {
+      "analysis_id": "img_50916a4865f0",
+      "file_sha256s": [
+        "50916a4865f02592081a21c503378ded5630a394851ace9f19e8eb2c6537da04"
+      ],
+      "group": "specimen:None|yellow/15-03-2026_C_MN-2A-2",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/15-03-2026_C_MN-2A-2",
+        "specimen_id": "yellow/15-03-2026_C_MN-2A-2"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/15-03-2026_C_MN-2A-2",
+        "source_image": "source_image:4bb7a5ce7e85a1ad19e353b0380b1ca29d81fe35083673e772a856a021ba52ba",
+        "specimen": "specimen:None|yellow/15-03-2026_C_MN-2A-2"
+      },
+      "name": "yellow/15-03-2026_C_MN-2A-2.tif",
+      "sha256": "4bb7a5ce7e85a1ad19e353b0380b1ca29d81fe35083673e772a856a021ba52ba"
+    },
+    {
+      "analysis_id": "img_51457de56951",
+      "file_sha256s": [
+        "51457de569510c353668eeec612b34b3534523b71af24a41ea5babb9d7955cf3"
+      ],
+      "group": "specimen:None|yellow/11-05-2026_C_20-04-2019_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/11-05-2026_C_20-04-2019_15-A",
+        "specimen_id": "yellow/11-05-2026_C_20-04-2019_15"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/11-05-2026_C_20-04-2019_15-A",
+        "source_image": "source_image:71be83b04bc5468cad88e066d22c936bbd168100a9a6b47ba19efe290523cbb8",
+        "specimen": "specimen:None|yellow/11-05-2026_C_20-04-2019_15"
+      },
+      "name": "yellow/11-05-2026_C_20-04-2019_15-A.tif",
+      "sha256": "71be83b04bc5468cad88e066d22c936bbd168100a9a6b47ba19efe290523cbb8"
+    },
+    {
+      "analysis_id": "img_54822b55f0ba",
+      "file_sha256s": [
+        "54822b55f0baf0a5284d554b3b08d8b0c4ead048997093274f4f4290ba2a0b7e"
+      ],
+      "group": "specimen:None|yellow/13-05-2026_C_24-04-2019_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/13-05-2026_C_24-04-2019_25-A",
+        "specimen_id": "yellow/13-05-2026_C_24-04-2019_25"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/13-05-2026_C_24-04-2019_25-A",
+        "source_image": "source_image:b1c010c8e0211bc1081de8193cb30f2d0e751a9b3668a023047cd1124531502b",
+        "specimen": "specimen:None|yellow/13-05-2026_C_24-04-2019_25"
+      },
+      "name": "yellow/13-05-2026_C_24-04-2019_25-A.tif",
+      "sha256": "b1c010c8e0211bc1081de8193cb30f2d0e751a9b3668a023047cd1124531502b"
+    },
+    {
+      "analysis_id": "img_549fe43148cb",
+      "file_sha256s": [
+        "549fe43148cb8939590d94378220c2aca21f5fcf990bab3143515ed00d84c252"
+      ],
+      "group": "specimen:None|red_only/22_02_2026/1_C2",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/22_02_2026/1_C2-B",
+        "specimen_id": "red_only/22_02_2026/1_C2"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/22_02_2026/1_C2-B",
+        "source_image": "source_image:8bc799f92baf6876fd92873ee42c969769a94a660985a1b02d1e3e009b34c5f3",
+        "specimen": "specimen:None|red_only/22_02_2026/1_C2"
+      },
+      "name": "red_only/22_02_2026/1_C2-B.tif",
+      "sha256": "8bc799f92baf6876fd92873ee42c969769a94a660985a1b02d1e3e009b34c5f3"
+    },
+    {
+      "analysis_id": "img_58803e1a0656",
+      "file_sha256s": [
+        "58803e1a0656eb33b705870c093bb3852af026b79746ed76e6f09b6a26a718d4"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/59_T1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/59_T1-B",
+        "specimen_id": "yellow/17_02_2026_2/59_T1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/59_T1-B",
+        "source_image": "source_image:331426a0c18289587aa05a26811333ffd76a3e6e88c23a1f1a0d5972c88e425a",
+        "specimen": "specimen:None|yellow/17_02_2026_2/59_T1"
+      },
+      "name": "yellow/17_02_2026_2/59_T1-B.tif",
+      "sha256": "331426a0c18289587aa05a26811333ffd76a3e6e88c23a1f1a0d5972c88e425a"
+    },
+    {
+      "analysis_id": "img_5a6bce5a9d82",
+      "file_sha256s": [
+        "5a6bce5a9d823974e3e2d7fcc6eb016883108215b9709d9271a6776e2ad0bb51"
+      ],
+      "group": "specimen:None|yellow/13-05-2026_C_21-04-2019_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/13-05-2026_C_21-04-2019_15-B",
+        "specimen_id": "yellow/13-05-2026_C_21-04-2019_15"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/13-05-2026_C_21-04-2019_15-B",
+        "source_image": "source_image:5e04a7c4dbc7e663882ba55fb9883f4d5f3dba9c9b77cdb11cc23cac578e3700",
+        "specimen": "specimen:None|yellow/13-05-2026_C_21-04-2019_15"
+      },
+      "name": "yellow/13-05-2026_C_21-04-2019_15-B.tif",
+      "sha256": "5e04a7c4dbc7e663882ba55fb9883f4d5f3dba9c9b77cdb11cc23cac578e3700"
+    },
+    {
+      "analysis_id": "img_5d261764bbab",
+      "file_sha256s": [
+        "5d261764bbabc7d067956d2649d38e39b5b130bb0a60fc5c24f617229755a37a"
+      ],
+      "group": "specimen:None|yellow/09_02_2026/UT",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/09_02_2026/UT-B",
+        "specimen_id": "yellow/09_02_2026/UT"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/09_02_2026/UT-B",
+        "source_image": "source_image:24634bcfac0ebea5d4bbe28057c5746198d6d8743aa345cee68fbdc9340362e6",
+        "specimen": "specimen:None|yellow/09_02_2026/UT"
+      },
+      "name": "yellow/09_02_2026/UT-B.tif",
+      "sha256": "24634bcfac0ebea5d4bbe28057c5746198d6d8743aa345cee68fbdc9340362e6"
+    },
+    {
+      "analysis_id": "img_62194d7378a7",
+      "file_sha256s": [
+        "62194d7378a74f3ce282b74059c91f752f315cbc6b640cc1a2a4089a38672c76"
+      ],
+      "group": "specimen:None|red_only/26-03-2026_D_200",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/26-03-2026_D_200-A",
+        "specimen_id": "red_only/26-03-2026_D_200"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/26-03-2026_D_200-A",
+        "source_image": "source_image:ffe0068b82d0d6a632b9fa11e9eb121399933c75a737806d9de58dbcbf6e4a3c",
+        "specimen": "specimen:None|red_only/26-03-2026_D_200"
+      },
+      "name": "red_only/26-03-2026_D_200-A.tif",
+      "sha256": "ffe0068b82d0d6a632b9fa11e9eb121399933c75a737806d9de58dbcbf6e4a3c"
+    },
+    {
+      "analysis_id": "img_630a38f07234",
+      "file_sha256s": [
+        "630a38f072341628b64422ccff2d3204b68378353b8ffcd5607f517453151085"
+      ],
+      "group": "specimen:None|yellow/17-06-2026_C_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17-06-2026_C_FS-B",
+        "specimen_id": "yellow/17-06-2026_C_FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17-06-2026_C_FS-B",
+        "source_image": "source_image:e453bf7cb458c3da411241be003a632e1d3493f44eeded3ae5ad12de62ff8ab4",
+        "specimen": "specimen:None|yellow/17-06-2026_C_FS"
+      },
+      "name": "yellow/17-06-2026_C_FS-B.tif",
+      "sha256": "e453bf7cb458c3da411241be003a632e1d3493f44eeded3ae5ad12de62ff8ab4"
+    },
+    {
+      "analysis_id": "img_630a502617fb",
+      "file_sha256s": [
+        "630a502617fb6bed986c93bf95473ddf263a2f099af417ce89b3772744876bfd"
+      ],
+      "group": "specimen:None|red_only/30-06-2026_D_20-04-2019_45",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/30-06-2026_D_20-04-2019_45-A",
+        "specimen_id": "red_only/30-06-2026_D_20-04-2019_45"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/30-06-2026_D_20-04-2019_45-A",
+        "source_image": "source_image:1c9352fde8cd3772561f64146a2d22f33795f2d8098fbf67b203ce8ea277ca1a",
+        "specimen": "specimen:None|red_only/30-06-2026_D_20-04-2019_45"
+      },
+      "name": "red_only/30-06-2026_D_20-04-2019_45-A.tif",
+      "sha256": "1c9352fde8cd3772561f64146a2d22f33795f2d8098fbf67b203ce8ea277ca1a"
+    },
+    {
+      "analysis_id": "img_63b8243cd6f5",
+      "file_sha256s": [
+        "63b8243cd6f53a07e5a0ef97cc1231bc9aad4d7e6e97fffb9c097839eab7c052"
+      ],
+      "group": "specimen:None|red_only/11-06-2026_D_29-05_new_200",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/11-06-2026_D_29-05_new_200-B",
+        "specimen_id": "red_only/11-06-2026_D_29-05_new_200"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/11-06-2026_D_29-05_new_200-B",
+        "source_image": "source_image:48358c4352ef1e9492de305e3fb7689b0b79899371631ce6c3567ebd7a581857",
+        "specimen": "specimen:None|red_only/11-06-2026_D_29-05_new_200"
+      },
+      "name": "red_only/11-06-2026_D_29-05_new_200-B.tif",
+      "sha256": "48358c4352ef1e9492de305e3fb7689b0b79899371631ce6c3567ebd7a581857"
+    },
+    {
+      "analysis_id": "img_6469f1411c8e",
+      "file_sha256s": [
+        "6469f1411c8ec9b8588f8f8b43495dda35f51a5315e0679a139814a5007aefd7"
+      ],
+      "group": "specimen:None|yellow/13-05-2026_C_12-04-2019_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/13-05-2026_C_12-04-2019_25-A",
+        "specimen_id": "yellow/13-05-2026_C_12-04-2019_25"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/13-05-2026_C_12-04-2019_25-A",
+        "source_image": "source_image:dd9cbbf23b9fc0256295dc89efd79ac5679ad8d859215827ac72b44be64f2c30",
+        "specimen": "specimen:None|yellow/13-05-2026_C_12-04-2019_25"
+      },
+      "name": "yellow/13-05-2026_C_12-04-2019_25-A.tif",
+      "sha256": "dd9cbbf23b9fc0256295dc89efd79ac5679ad8d859215827ac72b44be64f2c30"
+    },
+    {
+      "analysis_id": "img_64dab579c77c",
+      "file_sha256s": [
+        "64dab579c77c76122d4a28c6facb81051f666a5e87f83f07d6d52bfa54a680ca"
+      ],
+      "group": "specimen:None|red_only/15-06-2026_D_ST_17_120",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/15-06-2026_D_ST_17_120-A",
+        "specimen_id": "red_only/15-06-2026_D_ST_17_120"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/15-06-2026_D_ST_17_120-A",
+        "source_image": "source_image:85cb3f3cd492cdaf8b01ca7d81d2aa7861d985befb92fb3048c54880fd89fe93",
+        "specimen": "specimen:None|red_only/15-06-2026_D_ST_17_120"
+      },
+      "name": "red_only/15-06-2026_D_ST_17_120-A.tif",
+      "sha256": "85cb3f3cd492cdaf8b01ca7d81d2aa7861d985befb92fb3048c54880fd89fe93"
+    },
+    {
+      "analysis_id": "img_671379fe0179",
+      "file_sha256s": [
+        "671379fe0179368757a387c0e8b732aa6b211cbe32340a885e66a185dfcf077f"
+      ],
+      "group": "specimen:None|red_only/02_12_2025/D_P2-1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/02_12_2025/D_P2-1-A",
+        "specimen_id": "red_only/02_12_2025/D_P2-1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/02_12_2025/D_P2-1-A",
+        "source_image": "source_image:9905999642be1710e55499828c89fd8127f6737d309c3a64adedf78a44389940",
+        "specimen": "specimen:None|red_only/02_12_2025/D_P2-1"
+      },
+      "name": "red_only/02_12_2025/D_P2-1-A.tif",
+      "sha256": "9905999642be1710e55499828c89fd8127f6737d309c3a64adedf78a44389940"
+    },
+    {
+      "analysis_id": "img_67490fba6c23",
+      "file_sha256s": [
+        "67490fba6c23f174cd6108d0e7e17e493bf185c67c00c04ee3f226409925caa1"
+      ],
+      "group": "specimen:None|yellow/16-04-2026_C_80",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/16-04-2026_C_80-B",
+        "specimen_id": "yellow/16-04-2026_C_80"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/16-04-2026_C_80-B",
+        "source_image": "source_image:6896a3716c12e9cc90659af10290ac0b1293e99b97944d6c5b9f0827cb233d84",
+        "specimen": "specimen:None|yellow/16-04-2026_C_80"
+      },
+      "name": "yellow/16-04-2026_C_80-B.tif",
+      "sha256": "6896a3716c12e9cc90659af10290ac0b1293e99b97944d6c5b9f0827cb233d84"
+    },
+    {
+      "analysis_id": "img_6b006499c0a0",
+      "file_sha256s": [
+        "6b006499c0a058fad07c4221fc9db52c36e28a847a092ae491eac472e0ac5e77"
+      ],
+      "group": "specimen:None|yellow/17-06-2026_C_12_DCM_D",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17-06-2026_C_12_DCM-B_D",
+        "specimen_id": "yellow/17-06-2026_C_12_DCM_D"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17-06-2026_C_12_DCM-B_D",
+        "source_image": "source_image:ce05f0780f80db338b577e4410d2fb518bb4212b606ec6ea77b50030f9a1df06",
+        "specimen": "specimen:None|yellow/17-06-2026_C_12_DCM_D"
+      },
+      "name": "yellow/17-06-2026_C_12_DCM-B_D.tif",
+      "sha256": "ce05f0780f80db338b577e4410d2fb518bb4212b606ec6ea77b50030f9a1df06"
+    },
+    {
+      "analysis_id": "img_6cfd28e41d9e",
+      "file_sha256s": [
+        "6cfd28e41d9e6487de5bb62aaa69280226df3a64af02dcf82c6cd9e955932956"
+      ],
+      "group": "specimen:None|yellow/17-06-2026_C_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17-06-2026_C_FS-A",
+        "specimen_id": "yellow/17-06-2026_C_FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17-06-2026_C_FS-A",
+        "source_image": "source_image:4ed0b323044290dbd350aa49a8427f95ce1641c1f120f6b5539b774c8027fa45",
+        "specimen": "specimen:None|yellow/17-06-2026_C_FS"
+      },
+      "name": "yellow/17-06-2026_C_FS-A.tif",
+      "sha256": "4ed0b323044290dbd350aa49a8427f95ce1641c1f120f6b5539b774c8027fa45"
+    },
+    {
+      "analysis_id": "img_6d2ed5521c08",
+      "file_sha256s": [
+        "6d2ed5521c08557e3e4e31c006ed583822bae8413cbc3eacaa5418e9465ab29e"
+      ],
+      "group": "specimen:None|red_only/15-06-2026_D_ST_12_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/15-06-2026_D_ST_12_15-B",
+        "specimen_id": "red_only/15-06-2026_D_ST_12_15"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/15-06-2026_D_ST_12_15-B",
+        "source_image": "source_image:81d756061b3b8e4a6e0015b3ce9323e6403f675fd3ed4b1e1f48e68f6ea10605",
+        "specimen": "specimen:None|red_only/15-06-2026_D_ST_12_15"
+      },
+      "name": "red_only/15-06-2026_D_ST_12_15-B.tif",
+      "sha256": "81d756061b3b8e4a6e0015b3ce9323e6403f675fd3ed4b1e1f48e68f6ea10605"
+    },
+    {
+      "analysis_id": "img_6dec6c20774a",
+      "file_sha256s": [
+        "6dec6c20774a195b9a93bcd3fd1ed1a04255228f4865bf016df333cbb364abc9"
+      ],
+      "group": "specimen:None|yellow/11-05-2026_C_20-04-2019_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/11-05-2026_C_20-04-2019_15-B",
+        "specimen_id": "yellow/11-05-2026_C_20-04-2019_15"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/11-05-2026_C_20-04-2019_15-B",
+        "source_image": "source_image:075f75224ff826095082325d3d2363dbc8b5af9572bd1d1f993333c942445159",
+        "specimen": "specimen:None|yellow/11-05-2026_C_20-04-2019_15"
+      },
+      "name": "yellow/11-05-2026_C_20-04-2019_15-B.tif",
+      "sha256": "075f75224ff826095082325d3d2363dbc8b5af9572bd1d1f993333c942445159"
+    },
+    {
+      "analysis_id": "img_6ee2f9d3b15a",
+      "file_sha256s": [
+        "6ee2f9d3b15a59d0ff6f256c63b2bde224044eb1ce1f4158393e73087b568d1b"
+      ],
+      "group": "specimen:None|red_only/22_02_2026/1_C2",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/22_02_2026/1_C2-A",
+        "specimen_id": "red_only/22_02_2026/1_C2"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/22_02_2026/1_C2-A",
+        "source_image": "source_image:cf1e6d01e2ab57cabda7adb4737530706a7db5646aa81cb27c43dcb1b3b6b4e6",
+        "specimen": "specimen:None|red_only/22_02_2026/1_C2"
+      },
+      "name": "red_only/22_02_2026/1_C2-A.tif",
+      "sha256": "cf1e6d01e2ab57cabda7adb4737530706a7db5646aa81cb27c43dcb1b3b6b4e6"
+    },
+    {
+      "analysis_id": "img_70c3c7e1b2c8",
+      "file_sha256s": [
+        "70c3c7e1b2c8c47a26a8686f623649e17b2a282baa562f685259caa01310b477"
+      ],
+      "group": "specimen:None|yellow/26-03-2026_C_200",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/26-03-2026_C_200-A",
+        "specimen_id": "yellow/26-03-2026_C_200"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/26-03-2026_C_200-A",
+        "source_image": "source_image:852a3bac227b4f9074042300c37d511c776291ec571401e2044eb886b218fc73",
+        "specimen": "specimen:None|yellow/26-03-2026_C_200"
+      },
+      "name": "yellow/26-03-2026_C_200-A.tif",
+      "sha256": "852a3bac227b4f9074042300c37d511c776291ec571401e2044eb886b218fc73"
+    },
+    {
+      "analysis_id": "img_758cdaa29044",
+      "file_sha256s": [
+        "758cdaa290440968f92008b4d9174d2696033ca75511306a11cf54c767d9d40a"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/59_T2",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/59_T2-A",
+        "specimen_id": "yellow/17_02_2026_2/59_T2"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/59_T2-A",
+        "source_image": "source_image:840ef5762d1f0163e5508b598401fb8afb44be22ed21e8cf960de39530de65c7",
+        "specimen": "specimen:None|yellow/17_02_2026_2/59_T2"
+      },
+      "name": "yellow/17_02_2026_2/59_T2-A.tif",
+      "sha256": "840ef5762d1f0163e5508b598401fb8afb44be22ed21e8cf960de39530de65c7"
+    },
+    {
+      "analysis_id": "img_75b3b742020f",
+      "file_sha256s": [
+        "75b3b742020f2866886ee2deee1a6ace8510f3da204817a301e68fa371438c54"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/59_T2",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/59_T2-B",
+        "specimen_id": "yellow/17_02_2026_2/59_T2"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/59_T2-B",
+        "source_image": "source_image:f4b045ed56fdab7d5d240292ffe4af3ce58dda7fc7e85d8fdfad666ea0fe6cfe",
+        "specimen": "specimen:None|yellow/17_02_2026_2/59_T2"
+      },
+      "name": "yellow/17_02_2026_2/59_T2-B.tif",
+      "sha256": "f4b045ed56fdab7d5d240292ffe4af3ce58dda7fc7e85d8fdfad666ea0fe6cfe"
+    },
+    {
+      "analysis_id": "img_765dd71fb6a7",
+      "file_sha256s": [
+        "765dd71fb6a77c5dd317379c1b1479514853c367fcbb201b9776adfdb16fabd5"
+      ],
+      "group": "specimen:None|red_only/05-08-2026_D_SF",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/05-08-2026_D_SF-B",
+        "specimen_id": "red_only/05-08-2026_D_SF"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/05-08-2026_D_SF-B",
+        "source_image": "source_image:7285a3c394fb2d5411990f177524937d2e2b81520ebea99332139f5db9f110fc",
+        "specimen": "specimen:None|red_only/05-08-2026_D_SF"
+      },
+      "name": "red_only/05-08-2026_D_SF-B.tif",
+      "sha256": "7285a3c394fb2d5411990f177524937d2e2b81520ebea99332139f5db9f110fc"
+    },
+    {
+      "analysis_id": "img_77578e2593c0",
+      "file_sha256s": [
+        "77578e2593c09d8581d5d1bf2bb20d7074ae538f8ec03b50f5ded6b709984d9b"
+      ],
+      "group": "specimen:None|red_only/11_02_2026/415",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/11_02_2026/415-B",
+        "specimen_id": "red_only/11_02_2026/415"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/11_02_2026/415-B",
+        "source_image": "source_image:f90688a5b75c4017f091b8d93985e9aef9a16767fd5f8908db0fad59518cdfa9",
+        "specimen": "specimen:None|red_only/11_02_2026/415"
+      },
+      "name": "red_only/11_02_2026/415-B.tif",
+      "sha256": "f90688a5b75c4017f091b8d93985e9aef9a16767fd5f8908db0fad59518cdfa9"
+    },
+    {
+      "analysis_id": "img_7a8ae92938d1",
+      "file_sha256s": [
+        "7a8ae92938d18cc25a4edb5f13a3d372ccbe918739d949618c0cd0775abcd6e2"
+      ],
+      "group": "specimen:None|red_only/16_12_2025/C2_P2-L-1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/16_12_2025/C2_P2-L-1-B",
+        "specimen_id": "red_only/16_12_2025/C2_P2-L-1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/16_12_2025/C2_P2-L-1-B",
+        "source_image": "source_image:064672df05e8491f3f47a012a2bcfb0a509143cd87a93b3ddba630da2f24e402",
+        "specimen": "specimen:None|red_only/16_12_2025/C2_P2-L-1"
+      },
+      "name": "red_only/16_12_2025/C2_P2-L-1-B.tif",
+      "sha256": "064672df05e8491f3f47a012a2bcfb0a509143cd87a93b3ddba630da2f24e402"
+    },
+    {
+      "analysis_id": "img_7e07c76fa3da",
+      "file_sha256s": [
+        "7e07c76fa3da9e509720ede72821f8848a6735374001802e17dbd9a548909104"
+      ],
+      "group": "specimen:None|yellow/17-06-2026_C_11_45",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17-06-2026_C_11_45-A",
+        "specimen_id": "yellow/17-06-2026_C_11_45"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17-06-2026_C_11_45-A",
+        "source_image": "source_image:7f84492917938ce172041fc2aaef10db0c443040b9218598c32fa2cc9c8ffe02",
+        "specimen": "specimen:None|yellow/17-06-2026_C_11_45"
+      },
+      "name": "yellow/17-06-2026_C_11_45-A.tif",
+      "sha256": "7f84492917938ce172041fc2aaef10db0c443040b9218598c32fa2cc9c8ffe02"
+    },
+    {
+      "analysis_id": "img_81767ae8eaed",
+      "file_sha256s": [
+        "81767ae8eaeddea2e57a08c3ffc196539e18496bcbd2b9429374bc507840a59b"
+      ],
+      "group": "specimen:None|yellow/29-06-2026_C_12-04-2019_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/29-06-2026_C_12-04-2019_5-B",
+        "specimen_id": "yellow/29-06-2026_C_12-04-2019_5"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/29-06-2026_C_12-04-2019_5-B",
+        "source_image": "source_image:c17761ec7eede9793b458dc26d6d2e20e53cf391eb12e711a9037ba8b51bc4e8",
+        "specimen": "specimen:None|yellow/29-06-2026_C_12-04-2019_5"
+      },
+      "name": "yellow/29-06-2026_C_12-04-2019_5-B.tif",
+      "sha256": "c17761ec7eede9793b458dc26d6d2e20e53cf391eb12e711a9037ba8b51bc4e8"
+    },
+    {
+      "analysis_id": "img_82f867ff0c4a",
+      "file_sha256s": [
+        "82f867ff0c4af1d49f6763d2cd2bee34691331aad4759801f70b4af1b17f25db"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_120",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_120-B",
+        "specimen_id": "red_only/9-4-2026_D_120"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_120-B",
+        "source_image": "source_image:e056dd1c44b14a9483be47df6bc3eec90de43eb97aab533f8ce7535b5f9058a7",
+        "specimen": "specimen:None|red_only/9-4-2026_D_120"
+      },
+      "name": "red_only/9-4-2026_D_120-B.tif",
+      "sha256": "e056dd1c44b14a9483be47df6bc3eec90de43eb97aab533f8ce7535b5f9058a7"
+    },
+    {
+      "analysis_id": "img_8547037cd463",
+      "file_sha256s": [
+        "8547037cd463505395e9a5530e9eb0dcb6819f8bfe31eedb93f49fc873c51746"
+      ],
+      "group": "specimen:None|red_only/15-06-2026_D_ST_10_45_D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/15-06-2026_D_ST_10_45-A_D",
+        "specimen_id": "red_only/15-06-2026_D_ST_10_45_D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/15-06-2026_D_ST_10_45-A_D",
+        "source_image": "source_image:9d7f0d22697cc028ec4e20d9cc49e30af8ded82efec645781d3c76cbc5d5d16a",
+        "specimen": "specimen:None|red_only/15-06-2026_D_ST_10_45_D"
+      },
+      "name": "red_only/15-06-2026_D_ST_10_45-A_D.tif",
+      "sha256": "9d7f0d22697cc028ec4e20d9cc49e30af8ded82efec645781d3c76cbc5d5d16a"
+    },
+    {
+      "analysis_id": "img_8587af3abc06",
+      "file_sha256s": [
+        "8587af3abc060916d972702e5eef114fa64e424825e47b64be7d4a33e8276049"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/EM_1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/EM_1-B",
+        "specimen_id": "yellow/17_02_2026_2/EM_1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/EM_1-B",
+        "source_image": "source_image:e0c4517727acd9c81a03f4e21f305fd032f5f13a4f84e5863478555303347855",
+        "specimen": "specimen:None|yellow/17_02_2026_2/EM_1"
+      },
+      "name": "yellow/17_02_2026_2/EM_1-B.tif",
+      "sha256": "e0c4517727acd9c81a03f4e21f305fd032f5f13a4f84e5863478555303347855"
+    },
+    {
+      "analysis_id": "img_86175acaa079",
+      "file_sha256s": [
+        "86175acaa0790e4c53bf042b7d657d09395c92993fc5cb1fd46dbf3c36ce5815"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_15-A",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_15"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_15-A",
+        "source_image": "source_image:1cd1a03143ca9a0f23117ed9b7c8da126983344f12eadf0ef6cd6c00d9511c9b",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_15"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_15-A.tif",
+      "sha256": "1cd1a03143ca9a0f23117ed9b7c8da126983344f12eadf0ef6cd6c00d9511c9b"
+    },
+    {
+      "analysis_id": "img_8711ac310b06",
+      "file_sha256s": [
+        "8711ac310b063826b3473c7b95f3be38948570b94cda6157259806cb23cb8b75"
+      ],
+      "group": "specimen:None|yellow/13-05-2026_C_12-04-2019_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/13-05-2026_C_12-04-2019_25-B",
+        "specimen_id": "yellow/13-05-2026_C_12-04-2019_25"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/13-05-2026_C_12-04-2019_25-B",
+        "source_image": "source_image:7e7f552165405156220ecc57384e163cdb954142f5d6ff222330e8b9ca52b3de",
+        "specimen": "specimen:None|yellow/13-05-2026_C_12-04-2019_25"
+      },
+      "name": "yellow/13-05-2026_C_12-04-2019_25-B.tif",
+      "sha256": "7e7f552165405156220ecc57384e163cdb954142f5d6ff222330e8b9ca52b3de"
+    },
+    {
+      "analysis_id": "img_87bc12ee3ddd",
+      "file_sha256s": [
+        "87bc12ee3dddb514d5dcebc088daf8170db6793213cc5803666589a5572b2b2d"
+      ],
+      "group": "specimen:None|red_only/30-06-2026_D_20-04-2019_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/30-06-2026_D_20-04-2019_60-B",
+        "specimen_id": "red_only/30-06-2026_D_20-04-2019_60"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/30-06-2026_D_20-04-2019_60-B",
+        "source_image": "source_image:eeff02b29ea2c4edb9a3878ad8380ad052f7fb64b484b69cd18fb1cb62ac6766",
+        "specimen": "specimen:None|red_only/30-06-2026_D_20-04-2019_60"
+      },
+      "name": "red_only/30-06-2026_D_20-04-2019_60-B.tif",
+      "sha256": "eeff02b29ea2c4edb9a3878ad8380ad052f7fb64b484b69cd18fb1cb62ac6766"
+    },
+    {
+      "analysis_id": "img_87c342972deb",
+      "file_sha256s": [
+        "87c342972deb55f6a8f187d5c81ea0c674befec9d03f32b949094a34f17e19f5"
+      ],
+      "group": "specimen:None|yellow/16-03-2026_C1_E2",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/16-03-2026_C1_E2-A",
+        "specimen_id": "yellow/16-03-2026_C1_E2"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/16-03-2026_C1_E2-A",
+        "source_image": "source_image:1ca57cce0b3f4313a8eba8f6fbd0cb61debdfa9b18048f907ead2a587a74d7db",
+        "specimen": "specimen:None|yellow/16-03-2026_C1_E2"
+      },
+      "name": "yellow/16-03-2026_C1_E2-A.tif",
+      "sha256": "1ca57cce0b3f4313a8eba8f6fbd0cb61debdfa9b18048f907ead2a587a74d7db"
+    },
+    {
+      "analysis_id": "img_8892cbb34a29",
+      "file_sha256s": [
+        "8892cbb34a29d5a1993557af7b33acfd95aadf56b7b66f59caef80dc1c6cf3d5"
+      ],
+      "group": "specimen:None|red_only/02_12_2025/D_P2-2_D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/02_12_2025/D_P2-2-B_D",
+        "specimen_id": "red_only/02_12_2025/D_P2-2_D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/02_12_2025/D_P2-2-B_D",
+        "source_image": "source_image:c9275fda0f996eae43f2002b733033963284441958b36e998756f76f43e64fee",
+        "specimen": "specimen:None|red_only/02_12_2025/D_P2-2_D"
+      },
+      "name": "red_only/02_12_2025/D_P2-2-B_D.tif",
+      "sha256": "c9275fda0f996eae43f2002b733033963284441958b36e998756f76f43e64fee"
+    },
+    {
+      "analysis_id": "img_89ea6d64d73a",
+      "file_sha256s": [
+        "89ea6d64d73a3b830c2bca49ac32235902fd4b7a5a5fad3d0066215c990628e6"
+      ],
+      "group": "specimen:None|red_only/16-03-2026_C2_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/16-03-2026_C2_FS-A",
+        "specimen_id": "red_only/16-03-2026_C2_FS"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/16-03-2026_C2_FS-A",
+        "source_image": "source_image:289a9bc31bfe9aa2cf4110495c805fb5af1ea27e8c8b81803ad4f449df89b7b7",
+        "specimen": "specimen:None|red_only/16-03-2026_C2_FS"
+      },
+      "name": "red_only/16-03-2026_C2_FS-A.tif",
+      "sha256": "289a9bc31bfe9aa2cf4110495c805fb5af1ea27e8c8b81803ad4f449df89b7b7"
+    },
+    {
+      "analysis_id": "img_8a9ce2b4b171",
+      "file_sha256s": [
+        "8a9ce2b4b1719695a5f393675696b19e4dab0a555174c205a2f510bd287a39e1"
+      ],
+      "group": "specimen:None|red_only/10_12_2025/C2_L",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/10_12_2025/C2_L-B",
+        "specimen_id": "red_only/10_12_2025/C2_L"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/10_12_2025/C2_L-B",
+        "source_image": "source_image:f4a2f297d0e487e5731493df3eac560c9ee4a7aa411fa88273ea868d474ad581",
+        "specimen": "specimen:None|red_only/10_12_2025/C2_L"
+      },
+      "name": "red_only/10_12_2025/C2_L-B.tif",
+      "sha256": "f4a2f297d0e487e5731493df3eac560c9ee4a7aa411fa88273ea868d474ad581"
+    },
+    {
+      "analysis_id": "img_8b25dbb475a3",
+      "file_sha256s": [
+        "8b25dbb475a32255e765578f6174f4b01e493e411482d156608feff3f66b39e1"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_15-B",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_15"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_15-B",
+        "source_image": "source_image:1f7616219257c50fb2f1cef752aa25a57d6dffc3cec18588849f78d229b70351",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_15"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_15-B.tif",
+      "sha256": "1f7616219257c50fb2f1cef752aa25a57d6dffc3cec18588849f78d229b70351"
+    },
+    {
+      "analysis_id": "img_8b31a4c814f9",
+      "file_sha256s": [
+        "8b31a4c814f9901ab43b1fe15a34e252581656874363191448273c5ffda0eb26"
+      ],
+      "group": "specimen:None|red_only/03-08-2026_D_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/03-08-2026_D_FS-A",
+        "specimen_id": "red_only/03-08-2026_D_FS"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/03-08-2026_D_FS-A",
+        "source_image": "source_image:91a5cbd7edd2a0e66f060dd6abc9a3259cc1a2926e42d5b241449128f5dac972",
+        "specimen": "specimen:None|red_only/03-08-2026_D_FS"
+      },
+      "name": "red_only/03-08-2026_D_FS-A.tif",
+      "sha256": "91a5cbd7edd2a0e66f060dd6abc9a3259cc1a2926e42d5b241449128f5dac972"
+    },
+    {
+      "analysis_id": "img_8b6aecd95b40",
+      "file_sha256s": [
+        "8b6aecd95b401a8aa5927d18a35a8c3722794ad35dc2329ebdf14452c94f293f"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_100",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_100-B",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_100"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_100-B",
+        "source_image": "source_image:6690f7f157e523b4d73af200bb33eb2250fdf71a939242380c2d44ebf2e1b119",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_100"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_100-B.tif",
+      "sha256": "6690f7f157e523b4d73af200bb33eb2250fdf71a939242380c2d44ebf2e1b119"
+    },
+    {
+      "analysis_id": "img_8bd934485421",
+      "file_sha256s": [
+        "8bd9344854218ac030ca06f2fc23aff2ace481d2ed1ebbc64432f7d80734fbeb"
+      ],
+      "group": "specimen:None|yellow/17-06-2026_C_11_DCM",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17-06-2026_C_11_DCM-B",
+        "specimen_id": "yellow/17-06-2026_C_11_DCM"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17-06-2026_C_11_DCM-B",
+        "source_image": "source_image:7caf2e7593c1aa8988681c4f79bdb4e568be71f9985d25aec7af369dd7cf2e01",
+        "specimen": "specimen:None|yellow/17-06-2026_C_11_DCM"
+      },
+      "name": "yellow/17-06-2026_C_11_DCM-B.tif",
+      "sha256": "7caf2e7593c1aa8988681c4f79bdb4e568be71f9985d25aec7af369dd7cf2e01"
+    },
+    {
+      "analysis_id": "img_8c5b14b99cc2",
+      "file_sha256s": [
+        "8c5b14b99cc20b4b6615535354067c9cac604de6cd49964e9d27b1526dcd5ead"
+      ],
+      "group": "specimen:None|red_only/29_12_2025/L-E-1-A-D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/29_12_2025/L-E-1-A-D",
+        "specimen_id": "red_only/29_12_2025/L-E-1-A-D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/29_12_2025/L-E-1-A-D",
+        "source_image": "source_image:1b087cda21b9cdb03ce2a707c5b4f5e4c336a55cdefba8f786fd77b9568c77db",
+        "specimen": "specimen:None|red_only/29_12_2025/L-E-1-A-D"
+      },
+      "name": "red_only/29_12_2025/L-E-1-A-D.tif",
+      "sha256": "1b087cda21b9cdb03ce2a707c5b4f5e4c336a55cdefba8f786fd77b9568c77db"
+    },
+    {
+      "analysis_id": "img_8f59c66edd7c",
+      "file_sha256s": [
+        "8f59c66edd7c13c635ac651b169d429f99285ce170631b4a15e62e3befa041f7"
+      ],
+      "group": "specimen:None|yellow/18-03-2026_C_T2-A-D",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/18-03-2026_C_T2-A-D",
+        "specimen_id": "yellow/18-03-2026_C_T2-A-D"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/18-03-2026_C_T2-A-D",
+        "source_image": "source_image:808cf4956c87b6de86939b4c7392a1ef21eb6f142088516390f968da5dc2a32e",
+        "specimen": "specimen:None|yellow/18-03-2026_C_T2-A-D"
+      },
+      "name": "yellow/18-03-2026_C_T2-A-D.tif",
+      "sha256": "808cf4956c87b6de86939b4c7392a1ef21eb6f142088516390f968da5dc2a32e"
+    },
+    {
+      "analysis_id": "img_92c22333a004",
+      "file_sha256s": [
+        "92c22333a004def07b0f213254aeb200127649311a59679ce7e55cc984662d31"
+      ],
+      "group": "specimen:None|red_only/07_01_2026/D_1E",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/07_01_2026/D_1E-B",
+        "specimen_id": "red_only/07_01_2026/D_1E"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/07_01_2026/D_1E-B",
+        "source_image": "source_image:83156ca9f5a8b8be4b471f0135bfc37bf47777d6b22410a1ef99d96b882cdac1",
+        "specimen": "specimen:None|red_only/07_01_2026/D_1E"
+      },
+      "name": "red_only/07_01_2026/D_1E-B.tif",
+      "sha256": "83156ca9f5a8b8be4b471f0135bfc37bf47777d6b22410a1ef99d96b882cdac1"
+    },
+    {
+      "analysis_id": "img_95bd51f30af8",
+      "file_sha256s": [
+        "95bd51f30af8707af2af6c199308c103eba92d48f2dd837b0710d73fcae6d43d"
+      ],
+      "group": "specimen:None|yellow/9-4-2026_C_R75",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/9-4-2026_C_R75-A",
+        "specimen_id": "yellow/9-4-2026_C_R75"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/9-4-2026_C_R75-A",
+        "source_image": "source_image:af08d31cc6a12f9903e0e5c30fc8b1a150068b0fbd0efca4c99cbe1b4c2eb06e",
+        "specimen": "specimen:None|yellow/9-4-2026_C_R75"
+      },
+      "name": "yellow/9-4-2026_C_R75-A.tif",
+      "sha256": "af08d31cc6a12f9903e0e5c30fc8b1a150068b0fbd0efca4c99cbe1b4c2eb06e"
+    },
+    {
+      "analysis_id": "img_95bd61f4d23a",
+      "file_sha256s": [
+        "95bd61f4d23a7d52419bf6c662eeca410489cf19f8351d6aad1ff3bb31589687"
+      ],
+      "group": "specimen:None|yellow/9-4-2026_C_200_D",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/9-4-2026_C_200-A_D",
+        "specimen_id": "yellow/9-4-2026_C_200_D"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/9-4-2026_C_200-A_D",
+        "source_image": "source_image:fe8f69d6cf4568591914fd64e6626ed5113c21cea1b3c72c982b51bcb4d776b7",
+        "specimen": "specimen:None|yellow/9-4-2026_C_200_D"
+      },
+      "name": "yellow/9-4-2026_C_200-A_D.tif",
+      "sha256": "fe8f69d6cf4568591914fd64e6626ed5113c21cea1b3c72c982b51bcb4d776b7"
+    },
+    {
+      "analysis_id": "img_95d7159f2b81",
+      "file_sha256s": [
+        "95d7159f2b81669744f7a868f34cab2a61b4dbf61816f546af01f227d2b7bcfc"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_12-4-2019_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_12-4-2019_25-B",
+        "specimen_id": "red_only/28-04-2026_D_12-4-2019_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_12-4-2019_25-B",
+        "source_image": "source_image:172b8983f4641746ee82e1f382a443a3c4eab2e654e88fb961c83b5d847316b3",
+        "specimen": "specimen:None|red_only/28-04-2026_D_12-4-2019_25"
+      },
+      "name": "red_only/28-04-2026_D_12-4-2019_25-B.tif",
+      "sha256": "172b8983f4641746ee82e1f382a443a3c4eab2e654e88fb961c83b5d847316b3"
+    },
+    {
+      "analysis_id": "img_9d9124434167",
+      "file_sha256s": [
+        "9d91244341678c5b29e2d219871e15ed760db63d5174f709ad01c2e14df9b4ae"
+      ],
+      "group": "specimen:None|yellow/11-05-2026_C_20-04-2019_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/11-05-2026_C_20-04-2019_60-B",
+        "specimen_id": "yellow/11-05-2026_C_20-04-2019_60"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/11-05-2026_C_20-04-2019_60-B",
+        "source_image": "source_image:ae92d094b0e6ce2fc7537c37fbd04eab8d4498b9338f8202602458dba29a5afd",
+        "specimen": "specimen:None|yellow/11-05-2026_C_20-04-2019_60"
+      },
+      "name": "yellow/11-05-2026_C_20-04-2019_60-B.tif",
+      "sha256": "ae92d094b0e6ce2fc7537c37fbd04eab8d4498b9338f8202602458dba29a5afd"
+    },
+    {
+      "analysis_id": "img_a13b386568ad",
+      "file_sha256s": [
+        "a13b386568ad408a1c2ec0b014455c70f6598fbacbc560451ba05b1117bf9c2e"
+      ],
+      "group": "specimen:None|yellow/09_02_2026/UT",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/09_02_2026/UT-A",
+        "specimen_id": "yellow/09_02_2026/UT"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/09_02_2026/UT-A",
+        "source_image": "source_image:b14f0c519e492434e753f4b8cf76f882dadf775454cd37ce42bd6d31a6b49d09",
+        "specimen": "specimen:None|yellow/09_02_2026/UT"
+      },
+      "name": "yellow/09_02_2026/UT-A.tif",
+      "sha256": "b14f0c519e492434e753f4b8cf76f882dadf775454cd37ce42bd6d31a6b49d09"
+    },
+    {
+      "analysis_id": "img_a13f9899bae0",
+      "file_sha256s": [
+        "a13f9899bae06fa44f5d13c6b5aa10462a0269b9aec1ed9e3dde3b8a92d11f54"
+      ],
+      "group": "specimen:None|red_only/22_02_2026/1_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/22_02_2026/1_FS-A",
+        "specimen_id": "red_only/22_02_2026/1_FS"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/22_02_2026/1_FS-A",
+        "source_image": "source_image:fee39a4c0a5196c5badda31d46f623430364443e131a6308ee7e46c9e451a3b3",
+        "specimen": "specimen:None|red_only/22_02_2026/1_FS"
+      },
+      "name": "red_only/22_02_2026/1_FS-A.tif",
+      "sha256": "fee39a4c0a5196c5badda31d46f623430364443e131a6308ee7e46c9e451a3b3"
+    },
+    {
+      "analysis_id": "img_a2b40cae57e3",
+      "file_sha256s": [
+        "a2b40cae57e3840bc821a0473205f8f589394a9fc7965492371c85dc90f19e68"
+      ],
+      "group": "specimen:None|yellow/9-4-2026_C_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/9-4-2026_C_5-B",
+        "specimen_id": "yellow/9-4-2026_C_5"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/9-4-2026_C_5-B",
+        "source_image": "source_image:8a44a8877a6b4cb646a4902ba651d125a16a58e354c67c906b10c5ce361fe3d0",
+        "specimen": "specimen:None|yellow/9-4-2026_C_5"
+      },
+      "name": "yellow/9-4-2026_C_5-B.tif",
+      "sha256": "8a44a8877a6b4cb646a4902ba651d125a16a58e354c67c906b10c5ce361fe3d0"
+    },
+    {
+      "analysis_id": "img_a415bc0869f7",
+      "file_sha256s": [
+        "a415bc0869f730d7ebace92d6e3c7ed9688b2f092a7f2ca53adccf8898c346a9"
+      ],
+      "group": "specimen:None|red_only/07_01_2026/D_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/07_01_2026/D_5-A",
+        "specimen_id": "red_only/07_01_2026/D_5"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/07_01_2026/D_5-A",
+        "source_image": "source_image:924d45508f27f781a79028b74eb44048c182cd43015f7126470f505d40054d30",
+        "specimen": "specimen:None|red_only/07_01_2026/D_5"
+      },
+      "name": "red_only/07_01_2026/D_5-A.tif",
+      "sha256": "924d45508f27f781a79028b74eb44048c182cd43015f7126470f505d40054d30"
+    },
+    {
+      "analysis_id": "img_a7ea57723c98",
+      "file_sha256s": [
+        "a7ea57723c98f47b2357683841c023eb1269190bea3bfd7784d42676eeeb2557"
+      ],
+      "group": "specimen:None|yellow/20_01_2026/MN_UT",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/20_01_2026/MN_A_UT",
+        "specimen_id": "yellow/20_01_2026/MN_UT"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/20_01_2026/MN_A_UT",
+        "source_image": "source_image:23278147316c5a3b59091c30f5221e6ba6247bf4fa46222af221f40781ebcef6",
+        "specimen": "specimen:None|yellow/20_01_2026/MN_UT"
+      },
+      "name": "yellow/20_01_2026/MN_A_UT.tif",
+      "sha256": "23278147316c5a3b59091c30f5221e6ba6247bf4fa46222af221f40781ebcef6"
+    },
+    {
+      "analysis_id": "img_a95c9daedb8e",
+      "file_sha256s": [
+        "a95c9daedb8e374a21f3662b1b4cc7a883980e66d07e7d966a75f97596868ea3"
+      ],
+      "group": "specimen:None|red_only/26-03-2026_D_5-A-D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/26-03-2026_D_5-A-D",
+        "specimen_id": "red_only/26-03-2026_D_5-A-D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/26-03-2026_D_5-A-D",
+        "source_image": "source_image:2f158f2f486b80c3e0b343e55c4d12dbda3119cfd14c6825b7e59d2b1ac9ea20",
+        "specimen": "specimen:None|red_only/26-03-2026_D_5-A-D"
+      },
+      "name": "red_only/26-03-2026_D_5-A-D.tif",
+      "sha256": "2f158f2f486b80c3e0b343e55c4d12dbda3119cfd14c6825b7e59d2b1ac9ea20"
+    },
+    {
+      "analysis_id": "img_aba8e851a169",
+      "file_sha256s": [
+        "aba8e851a16996464d1c6bc257433659ce9107f9aa0804dfd9ac875e4facc9c3"
+      ],
+      "group": "specimen:None|yellow/03-08-2026_C_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/03-08-2026_C_FS-B",
+        "specimen_id": "yellow/03-08-2026_C_FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/03-08-2026_C_FS-B",
+        "source_image": "source_image:fc67986cfaa04f87fdadaf308ee49af29101afb2d0e033d9708e1f322a26be1b",
+        "specimen": "specimen:None|yellow/03-08-2026_C_FS"
+      },
+      "name": "yellow/03-08-2026_C_FS-B.tif",
+      "sha256": "fc67986cfaa04f87fdadaf308ee49af29101afb2d0e033d9708e1f322a26be1b"
+    },
+    {
+      "analysis_id": "img_adfdd5bce53f",
+      "file_sha256s": [
+        "adfdd5bce53f0f3d462daa6beb65796f9b1bac328edc39272872f7eab08f46f0"
+      ],
+      "group": "specimen:None|red_only/03-08-2026_D_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/03-08-2026_D_FS-B",
+        "specimen_id": "red_only/03-08-2026_D_FS"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/03-08-2026_D_FS-B",
+        "source_image": "source_image:870319f4f1e3e9d390e77412cd19c53a542623bd4a3037869da7100a19317fd5",
+        "specimen": "specimen:None|red_only/03-08-2026_D_FS"
+      },
+      "name": "red_only/03-08-2026_D_FS-B.tif",
+      "sha256": "870319f4f1e3e9d390e77412cd19c53a542623bd4a3037869da7100a19317fd5"
+    },
+    {
+      "analysis_id": "img_af7cc2dd95fc",
+      "file_sha256s": [
+        "af7cc2dd95fcea6dafe3fc67e493be47387f88beedb80fb5e74d6e7f65ca2d5a"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_120",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_120-A",
+        "specimen_id": "red_only/9-4-2026_D_120"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_120-A",
+        "source_image": "source_image:06456f98373d722883ed416f76e73f5c8dc8786f82fa78b512a300ae8c9c6723",
+        "specimen": "specimen:None|red_only/9-4-2026_D_120"
+      },
+      "name": "red_only/9-4-2026_D_120-A.tif",
+      "sha256": "06456f98373d722883ed416f76e73f5c8dc8786f82fa78b512a300ae8c9c6723"
+    },
+    {
+      "analysis_id": "img_afdc2bb42f19",
+      "file_sha256s": [
+        "afdc2bb42f19687d7e8c592541c8df4420b682502707fae3c485554c33568a86"
+      ],
+      "group": "specimen:None|red_only/10_12_2025/C2_L",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/10_12_2025/C2_L-A",
+        "specimen_id": "red_only/10_12_2025/C2_L"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/10_12_2025/C2_L-A",
+        "source_image": "source_image:690c2fc4da17c0251767e0a72d281c5f6e6e91a000170c546f08cbb527bdb2e3",
+        "specimen": "specimen:None|red_only/10_12_2025/C2_L"
+      },
+      "name": "red_only/10_12_2025/C2_L-A.tif",
+      "sha256": "690c2fc4da17c0251767e0a72d281c5f6e6e91a000170c546f08cbb527bdb2e3"
+    },
+    {
+      "analysis_id": "img_b10be9ddb2e0",
+      "file_sha256s": [
+        "b10be9ddb2e0745bb73a11fabc901861fddec28cf355a4652d6f564384eb1c57"
+      ],
+      "group": "specimen:None|yellow/20_01_2026/59_10_T",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/20_01_2026/59_10-B_T",
+        "specimen_id": "yellow/20_01_2026/59_10_T"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/20_01_2026/59_10-B_T",
+        "source_image": "source_image:7648254d91b6eeb972174ca77ec292ed996f9ed85a4d6893ec750771b1aaf374",
+        "specimen": "specimen:None|yellow/20_01_2026/59_10_T"
+      },
+      "name": "yellow/20_01_2026/59_10-B_T.tif",
+      "sha256": "7648254d91b6eeb972174ca77ec292ed996f9ed85a4d6893ec750771b1aaf374"
+    },
+    {
+      "analysis_id": "img_b12fd24d222b",
+      "file_sha256s": [
+        "b12fd24d222b7203d8453982047949808eb5a0e39408785710f23a24927ee7ea"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_100",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_100-A",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_100"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_100-A",
+        "source_image": "source_image:94295d50a2ea77c1244e8d174c9d970da601a99a7d5102eb0ea1ec95dbd874e6",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_100"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_100-A.tif",
+      "sha256": "94295d50a2ea77c1244e8d174c9d970da601a99a7d5102eb0ea1ec95dbd874e6"
+    },
+    {
+      "analysis_id": "img_b29ade555059",
+      "file_sha256s": [
+        "b29ade55505970cc3d64a2b343bb22ef5488058f6a9bceaef12bb63d4ff2e23b"
+      ],
+      "group": "specimen:None|red_only/10_03_2026/D_21",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/10_03_2026/D_21-A",
+        "specimen_id": "red_only/10_03_2026/D_21"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/10_03_2026/D_21-A",
+        "source_image": "source_image:0b6c918d7cb890b5f6da979356f23a79eb3c6a871dfbbdd857a8c662b21b20b5",
+        "specimen": "specimen:None|red_only/10_03_2026/D_21"
+      },
+      "name": "red_only/10_03_2026/D_21-A.tif",
+      "sha256": "0b6c918d7cb890b5f6da979356f23a79eb3c6a871dfbbdd857a8c662b21b20b5"
+    },
+    {
+      "analysis_id": "img_b37856d57ba8",
+      "file_sha256s": [
+        "b37856d57ba84dea1e5668d4454c6ffc445faab8205136fc12ab082b42b142da"
+      ],
+      "group": "specimen:None|red_only/08_03_2026/D-1_E2",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/08_03_2026/D-1_E2-B",
+        "specimen_id": "red_only/08_03_2026/D-1_E2"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/08_03_2026/D-1_E2-B",
+        "source_image": "source_image:bddb43c13e59ab7f5d8909323191c314d26921a0dbd7f9a1344b5efe991b8621",
+        "specimen": "specimen:None|red_only/08_03_2026/D-1_E2"
+      },
+      "name": "red_only/08_03_2026/D-1_E2-B.tif",
+      "sha256": "bddb43c13e59ab7f5d8909323191c314d26921a0dbd7f9a1344b5efe991b8621"
+    },
+    {
+      "analysis_id": "img_b4c328bd990a",
+      "file_sha256s": [
+        "b4c328bd990adaf50598e47681a1a3cc26ae1aa7794de4e3fc6ad87ad9c1f7e2"
+      ],
+      "group": "specimen:None|red_only/23-04-2026_D_2-5_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/23-04-2026_D_2-5_60-B",
+        "specimen_id": "red_only/23-04-2026_D_2-5_60"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/23-04-2026_D_2-5_60-B",
+        "source_image": "source_image:c0a41106e859ce6ca578017c005562d84dab7e62a8bc542d60d8458532bc5e4c",
+        "specimen": "specimen:None|red_only/23-04-2026_D_2-5_60"
+      },
+      "name": "red_only/23-04-2026_D_2-5_60-B.tif",
+      "sha256": "c0a41106e859ce6ca578017c005562d84dab7e62a8bc542d60d8458532bc5e4c"
+    },
+    {
+      "analysis_id": "img_b61ecfd821cc",
+      "file_sha256s": [
+        "b61ecfd821ccfb94eb3f58531259ad7c01244a57191d580321c641cfe6b80682"
+      ],
+      "group": "specimen:None|red_only/11_02_2026/415",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/11_02_2026/415-A",
+        "specimen_id": "red_only/11_02_2026/415"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/11_02_2026/415-A",
+        "source_image": "source_image:66c06025b209e9ae7f834df101d5aa372324d75414808911f034b0c100bd992d",
+        "specimen": "specimen:None|red_only/11_02_2026/415"
+      },
+      "name": "red_only/11_02_2026/415-A.tif",
+      "sha256": "66c06025b209e9ae7f834df101d5aa372324d75414808911f034b0c100bd992d"
+    },
+    {
+      "analysis_id": "img_b926b9e77a71",
+      "file_sha256s": [
+        "b926b9e77a71425656bba619f72f47d15eabeaf604980ee2f8b9ddec127ba211"
+      ],
+      "group": "specimen:None|yellow/9-4-2026_C_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/9-4-2026_C_5-A",
+        "specimen_id": "yellow/9-4-2026_C_5"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/9-4-2026_C_5-A",
+        "source_image": "source_image:393bc686d21a8d3f7bcb308096447dfa89da3fc5548f5e79c78eb8459c6adf9f",
+        "specimen": "specimen:None|yellow/9-4-2026_C_5"
+      },
+      "name": "yellow/9-4-2026_C_5-A.tif",
+      "sha256": "393bc686d21a8d3f7bcb308096447dfa89da3fc5548f5e79c78eb8459c6adf9f"
+    },
+    {
+      "analysis_id": "img_baf2f65fd0ce",
+      "file_sha256s": [
+        "baf2f65fd0ce31a4bca5b9a463c888155d0d2e0a1b425bc08db37dc69041a39d"
+      ],
+      "group": "specimen:None|red_only/11-06-2026_D_29-05_new_200",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/11-06-2026_D_29-05_new_200-A",
+        "specimen_id": "red_only/11-06-2026_D_29-05_new_200"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/11-06-2026_D_29-05_new_200-A",
+        "source_image": "source_image:01d2103ecf006971b0050c85b61447b263d8efe800bdf46650826cb79653411d",
+        "specimen": "specimen:None|red_only/11-06-2026_D_29-05_new_200"
+      },
+      "name": "red_only/11-06-2026_D_29-05_new_200-A.tif",
+      "sha256": "01d2103ecf006971b0050c85b61447b263d8efe800bdf46650826cb79653411d"
+    },
+    {
+      "analysis_id": "img_bd56f52607d3",
+      "file_sha256s": [
+        "bd56f52607d3f9fe6464ccc6b0da8c2693cd2985ec401e9b88f1ccdb546dbc6a"
+      ],
+      "group": "specimen:None|yellow/16-04-2026_C_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/16-04-2026_C_5-B",
+        "specimen_id": "yellow/16-04-2026_C_5"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/16-04-2026_C_5-B",
+        "source_image": "source_image:300eb081c05873def16384c578aabe615cd1e71898d049dd4386247793a3f084",
+        "specimen": "specimen:None|yellow/16-04-2026_C_5"
+      },
+      "name": "yellow/16-04-2026_C_5-B.tif",
+      "sha256": "300eb081c05873def16384c578aabe615cd1e71898d049dd4386247793a3f084"
+    },
+    {
+      "analysis_id": "img_be02bd50519d",
+      "file_sha256s": [
+        "be02bd50519d0e1de37aeca7fbd884f0001c09a3ba9294fadd6ea183c06e2b1c"
+      ],
+      "group": "specimen:None|red_only/26-03-2026_D_200",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/26-03-2026_D_200-B",
+        "specimen_id": "red_only/26-03-2026_D_200"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/26-03-2026_D_200-B",
+        "source_image": "source_image:28ad129dd9298443b36e9b43e7a2f3d1d499b9ebf374c79dfb4f28eded7dd44f",
+        "specimen": "specimen:None|red_only/26-03-2026_D_200"
+      },
+      "name": "red_only/26-03-2026_D_200-B.tif",
+      "sha256": "28ad129dd9298443b36e9b43e7a2f3d1d499b9ebf374c79dfb4f28eded7dd44f"
+    },
+    {
+      "analysis_id": "img_be346c8e4628",
+      "file_sha256s": [
+        "be346c8e4628da42cdce29fa591e137afaa4c61b52f43e02b173638d6e981091"
+      ],
+      "group": "specimen:None|yellow/11-05-2026_C_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/11-05-2026_C_FS-A",
+        "specimen_id": "yellow/11-05-2026_C_FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/11-05-2026_C_FS-A",
+        "source_image": "source_image:a6ef86761eba22a38f814d0b21ae96e330c5d82decafa791770e91a43c241849",
+        "specimen": "specimen:None|yellow/11-05-2026_C_FS"
+      },
+      "name": "yellow/11-05-2026_C_FS-A.tif",
+      "sha256": "a6ef86761eba22a38f814d0b21ae96e330c5d82decafa791770e91a43c241849"
+    },
+    {
+      "analysis_id": "img_bef0a776921b",
+      "file_sha256s": [
+        "bef0a776921b961f9d3173279e4c1bc367d109de34b0741edd1eb94ad87b9a04"
+      ],
+      "group": "specimen:None|yellow/03-08-2026_C_P-C_N",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/03-08-2026_C_P-C_N",
+        "specimen_id": "yellow/03-08-2026_C_P-C_N"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/03-08-2026_C_P-C_N",
+        "source_image": "source_image:d4176fb388ee30e907dd97b4bc329330ebd6d8accae493891a288054b12fe697",
+        "specimen": "specimen:None|yellow/03-08-2026_C_P-C_N"
+      },
+      "name": "yellow/03-08-2026_C_P-C_N.tif",
+      "sha256": "d4176fb388ee30e907dd97b4bc329330ebd6d8accae493891a288054b12fe697"
+    },
+    {
+      "analysis_id": "img_bfbad84b5a92",
+      "file_sha256s": [
+        "bfbad84b5a926d5d3466438880fb90bd940c6d9df151c33cffdf4f8727c8f821"
+      ],
+      "group": "specimen:None|yellow/11-05-2026_C_20-04-2019_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/11-05-2026_C_20-04-2019_60-A",
+        "specimen_id": "yellow/11-05-2026_C_20-04-2019_60"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/11-05-2026_C_20-04-2019_60-A",
+        "source_image": "source_image:6b8c8dafd35247099229061e5c8b0ec25e60751fb5324b6ae3e94d646f1d9843",
+        "specimen": "specimen:None|yellow/11-05-2026_C_20-04-2019_60"
+      },
+      "name": "yellow/11-05-2026_C_20-04-2019_60-A.tif",
+      "sha256": "6b8c8dafd35247099229061e5c8b0ec25e60751fb5324b6ae3e94d646f1d9843"
+    },
+    {
+      "analysis_id": "img_c3096176b2f3",
+      "file_sha256s": [
+        "c3096176b2f33ab1d268311f9657aee4814d15b0d4c96eb0947e18c1e3a748c1"
+      ],
+      "group": "specimen:None|red_only/16_12_2025/C2_P2-T-1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/16_12_2025/C2_P2-T-1-A",
+        "specimen_id": "red_only/16_12_2025/C2_P2-T-1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/16_12_2025/C2_P2-T-1-A",
+        "source_image": "source_image:1e07ccabc1b01c195b2063c271b5630ec818b8c519a065aa1ec6eca20622bb37",
+        "specimen": "specimen:None|red_only/16_12_2025/C2_P2-T-1"
+      },
+      "name": "red_only/16_12_2025/C2_P2-T-1-A.tif",
+      "sha256": "1e07ccabc1b01c195b2063c271b5630ec818b8c519a065aa1ec6eca20622bb37"
+    },
+    {
+      "analysis_id": "img_c3d8e53fa034",
+      "file_sha256s": [
+        "c3d8e53fa0343fd8900bff3515afde38432b522669298eb860a9e78ca73ddc6a"
+      ],
+      "group": "specimen:None|red_only/15-06-2026_D_ST_17_120",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/15-06-2026_D_ST_17_120-B",
+        "specimen_id": "red_only/15-06-2026_D_ST_17_120"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/15-06-2026_D_ST_17_120-B",
+        "source_image": "source_image:f050d51cb0e42bba14a570a72a0b69b218e9bc5bb83cd8d347ca6d7ed7eda3b8",
+        "specimen": "specimen:None|red_only/15-06-2026_D_ST_17_120"
+      },
+      "name": "red_only/15-06-2026_D_ST_17_120-B.tif",
+      "sha256": "f050d51cb0e42bba14a570a72a0b69b218e9bc5bb83cd8d347ca6d7ed7eda3b8"
+    },
+    {
+      "analysis_id": "img_c7e4a1500bf4",
+      "file_sha256s": [
+        "c7e4a1500bf424646630f1f8b43fdeef7689b701b572b148cf82c793daa48134"
+      ],
+      "group": "specimen:None|yellow/17_02_2026/MN_1_STRANGE",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026/MN_1-A_STRANGE",
+        "specimen_id": "yellow/17_02_2026/MN_1_STRANGE"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026/MN_1-A_STRANGE",
+        "source_image": "source_image:9a4486474c45e0caad8472bb322a2ec87d440e22f0ca99a91abcf953312327de",
+        "specimen": "specimen:None|yellow/17_02_2026/MN_1_STRANGE"
+      },
+      "name": "yellow/17_02_2026/MN_1-A_STRANGE.tif",
+      "sha256": "9a4486474c45e0caad8472bb322a2ec87d440e22f0ca99a91abcf953312327de"
+    },
+    {
+      "analysis_id": "img_c893d998c68c",
+      "file_sha256s": [
+        "c893d998c68ccb628e290048c5f19d2d3d6433e4873a3e5dee664685240e7a41"
+      ],
+      "group": "specimen:None|red_only/11_02_2026/97-A-D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/11_02_2026/97-A-D",
+        "specimen_id": "red_only/11_02_2026/97-A-D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/11_02_2026/97-A-D",
+        "source_image": "source_image:cdc9e2f39d19a69ae31c88cfd8e482f0aba5c7bf77abbf208e9942fd90f82bf2",
+        "specimen": "specimen:None|red_only/11_02_2026/97-A-D"
+      },
+      "name": "red_only/11_02_2026/97-A-D.tif",
+      "sha256": "cdc9e2f39d19a69ae31c88cfd8e482f0aba5c7bf77abbf208e9942fd90f82bf2"
+    },
+    {
+      "analysis_id": "img_cadee4e3cb44",
+      "file_sha256s": [
+        "cadee4e3cb4452f348d68fbd5a6c4af8e504b60e00dd48b011add6c86b807299"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/59_T1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/59_T1-A",
+        "specimen_id": "yellow/17_02_2026_2/59_T1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/59_T1-A",
+        "source_image": "source_image:32b545241762a9bd5f74a294857d44912f601304a7bed758657d81e32546c019",
+        "specimen": "specimen:None|yellow/17_02_2026_2/59_T1"
+      },
+      "name": "yellow/17_02_2026_2/59_T1-A.tif",
+      "sha256": "32b545241762a9bd5f74a294857d44912f601304a7bed758657d81e32546c019"
+    },
+    {
+      "analysis_id": "img_d07bb1054dd3",
+      "file_sha256s": [
+        "d07bb1054dd39448173d5337462016ca1dae42b05184da0621c4c63ed76ab02a"
+      ],
+      "group": "specimen:None|red_only/03-08-2026_D_S_N",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/03-08-2026_D_S-B_N",
+        "specimen_id": "red_only/03-08-2026_D_S_N"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/03-08-2026_D_S-B_N",
+        "source_image": "source_image:470ebed47576e6de8ac6ebc3efec3990175f877cdced3a3a296e31c1e0a82ed4",
+        "specimen": "specimen:None|red_only/03-08-2026_D_S_N"
+      },
+      "name": "red_only/03-08-2026_D_S-B_N.tif",
+      "sha256": "470ebed47576e6de8ac6ebc3efec3990175f877cdced3a3a296e31c1e0a82ed4"
+    },
+    {
+      "analysis_id": "img_d5586ebca638",
+      "file_sha256s": [
+        "d5586ebca638c69e855a99fae9eb1615509c5c892536b0da7f2688acde4ad0a4"
+      ],
+      "group": "specimen:None|yellow/16_12_2025/C1_P1-L-2",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/16_12_2025/C1_P1-L-2-A",
+        "specimen_id": "yellow/16_12_2025/C1_P1-L-2"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/16_12_2025/C1_P1-L-2-A",
+        "source_image": "source_image:20fb1d6d39de0d237ecf62280fe1d767108bde1298ccdff50025e5584bde697e",
+        "specimen": "specimen:None|yellow/16_12_2025/C1_P1-L-2"
+      },
+      "name": "yellow/16_12_2025/C1_P1-L-2-A.tif",
+      "sha256": "20fb1d6d39de0d237ecf62280fe1d767108bde1298ccdff50025e5584bde697e"
+    },
+    {
+      "analysis_id": "img_d5e46ca1ac7a",
+      "file_sha256s": [
+        "d5e46ca1ac7a82e4c22bc3203db50619ec8b446599be6fd0dad9d2fa4b595b02"
+      ],
+      "group": "specimen:None|yellow/20_01_2026/FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/20_01_2026/FS-B",
+        "specimen_id": "yellow/20_01_2026/FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/20_01_2026/FS-B",
+        "source_image": "source_image:bd7219eb77ac66ecdb0c6ed91f90e70490c914f65fb10ad5bb7755a685e860e5",
+        "specimen": "specimen:None|yellow/20_01_2026/FS"
+      },
+      "name": "yellow/20_01_2026/FS-B.tif",
+      "sha256": "bd7219eb77ac66ecdb0c6ed91f90e70490c914f65fb10ad5bb7755a685e860e5"
+    },
+    {
+      "analysis_id": "img_d6896293336c",
+      "file_sha256s": [
+        "d6896293336c917e26bb69c1be4096ddbc86c30e5f830a1f006efd53f928ec31"
+      ],
+      "group": "specimen:None|yellow/17_02_2026/59_T1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026/59_T1-B",
+        "specimen_id": "yellow/17_02_2026/59_T1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026/59_T1-B",
+        "source_image": "source_image:534147040e9be83639e8823834e7f95de7309e49c715188f12576b993e7407a7",
+        "specimen": "specimen:None|yellow/17_02_2026/59_T1"
+      },
+      "name": "yellow/17_02_2026/59_T1-B.tif",
+      "sha256": "534147040e9be83639e8823834e7f95de7309e49c715188f12576b993e7407a7"
+    },
+    {
+      "analysis_id": "img_d83c5d519fd2",
+      "file_sha256s": [
+        "d83c5d519fd23a8577367ce9eae6b03e00e87c5a3766cc688f172558f9ea13be"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_60-A",
+        "specimen_id": "red_only/9-4-2026_D_60"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_60-A",
+        "source_image": "source_image:4bc4a13991586c290c80e700c1f43df83e7a026c02717be899944c7db886ce0c",
+        "specimen": "specimen:None|red_only/9-4-2026_D_60"
+      },
+      "name": "red_only/9-4-2026_D_60-A.tif",
+      "sha256": "4bc4a13991586c290c80e700c1f43df83e7a026c02717be899944c7db886ce0c"
+    },
+    {
+      "analysis_id": "img_dcaab61cccd1",
+      "file_sha256s": [
+        "dcaab61cccd18028eb10f28de37d85ca5bad644d33fb75d0b93d3f87b1f8f300"
+      ],
+      "group": "specimen:None|red_only/07_01_2026/D_5E",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/07_01_2026/D_5E-B",
+        "specimen_id": "red_only/07_01_2026/D_5E"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/07_01_2026/D_5E-B",
+        "source_image": "source_image:1f3ff0743748f881a11e4dbef6061b18381b01b37b357ba0745eeba0f968c57f",
+        "specimen": "specimen:None|red_only/07_01_2026/D_5E"
+      },
+      "name": "red_only/07_01_2026/D_5E-B.tif",
+      "sha256": "1f3ff0743748f881a11e4dbef6061b18381b01b37b357ba0745eeba0f968c57f"
+    },
+    {
+      "analysis_id": "img_dd0bc69784d6",
+      "file_sha256s": [
+        "dd0bc69784d6e5df0652b8a0f6d657da459a1126bb947f2e2241ad2feb635435"
+      ],
+      "group": "specimen:None|yellow/17-06-2026_C_11_45",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17-06-2026_C_11_45-B",
+        "specimen_id": "yellow/17-06-2026_C_11_45"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17-06-2026_C_11_45-B",
+        "source_image": "source_image:12504ec7195f96ad9d5247b867678d34f0c1c5deb9dc7bc45dcaa1c815a322f4",
+        "specimen": "specimen:None|yellow/17-06-2026_C_11_45"
+      },
+      "name": "yellow/17-06-2026_C_11_45-B.tif",
+      "sha256": "12504ec7195f96ad9d5247b867678d34f0c1c5deb9dc7bc45dcaa1c815a322f4"
+    },
+    {
+      "analysis_id": "img_de35f35c66c2",
+      "file_sha256s": [
+        "de35f35c66c2b257b36813694b1261e20e271b70b8934e55fc8362713942885c"
+      ],
+      "group": "specimen:None|yellow/09_02_2026/P1-10",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/09_02_2026/P1-10-B",
+        "specimen_id": "yellow/09_02_2026/P1-10"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/09_02_2026/P1-10-B",
+        "source_image": "source_image:af11eb90f3c7385facab7c4ea820b530b0a64ec942066b5e0653d420f54f6643",
+        "specimen": "specimen:None|yellow/09_02_2026/P1-10"
+      },
+      "name": "yellow/09_02_2026/P1-10-B.tif",
+      "sha256": "af11eb90f3c7385facab7c4ea820b530b0a64ec942066b5e0653d420f54f6643"
+    },
+    {
+      "analysis_id": "img_dede9f8b7cff",
+      "file_sha256s": [
+        "dede9f8b7cff7b7482a4265e6d217fd276f359395b7d67bce6fcec21017f3277"
+      ],
+      "group": "specimen:None|red_only/22_02_2026/2_C1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/22_02_2026/2_C1-A",
+        "specimen_id": "red_only/22_02_2026/2_C1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/22_02_2026/2_C1-A",
+        "source_image": "source_image:928c470aad715db8540bf60b7bb290c0d0ebe8402f142052388eca7309615ab7",
+        "specimen": "specimen:None|red_only/22_02_2026/2_C1"
+      },
+      "name": "red_only/22_02_2026/2_C1-A.tif",
+      "sha256": "928c470aad715db8540bf60b7bb290c0d0ebe8402f142052388eca7309615ab7"
+    },
+    {
+      "analysis_id": "img_df55bed7b297",
+      "file_sha256s": [
+        "df55bed7b297101d07ae184fec24121bf4ad142f5ea4b21eddc56c4787854cac"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_5-A",
+        "specimen_id": "red_only/9-4-2026_D_5"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_5-A",
+        "source_image": "source_image:2a06ebf988d66c62f4cae4b909361e4afc544d1637f83e4ea8bbe08c08d57dc3",
+        "specimen": "specimen:None|red_only/9-4-2026_D_5"
+      },
+      "name": "red_only/9-4-2026_D_5-A.tif",
+      "sha256": "2a06ebf988d66c62f4cae4b909361e4afc544d1637f83e4ea8bbe08c08d57dc3"
+    },
+    {
+      "analysis_id": "img_dfa061059870",
+      "file_sha256s": [
+        "dfa061059870cafb66a522e878d264ff30645f751005475b32e0c1ba05577cff"
+      ],
+      "group": "specimen:None|yellow/11-05-2026_C_FS",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/11-05-2026_C_FS-B",
+        "specimen_id": "yellow/11-05-2026_C_FS"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/11-05-2026_C_FS-B",
+        "source_image": "source_image:03d9e695f94af9e7338fb5e0a202710d9a3bdb3c5c422c36c9f8f400820d5f70",
+        "specimen": "specimen:None|yellow/11-05-2026_C_FS"
+      },
+      "name": "yellow/11-05-2026_C_FS-B.tif",
+      "sha256": "03d9e695f94af9e7338fb5e0a202710d9a3bdb3c5c422c36c9f8f400820d5f70"
+    },
+    {
+      "analysis_id": "img_e120e461b027",
+      "file_sha256s": [
+        "e120e461b02736aaa7c08e6fd2ee8d614e5c5a88e7c86a587f708210ec14b4fa"
+      ],
+      "group": "specimen:None|yellow/07_01_2026/C_3",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/07_01_2026/C_3-B",
+        "specimen_id": "yellow/07_01_2026/C_3"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/07_01_2026/C_3-B",
+        "source_image": "source_image:13732b4e428aa6346437bfe1bb8d32c4f000fe44b28884b53c9cb1c375e28ded",
+        "specimen": "specimen:None|yellow/07_01_2026/C_3"
+      },
+      "name": "yellow/07_01_2026/C_3-B.tif",
+      "sha256": "13732b4e428aa6346437bfe1bb8d32c4f000fe44b28884b53c9cb1c375e28ded"
+    },
+    {
+      "analysis_id": "img_e12feafbc30d",
+      "file_sha256s": [
+        "e12feafbc30d720276f07739fc34c01dd3e06b263d2bb24475dfe57bf592ed7e"
+      ],
+      "group": "specimen:None|yellow/04-08-2026_C_SF",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/04-08-2026_C_SF-A",
+        "specimen_id": "yellow/04-08-2026_C_SF"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/04-08-2026_C_SF-A",
+        "source_image": "source_image:c1330e22381ae7eab00aca64440e596f8cf7f4eff6a6f6046abf6f08473045c0",
+        "specimen": "specimen:None|yellow/04-08-2026_C_SF"
+      },
+      "name": "yellow/04-08-2026_C_SF-A.tif",
+      "sha256": "c1330e22381ae7eab00aca64440e596f8cf7f4eff6a6f6046abf6f08473045c0"
+    },
+    {
+      "analysis_id": "img_e19b8b08c7e7",
+      "file_sha256s": [
+        "e19b8b08c7e7e83c7de9bcb87bd972bb60b8e13a7660e4522b2409c5bbde9c78"
+      ],
+      "group": "specimen:None|red_only/05_03_2026/D-2_E2",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/05_03_2026/D-2_E2-A",
+        "specimen_id": "red_only/05_03_2026/D-2_E2"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/05_03_2026/D-2_E2-A",
+        "source_image": "source_image:66aa0b17f612bbede9fb1c37e95096248805bb23b827c8cb2ad8a2706fdb03e9",
+        "specimen": "specimen:None|red_only/05_03_2026/D-2_E2"
+      },
+      "name": "red_only/05_03_2026/D-2_E2-A.tif",
+      "sha256": "66aa0b17f612bbede9fb1c37e95096248805bb23b827c8cb2ad8a2706fdb03e9"
+    },
+    {
+      "analysis_id": "img_e2fa49ebae90",
+      "file_sha256s": [
+        "e2fa49ebae90274b3db3cd899b306bf075f78abc6da67d1e4af9b798a711ef18"
+      ],
+      "group": "specimen:None|red_only/15-06-2026_D_ST_12_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/15-06-2026_D_ST_12_15-A",
+        "specimen_id": "red_only/15-06-2026_D_ST_12_15"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/15-06-2026_D_ST_12_15-A",
+        "source_image": "source_image:7090d3e0279a346bf4788c2d7f2dbc119714105a5183781e1e0822ed52f595af",
+        "specimen": "specimen:None|red_only/15-06-2026_D_ST_12_15"
+      },
+      "name": "red_only/15-06-2026_D_ST_12_15-A.tif",
+      "sha256": "7090d3e0279a346bf4788c2d7f2dbc119714105a5183781e1e0822ed52f595af"
+    },
+    {
+      "analysis_id": "img_e4543cc5dbc1",
+      "file_sha256s": [
+        "e4543cc5dbc1474c2ad3de04a9c2f1e27b59b1a144f59daad2dc0531b8bb1806"
+      ],
+      "group": "specimen:None|red_only/11-06-2026_D_29-05_old_15",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/11-06-2026_D_29-05_old_15-A",
+        "specimen_id": "red_only/11-06-2026_D_29-05_old_15"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/11-06-2026_D_29-05_old_15-A",
+        "source_image": "source_image:e1f653bbda53d7f5e95d193139233db319d8efadd9693ecc6fbacd270ee486a2",
+        "specimen": "specimen:None|red_only/11-06-2026_D_29-05_old_15"
+      },
+      "name": "red_only/11-06-2026_D_29-05_old_15-A.tif",
+      "sha256": "e1f653bbda53d7f5e95d193139233db319d8efadd9693ecc6fbacd270ee486a2"
+    },
+    {
+      "analysis_id": "img_e5dc32f2c524",
+      "file_sha256s": [
+        "e5dc32f2c524e3a7d0c625dfdac7df6610abc7e8e8673450fb80a86598dbde33"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_12-4-2019_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_12-4-2019_25-A",
+        "specimen_id": "red_only/28-04-2026_D_12-4-2019_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_12-4-2019_25-A",
+        "source_image": "source_image:5e6f137745cb802623c4a323ea1374931a7ff5bb74a4ed2726768f16ce409bfa",
+        "specimen": "specimen:None|red_only/28-04-2026_D_12-4-2019_25"
+      },
+      "name": "red_only/28-04-2026_D_12-4-2019_25-A.tif",
+      "sha256": "5e6f137745cb802623c4a323ea1374931a7ff5bb74a4ed2726768f16ce409bfa"
+    },
+    {
+      "analysis_id": "img_e859d4b8db1c",
+      "file_sha256s": [
+        "e859d4b8db1cf58e31a15410a3f623844d7c2cb001c0369579722fef6709c252"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_60",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_60-B",
+        "specimen_id": "red_only/9-4-2026_D_60"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_60-B",
+        "source_image": "source_image:07344c42d8ba701c58ee915d9f8e660e1bcc0d2d0ce9975f69d88867006a8e22",
+        "specimen": "specimen:None|red_only/9-4-2026_D_60"
+      },
+      "name": "red_only/9-4-2026_D_60-B.tif",
+      "sha256": "07344c42d8ba701c58ee915d9f8e660e1bcc0d2d0ce9975f69d88867006a8e22"
+    },
+    {
+      "analysis_id": "img_e8dd123913c4",
+      "file_sha256s": [
+        "e8dd123913c46ac0adec4db40e676a71c49fea210fc89e7c182a80b30e52beae"
+      ],
+      "group": "specimen:None|yellow/16_12_2025/C1_P1-L-2",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/16_12_2025/C1_P1-L-2-B",
+        "specimen_id": "yellow/16_12_2025/C1_P1-L-2"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/16_12_2025/C1_P1-L-2-B",
+        "source_image": "source_image:686b633fdfbffd19893a50f81f08e4400f6972211ba2cc36d89ea38bd310240b",
+        "specimen": "specimen:None|yellow/16_12_2025/C1_P1-L-2"
+      },
+      "name": "yellow/16_12_2025/C1_P1-L-2-B.tif",
+      "sha256": "686b633fdfbffd19893a50f81f08e4400f6972211ba2cc36d89ea38bd310240b"
+    },
+    {
+      "analysis_id": "img_e996a90611e6",
+      "file_sha256s": [
+        "e996a90611e618c576de9804c6e0f7f6caa2189f241ac8eda903e28b6c71f0df"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_125-B-D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_125-B-D",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_125-B-D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_125-B-D",
+        "source_image": "source_image:3b4a8e2eedb764268d6fca1cefabc10949a239f44d3240a21d7fc9dd48e0f063",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_125-B-D"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_125-B-D.tif",
+      "sha256": "3b4a8e2eedb764268d6fca1cefabc10949a239f44d3240a21d7fc9dd48e0f063"
+    },
+    {
+      "analysis_id": "img_ec2672320f60",
+      "file_sha256s": [
+        "ec2672320f60fc56af88eed45a7eb4b05f9fe5b972b0eacb13109da73957a78b"
+      ],
+      "group": "specimen:None|red_only/16_12_2025/C2_P2-L-1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/16_12_2025/C2_P2-L-1-A",
+        "specimen_id": "red_only/16_12_2025/C2_P2-L-1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/16_12_2025/C2_P2-L-1-A",
+        "source_image": "source_image:1f68898028e5181f30c65c73fa1ddfc5d61a2373412c9213d5a0b9c0519eb52d",
+        "specimen": "specimen:None|red_only/16_12_2025/C2_P2-L-1"
+      },
+      "name": "red_only/16_12_2025/C2_P2-L-1-A.tif",
+      "sha256": "1f68898028e5181f30c65c73fa1ddfc5d61a2373412c9213d5a0b9c0519eb52d"
+    },
+    {
+      "analysis_id": "img_ecbd1a8c9d33",
+      "file_sha256s": [
+        "ecbd1a8c9d333d8364870aa4c1e14fd2caabc586ff71828faa1836ef192188f5"
+      ],
+      "group": "specimen:None|red_not_yellow/29-09-2026_T7_AB_PS",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_not_yellow/29-09-2026_T7_AB_PS-A",
+        "specimen_id": "red_not_yellow/29-09-2026_T7_AB_PS"
+      },
+      "keys": {
+        "slide": "slide:None|red_not_yellow/29-09-2026_T7_AB_PS-A",
+        "source_image": "source_image:ab7198c458f5311b806f44423f614a7646bad48240b262a15603072b6298ef01",
+        "specimen": "specimen:None|red_not_yellow/29-09-2026_T7_AB_PS"
+      },
+      "name": "red_not_yellow/29-09-2026_T7_AB_PS-A.tif",
+      "sha256": "ab7198c458f5311b806f44423f614a7646bad48240b262a15603072b6298ef01"
+    },
+    {
+      "analysis_id": "img_ee0655671da4",
+      "file_sha256s": [
+        "ee0655671da49664de3aa1735c9cb171a7b39a93e81c05972ab4eabca2d16dd9"
+      ],
+      "group": "specimen:None|red_only/10_03_2026/D_21",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/10_03_2026/D_21-B",
+        "specimen_id": "red_only/10_03_2026/D_21"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/10_03_2026/D_21-B",
+        "source_image": "source_image:dbc7a21974f6b27c5817abd5286677ba50035e38a02f4dc40358eb112d3c0e52",
+        "specimen": "specimen:None|red_only/10_03_2026/D_21"
+      },
+      "name": "red_only/10_03_2026/D_21-B.tif",
+      "sha256": "dbc7a21974f6b27c5817abd5286677ba50035e38a02f4dc40358eb112d3c0e52"
+    },
+    {
+      "analysis_id": "img_eeebb69f360e",
+      "file_sha256s": [
+        "eeebb69f360e91776c09a45248c395ea133289ff8c7edc69941b0724ff87fed4"
+      ],
+      "group": "specimen:None|red_only/08_03_2026/D-2_M1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/08_03_2026/D-2_M1-B",
+        "specimen_id": "red_only/08_03_2026/D-2_M1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/08_03_2026/D-2_M1-B",
+        "source_image": "source_image:d61f8bc00d7001b5c8d634701db8a0db3529641f2b061d687e84766131db917d",
+        "specimen": "specimen:None|red_only/08_03_2026/D-2_M1"
+      },
+      "name": "red_only/08_03_2026/D-2_M1-B.tif",
+      "sha256": "d61f8bc00d7001b5c8d634701db8a0db3529641f2b061d687e84766131db917d"
+    },
+    {
+      "analysis_id": "img_ef70c492b9b6",
+      "file_sha256s": [
+        "ef70c492b9b65a220fb684556bbf7780c2e35ece05dba5c53efc40076a8e864c"
+      ],
+      "group": "specimen:None|red_only/10_12_2025/D_E",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/10_12_2025/D_E-B",
+        "specimen_id": "red_only/10_12_2025/D_E"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/10_12_2025/D_E-B",
+        "source_image": "source_image:c8be1c1e640a6619e858f1bb524cc9b8d089333bc6df31a862bc6503534bf8dc",
+        "specimen": "specimen:None|red_only/10_12_2025/D_E"
+      },
+      "name": "red_only/10_12_2025/D_E-B.tif",
+      "sha256": "c8be1c1e640a6619e858f1bb524cc9b8d089333bc6df31a862bc6503534bf8dc"
+    },
+    {
+      "analysis_id": "img_efb365446324",
+      "file_sha256s": [
+        "efb36544632481f8bf4e16fd4292e4b56e5c1d17f71e188fbe06e875c0793331"
+      ],
+      "group": "specimen:None|yellow/29-06-2026_C_12-04-2019_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/29-06-2026_C_12-04-2019_5-A",
+        "specimen_id": "yellow/29-06-2026_C_12-04-2019_5"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/29-06-2026_C_12-04-2019_5-A",
+        "source_image": "source_image:4f6421a63593c833923f4d10ce66293d0eef9ca749d27d32ff1b332409ade62d",
+        "specimen": "specimen:None|yellow/29-06-2026_C_12-04-2019_5"
+      },
+      "name": "yellow/29-06-2026_C_12-04-2019_5-A.tif",
+      "sha256": "4f6421a63593c833923f4d10ce66293d0eef9ca749d27d32ff1b332409ade62d"
+    },
+    {
+      "analysis_id": "img_f0f7033eee76",
+      "file_sha256s": [
+        "f0f7033eee76e2ccf0deafb9766cdef71986ad1c227489eacb9a78eceb184081"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_25-A",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_25-A",
+        "source_image": "source_image:9958809e3aabe6d10b19263719f7a4243ff734e97919271a918eee74a22b8b3d",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_25"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_25-A.tif",
+      "sha256": "9958809e3aabe6d10b19263719f7a4243ff734e97919271a918eee74a22b8b3d"
+    },
+    {
+      "analysis_id": "img_f1567999e322",
+      "file_sha256s": [
+        "f1567999e322e667906b389aabfdae581a9a0ea69fbfbb69dedace627b00bbd6"
+      ],
+      "group": "specimen:None|yellow/07_01_2026/C_2E",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/07_01_2026/C_2E-A",
+        "specimen_id": "yellow/07_01_2026/C_2E"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/07_01_2026/C_2E-A",
+        "source_image": "source_image:6fa79ed6ed85eb018794646755fc3942ae2e682dfef0435f78f2a69020988668",
+        "specimen": "specimen:None|yellow/07_01_2026/C_2E"
+      },
+      "name": "yellow/07_01_2026/C_2E-A.tif",
+      "sha256": "6fa79ed6ed85eb018794646755fc3942ae2e682dfef0435f78f2a69020988668"
+    },
+    {
+      "analysis_id": "img_f440b7af313f",
+      "file_sha256s": [
+        "f440b7af313fc6756a244ac6757e0c79acb3bf0f4457689fcc4477ac4a7e1ce8"
+      ],
+      "group": "specimen:None|yellow/04-08-2026_C_SF",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/04-08-2026_C_SF-B",
+        "specimen_id": "yellow/04-08-2026_C_SF"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/04-08-2026_C_SF-B",
+        "source_image": "source_image:cc1ac7362b2eb0ca811cf621730afec3784f46debca8edf1b9e7ab4a5cd73774",
+        "specimen": "specimen:None|yellow/04-08-2026_C_SF"
+      },
+      "name": "yellow/04-08-2026_C_SF-B.tif",
+      "sha256": "cc1ac7362b2eb0ca811cf621730afec3784f46debca8edf1b9e7ab4a5cd73774"
+    },
+    {
+      "analysis_id": "img_f4d019cbc208",
+      "file_sha256s": [
+        "f4d019cbc208914626fe19f0e20b4d5caf31408d0d409009acd077a9b41fd00c"
+      ],
+      "group": "specimen:None|red_only/26-03-2026_D_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/26-03-2026_D_25-A",
+        "specimen_id": "red_only/26-03-2026_D_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/26-03-2026_D_25-A",
+        "source_image": "source_image:baee31a5149b6684d5bd2516ba6bb77c82b41f9b72a745a71c1f309a2adde94c",
+        "specimen": "specimen:None|red_only/26-03-2026_D_25"
+      },
+      "name": "red_only/26-03-2026_D_25-A.tif",
+      "sha256": "baee31a5149b6684d5bd2516ba6bb77c82b41f9b72a745a71c1f309a2adde94c"
+    },
+    {
+      "analysis_id": "img_f58723e9e4a0",
+      "file_sha256s": [
+        "f58723e9e4a0f5f116c68bed38bf197e8058c86c2b5c374ae5990e6c845d242c"
+      ],
+      "group": "specimen:None|yellow/07_01_2026/C_3E_D",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/07_01_2026/C_3E-B_D",
+        "specimen_id": "yellow/07_01_2026/C_3E_D"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/07_01_2026/C_3E-B_D",
+        "source_image": "source_image:27646d55214f74043cb285bd78180c9b635313bff7d6eab4c6d83470ef296aee",
+        "specimen": "specimen:None|yellow/07_01_2026/C_3E_D"
+      },
+      "name": "yellow/07_01_2026/C_3E-B_D.tif",
+      "sha256": "27646d55214f74043cb285bd78180c9b635313bff7d6eab4c6d83470ef296aee"
+    },
+    {
+      "analysis_id": "img_f60975eebb81",
+      "file_sha256s": [
+        "f60975eebb81f58a94ac2710786287719cbb7034ed39e83783590a15dbf6d095"
+      ],
+      "group": "specimen:None|red_only/02_12_2025/D_P2-1",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/02_12_2025/D_P2-1-B",
+        "specimen_id": "red_only/02_12_2025/D_P2-1"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/02_12_2025/D_P2-1-B",
+        "source_image": "source_image:24a9dac554a63bd5124a9ee94ef5ee41ba8de28e072633100565dbe554b751e6",
+        "specimen": "specimen:None|red_only/02_12_2025/D_P2-1"
+      },
+      "name": "red_only/02_12_2025/D_P2-1-B.tif",
+      "sha256": "24a9dac554a63bd5124a9ee94ef5ee41ba8de28e072633100565dbe554b751e6"
+    },
+    {
+      "analysis_id": "img_fa56c19db233",
+      "file_sha256s": [
+        "fa56c19db2330ebe1c5600fb70e1e60a0a08899b28343af76a16dd1fdf77980f"
+      ],
+      "group": "specimen:None|yellow/07_01_2026/C_3",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/07_01_2026/C_3-A",
+        "specimen_id": "yellow/07_01_2026/C_3"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/07_01_2026/C_3-A",
+        "source_image": "source_image:2fd7f02f8a11e902b3e71477fcc06a37183ceae0c7eb9635f5959d51fa2902fb",
+        "specimen": "specimen:None|yellow/07_01_2026/C_3"
+      },
+      "name": "yellow/07_01_2026/C_3-A.tif",
+      "sha256": "2fd7f02f8a11e902b3e71477fcc06a37183ceae0c7eb9635f5959d51fa2902fb"
+    },
+    {
+      "analysis_id": "img_fa9aad6de8ae",
+      "file_sha256s": [
+        "fa9aad6de8ae4752f81d39b8d175639570ce38edd45ff79c9059d0cbd0e8e6b7"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_75",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_75-A",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_75"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_75-A",
+        "source_image": "source_image:ae6cfcd1ddfaad51f07f1eaef54fbcd3f715a8aaab39b6aa269d7c9b7155f887",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_75"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_75-A.tif",
+      "sha256": "ae6cfcd1ddfaad51f07f1eaef54fbcd3f715a8aaab39b6aa269d7c9b7155f887"
+    },
+    {
+      "analysis_id": "img_fbc38b377ed2",
+      "file_sha256s": [
+        "fbc38b377ed23c3d9d623b2002a11fc8be8665fc0422503bc598b14980918f1c"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_R60_D",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_R60-B_D",
+        "specimen_id": "red_only/9-4-2026_D_R60_D"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_R60-B_D",
+        "source_image": "source_image:0f53133c7b1b06d3ac4184c7a3254cc00106eefc2971c6e82f36a36e92743de0",
+        "specimen": "specimen:None|red_only/9-4-2026_D_R60_D"
+      },
+      "name": "red_only/9-4-2026_D_R60-B_D.tif",
+      "sha256": "0f53133c7b1b06d3ac4184c7a3254cc00106eefc2971c6e82f36a36e92743de0"
+    },
+    {
+      "analysis_id": "img_fed89cbab58a",
+      "file_sha256s": [
+        "fed89cbab58abfbff1a9c4747c218cf81e7cd7bae2cc3a753043b1fe5b27e3e5"
+      ],
+      "group": "specimen:None|red_only/28-04-2026_D_21-04-2026_25",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/28-04-2026_D_21-04-2026_25-B",
+        "specimen_id": "red_only/28-04-2026_D_21-04-2026_25"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/28-04-2026_D_21-04-2026_25-B",
+        "source_image": "source_image:67ae8b7ff6ee281f551adde717f431c1a729536702e1d926c21c405819159714",
+        "specimen": "specimen:None|red_only/28-04-2026_D_21-04-2026_25"
+      },
+      "name": "red_only/28-04-2026_D_21-04-2026_25-B.tif",
+      "sha256": "67ae8b7ff6ee281f551adde717f431c1a729536702e1d926c21c405819159714"
+    },
+    {
+      "analysis_id": "img_ff43d0f67f0d",
+      "file_sha256s": [
+        "ff43d0f67f0dc226d42ae902a844486134679c71702bb029986b575cdc061237"
+      ],
+      "group": "specimen:None|yellow/07_01_2026/C_2E",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/07_01_2026/C_2E-B",
+        "specimen_id": "yellow/07_01_2026/C_2E"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/07_01_2026/C_2E-B",
+        "source_image": "source_image:9712986652c2a8d7cbcd15dd7a23c035f41adef6684d13c50a8bb5982d4415dc",
+        "specimen": "specimen:None|yellow/07_01_2026/C_2E"
+      },
+      "name": "yellow/07_01_2026/C_2E-B.tif",
+      "sha256": "9712986652c2a8d7cbcd15dd7a23c035f41adef6684d13c50a8bb5982d4415dc"
+    },
+    {
+      "analysis_id": "img_ff58eacd56af",
+      "file_sha256s": [
+        "ff58eacd56aff3d6c2b07ac3d4deb18d2261e90a3bc644e5a6556362573f98ac"
+      ],
+      "group": "specimen:None|yellow/17_02_2026_2/P1_T1",
+      "identity": {
+        "assay": null,
+        "slide_id": "yellow/17_02_2026_2/P1_T1-A",
+        "specimen_id": "yellow/17_02_2026_2/P1_T1"
+      },
+      "keys": {
+        "slide": "slide:None|yellow/17_02_2026_2/P1_T1-A",
+        "source_image": "source_image:dcf0de63dcc8e835618db716ef2d0470641636536061c511fe483a2beafa6462",
+        "specimen": "specimen:None|yellow/17_02_2026_2/P1_T1"
+      },
+      "name": "yellow/17_02_2026_2/P1_T1-A.tif",
+      "sha256": "dcf0de63dcc8e835618db716ef2d0470641636536061c511fe483a2beafa6462"
+    },
+    {
+      "analysis_id": "img_ff77279e3a8c",
+      "file_sha256s": [
+        "ff77279e3a8c96dc7b0bc1f633173eb7ac0f040e763d2879cb5c3f0e3d616cef"
+      ],
+      "group": "specimen:None|red_only/9-4-2026_D_5",
+      "identity": {
+        "assay": null,
+        "slide_id": "red_only/9-4-2026_D_5-B",
+        "specimen_id": "red_only/9-4-2026_D_5"
+      },
+      "keys": {
+        "slide": "slide:None|red_only/9-4-2026_D_5-B",
+        "source_image": "source_image:d7b396e7f7e8afdef8b778bc9bcd24d1d5c987bc105a9c8057a6363dcd14291c",
+        "specimen": "specimen:None|red_only/9-4-2026_D_5"
+      },
+      "name": "red_only/9-4-2026_D_5-B.tif",
+      "sha256": "d7b396e7f7e8afdef8b778bc9bcd24d1d5c987bc105a9c8057a6363dcd14291c"
+    }
+  ],
+  "level": "auto",
+  "lock_sha256": "b0466d7ade1d500003909c27920108e2184ceb7a35bd82b22cc68e188885bb15",
+  "overrides": {
+    "allow_acknowledged_assumptions_flag": false,
+    "allow_unconfirmed_identity_flag": true,
+    "snapshot_built_with_allow_unconfirmed_identity": true,
+    "snapshot_options": {
+      "acknowledge_field_equals_counter_plus_one": false,
+      "acknowledge_lab_csv_field_numbering": false,
+      "acknowledge_no_counters": false,
+      "allow_unconfirmed_identity": true
+    }
+  },
+  "schema": "polony-ml-test-lock",
+  "seed": 0,
+  "snapshot": "ds-7e4c89cba3908e8e",
+  "test_content_sha256": "d852e94ddcf70133e4936b0ddc88c37625e62baccde13440786df5c2af35589b",
+  "version": 1
+}

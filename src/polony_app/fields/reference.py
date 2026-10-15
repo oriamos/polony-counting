@@ -18,7 +18,7 @@ class RefPoint:
     x: float
     y: float
     counter: Optional[int]
-    plane: int
+    plane: Optional[int]            # 0-based page; None = unspecified / beyond the planes: evidence for NO plane
     field: Optional[int]            # counter + 1 ("index" numbering)
     field_ordinal: Optional[int]    # rank of the counter among the counters present + 1
 
@@ -35,13 +35,23 @@ class Reference:
 
     # ---- derived
     def planes(self) -> list[dict]:
-        c = Counter(p.plane for p in self.points)
+        c = Counter(p.plane for p in self.points if p.plane is not None)
         return [{"page": k, "point_count": c[k]} for k in sorted(c)]
+
+    def unplaned_points(self) -> list[RefPoint]:
+        """Marks whose plane is unspecified (ImageJ position missing/0) or beyond the planes of the file."""
+        return [p for p in self.points if p.plane is None]
+
+    def unplaned_fields(self, numbering: str = "index") -> list[int]:
+        """Field numbers that contain at least one mark without a valid plane."""
+        return sorted({f for p in self.unplaned_points() if (f := self.field_of(p, numbering)) is not None})
 
     def field_of(self, p: RefPoint, numbering: str = "index") -> Optional[int]:
         return p.field_ordinal if numbering == "ordinal" else p.field
 
     def counts(self, numbering: str = "index", plane: Optional[int] = None) -> dict[int, int]:
+        """Marks per field on ``plane``. ``plane=None`` = any plane (layout only, never evidence). A mark without a
+        valid plane (``p.plane is None``) is counted for no specific plane."""
         out: dict[int, int] = defaultdict(int)
         for p in self.points:
             f = self.field_of(p, numbering)
@@ -76,6 +86,19 @@ class Reference:
                              "(the cell with most marks is used).")
         return out, warns
 
+    def cell_field_numbers(self, numbering: str = "index") -> dict[tuple[int, int], int]:
+        """{(row, col): field number} of the overlay grid (as drawn in ``to_dict``); {} without a grid."""
+        if self.grid is None:
+            return {}
+        g = self.grid
+        cells = g.cells()
+        mapped, _ = self.field_cells(g, numbering)
+        by_cell: dict[int, int] = {}
+        for f in sorted(mapped):
+            by_cell.setdefault(mapped[f], f)
+        nums = number_cells(len(cells), by_cell)
+        return {(c.row, c.col): nums[i] for i, c in enumerate(cells)}
+
     def to_dict(self) -> dict:
         d: dict = {"available": self.available, "source_file": self.source_file, "points": [],
                    "grid": {"source": "none", "origin": [0.0, 0.0], "cell": [0.0, 0.0], "cols": 0, "rows": 0, "cells": []},
@@ -87,12 +110,18 @@ class Reference:
         d["points"] = [{"x": round(p.x, 3), "y": round(p.y, 3), "counter": p.counter, "plane": p.plane,
                         "field": p.field, "field_ordinal": p.field_ordinal} for p in self.points]
         d["planes"] = self.planes()
-        pages = sorted({p.plane for p in self.points} | {0, 1})
+        pages = sorted({p.plane for p in self.points if p.plane is not None} | {0, 1})
+        up = self.unplaned_points()
+        d["unplaned"] = {"count": len(up), "fields": self.unplaned_fields("index"),
+                         "n_without_counter": sum(1 for p in up if p.field is None)}
         rc: dict[str, dict] = {}
         for f in sorted({p.field for p in self.points if p.field is not None}):
             rc[str(f)] = {f"plane{k}": 0 for k in pages}
+            n_up = sum(1 for p in up if p.field == f)
+            if n_up:
+                rc[str(f)]["unplaned"] = n_up
         for p in self.points:
-            if p.field is not None:
+            if p.field is not None and p.plane is not None:
                 rc[str(p.field)][f"plane{p.plane}"] += 1
         d["reference_counts"] = rc
         if self.grid is not None:
@@ -136,17 +165,21 @@ def load_reference(originals_dir: Path, image: Optional[ImageMeta]) -> Reference
 
     counters = sorted({p.counter for p in bundle.points if p.counter is not None})
     rank = {c: i + 1 for i, c in enumerate(counters)}
+    n_planes = max(2, len(image.channels))
     unplaned = 0
     for p in bundle.points:
-        if p.position is None:
+        # ImageJ position is 1-based; missing/0 ("all planes") or beyond the file's planes = evidence for NO plane
+        plane = (p.position - 1) if (p.position and 1 <= p.position <= n_planes) else None
+        if plane is None:
             unplaned += 1
-        plane = (p.position - 1) if p.position else 0
         ref.points.append(RefPoint(
             x=to_canonical(p.x, p.subpixel), y=to_canonical(p.y, p.subpixel), counter=p.counter, plane=plane,
             field=(p.counter + 1) if p.counter is not None else None,
             field_ordinal=rank.get(p.counter) if p.counter is not None else None))
     if unplaned:
-        ref.warnings.append(f"{unplaned} mark(s) carry no plane (slice) number and are assigned to plane 0.")
+        ref.warnings.append(f"{unplaned} mark(s) carry no valid plane (slice) number (missing, 0 or beyond the {n_planes} "
+                            "planes of the file). They are evidence for NO plane: every field that contains one is a "
+                            "conflict on all planes in the comparison, and the training import drops them.")
     if bundle.points and any(p.counter is None for p in bundle.points):
         ref.warnings.append("Some marks carry no ImageJ counter, so their field number is unknown.")
     if counters and counters != list(range(counters[0], counters[-1] + 1)):

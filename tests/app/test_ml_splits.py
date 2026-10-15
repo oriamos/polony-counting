@@ -181,3 +181,32 @@ def test_damaged_locked_snapshot_blocks_new_builds(tmp_path):
     p.write_text("y,x\n1.0,1.0\n")
     with pytest.raises(MLError, match="damaged"):
         build(store, d, sorted(ids.values()), seed=2)
+
+
+# ---------------------------------------------------------------------------- lock matching is identity-robust (review F7)
+def _rec(specimen, slide=None, assay=None, sha="a" * 64):
+    from polony_app.legacy_import.schema import ImageKind, ImageRecord
+    return ImageRecord(image_id="i", file_name="f.tif", rel_path="f.tif", sha256=sha, size_bytes=1, kind=ImageKind.stack, width=1,
+                       height=1, n_planes=1, dtype="uint16", bit_depth=16, specimen_id=specimen, slide_id=slide, assay=assay)
+
+
+def _lock(specimen="AS", slide="AS_A", assay="T7_AB"):
+    from polony_app.legacy_import.splits import group_key
+    r = _rec(specimen, slide, assay, sha="b" * 64)
+    return {"images": [{"sha256": r.sha256, "file_sha256s": [], "keys": {"specimen": group_key(r, "specimen"), "slide": group_key(r, "slide")}}],
+            "groups": []}
+
+
+@pytest.mark.parametrize("specimen,slide,assay", [("AS", "AS_C", "T7_AB"), ("AS", "AS_C", None), ("AS", "AS_C", "OTHER"),
+                                                  ("as", "AS_C", "T7_AB"), (" As  ", "AS_C", None), ("XX", "as_a", "OTHER"),
+                                                  (None, "AS_A", None)])
+def test_locked_reason_ignores_assay_case_and_spacing(specimen, slide, assay):
+    from polony_app.ml.splits import locked_reason
+    assert locked_reason(_rec(specimen, slide, assay), _lock()) is not None
+
+
+def test_locked_reason_does_not_lock_unrelated_identities():
+    from polony_app.ml.splits import locked_reason
+    assert locked_reason(_rec("AM", "AM_A", "T7_AB"), _lock()) is None
+    assert locked_reason(_rec(None, None, "T7_AB"), _lock()) is None
+    assert locked_reason(_rec("AS", "AS_A"), None) is None

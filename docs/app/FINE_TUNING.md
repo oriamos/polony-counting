@@ -19,6 +19,8 @@ reviewed analyses ──build──► immutable dataset snapshot ──split/--
                                                               └── compare ── promote / rollback (explicit)
 ```
 
+> **Historical ImageJ-annotated TIFFs** (~1,500 files): [LEGACY_FINETUNING.md](LEGACY_FINETUNING.md) (`ml import-legacy`: only fields the researcher examined, explicit channel/identity mapping, ROCm `gpu-smoke`, dry-run scale numbers). The `train` options added there (`--device rocm`, `--num-workers`, `--load-mode`, `--max-val-crops`) apply to every snapshot.
+
 ## 1. Collect corrections
 Review analyses as usual. A region counts as **fully reviewed** only when a person approved it and nothing changed since (the
 approval fingerprint still matches). Colour/page is used only from a **confirmed channel mapping**; without it an analysis yields no crops.

@@ -17,6 +17,7 @@ Identity recovered from file names is *inferred*: unless ``allow_unconfirmed`` i
 from __future__ import annotations
 
 import hashlib
+import math
 import json
 from dataclasses import dataclass, field
 from typing import Optional
@@ -87,7 +88,8 @@ def assign_splits(
     confirmed_slides: Optional[set[str]] = None,
 ) -> SplitAssignment:
     fractions = dict(fractions or DEFAULT_FRACTIONS)
-    if any(v < 0 for v in fractions.values()) or abs(sum(fractions.values()) - 1.0) > 1e-9:
+    if (any(not math.isfinite(v) or v < 0 for v in fractions.values())
+            or not math.isfinite(sum(fractions.values())) or abs(sum(fractions.values()) - 1.0) > 1e-9):
         raise SplitError(f"fractions must be non-negative and sum to 1, got {fractions}")
     if level != "auto" and level not in LEVELS:
         raise SplitError(f"level must be 'auto' or one of {LEVELS}")
@@ -99,17 +101,22 @@ def assign_splits(
     # ---- choose a key per image
     keys: dict[str, str] = {}
     fallbacks: list[str] = []
+    slide_only: list[str] = []
     for im in ds.images:
         g = gov[im.image_id]
         if level == "auto":
             key = next((k for lv in LEVELS if (k := group_key(g, lv)) is not None), None)
             if not g.specimen_id:
-                fallbacks.append(im.file_name)
+                (slide_only if g.slide_id else fallbacks).append(im.file_name)
         else:
             key = group_key(g, level)
             if key is None:
                 raise SplitError(f"{im.file_name}: no '{level}' identity; use a weaker level or supply identity")
         keys[im.image_id] = key  # type: ignore[assignment]
+    if slide_only:
+        warnings.append(
+            "no specimen identity (only a slide id) for: " + ", ".join(sorted(set(slide_only))) +
+            "; each is grouped by its slide alone, so replicate slides of one specimen can land in different splits")
     if fallbacks:
         warnings.append(
             "no specimen/slide identity could be reconstructed for: " + ", ".join(sorted(set(fallbacks))) +

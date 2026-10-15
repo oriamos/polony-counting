@@ -46,6 +46,9 @@ class SourceInfo:
     bit_depth: int = 16
     n_planes: int = 1
     slide_meta_id: Optional[str] = None
+    # sha256 of the plain bytes of each source file (independent of the file NAME): lets a renamed byte-identical copy of
+    # a locked test file be recognised (``sha256`` above combines names and hashes)
+    file_sha256s: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -72,7 +75,7 @@ def resolve_identity(src: SourceInfo, identity_map: Optional[dict] = None) -> di
         return {"source": "identity_map", "confirmed": True, "assay": imap.get("assay"),
                 "specimen_id": imap.get("specimen_id") or imap.get("specimen"),
                 "replicate": imap.get("replicate"), "slide_id": imap.get("slide_id") or imap.get("slide"),
-                "note": "supplied by --identity-map"}
+                "scan_session": imap.get("scan_session"), "note": "supplied by --identity-map"}
     if src.slide_meta_id:
         m = _SLIDE_META.match(src.slide_meta_id)
         return {"source": "slide_meta", "confirmed": True, "assay": None,
@@ -97,7 +100,8 @@ def _record(src: SourceInfo, ident: dict, reserved: Optional[str]) -> ImageRecor
         sha256=src.sha256, size_bytes=0, kind=ImageKind.stack, width=src.width, height=src.height,
         n_planes=src.n_planes, dtype=src.dtype, bit_depth=src.bit_depth,
         assay=ident.get("assay"), specimen_id=ident.get("specimen_id"), replicate=ident.get("replicate"),
-        slide_id=ident.get("slide_id"), identity_source=ident["source"], identity_confirmed=bool(ident["confirmed"]),
+        slide_id=ident.get("slide_id"), scan_session=ident.get("scan_session"),
+        identity_source=ident["source"], identity_confirmed=bool(ident["confirmed"]),
         reserved_split=reserved, reserved_reason="locked test set" if reserved else None, has_annotations=True)
 
 
@@ -127,24 +131,91 @@ def _lock_keys(lock: dict) -> tuple[set[str], set[str], set[str], set[str]]:
     return shas, spec, slide, groups
 
 
-def locked_reason(rec: ImageRecord, lock: Optional[dict]) -> Optional[str]:
-    """Why this image belongs to the locked test set (None = not locked)."""
+def id_fold(v) -> Optional[str]:
+    """Identity comparison form: stripped, inner whitespace collapsed, case-folded; None for blank."""
+    if v is None:
+        return None
+    t = " ".join(str(v).split()).casefold()
+    return t or None
+
+
+def _key_id(key: Optional[str]) -> Optional[str]:
+    """The id part of a group key ``specimen:{assay}|{id}`` / ``slide:{assay}|{id}`` (the assay is dropped)."""
+    if not key or "|" not in key:
+        return None
+    return key.split("|", 1)[1]
+
+
+def lock_identity_sets(lock: Optional[dict]) -> tuple[set[str], set[str]]:
+    """(folded specimen ids, folded slide ids) of the locked test images. The ASSAY is deliberately ignored: a new slide of a
+    locked specimen with a blank / different assay, other case or stray spaces is still that specimen (a collision only costs a
+    more conservative split). Locks written before ``identity`` was stored are read from their ``keys`` strings."""
+    spec: set[str] = set()
+    slide: set[str] = set()
+    for i in (lock or {}).get("images", []):
+        ident = i.get("identity") or {}
+        for src, dst in ((ident.get("specimen_id") or _key_id((i.get("keys") or {}).get("specimen")), spec),
+                         (ident.get("slide_id") or _key_id((i.get("keys") or {}).get("slide")), slide)):
+            f = id_fold(src)
+            if f:
+                dst.add(f)
+    return spec, slide
+
+
+def _lock_file_shas(lock: dict) -> set[str]:
+    return {s for i in lock.get("images", []) for s in (i.get("file_sha256s") or [])}
+
+
+def locked_reason(rec: ImageRecord, lock: Optional[dict], file_sha256s=()) -> Optional[str]:
+    """Why this image belongs to the locked test set (None = not locked). ``file_sha256s`` = plain sha256 of the source
+    file(s): a byte-identical copy under another name is locked too (locks written before this field existed only
+    carry the name-dependent ``sha256``). Specimen / slide identity is compared case-folded and WITHOUT the assay."""
     if not lock:
         return None
-    shas, spec, slide, groups = _lock_keys(lock)
-    if rec.sha256 in shas:
+    shas, _spec, _slide, _groups = _lock_keys(lock)
+    if rec.sha256 in shas or (set(file_sha256s) & _lock_file_shas(lock)):
         return "identical file bytes as a locked test image"
-    k = group_key(rec, "specimen")
-    if k and k in spec:
-        return f"same specimen as a locked test image ({k})"
-    k = group_key(rec, "slide")
-    if k and k in slide:
-        return f"same slide as a locked test image ({k})"
+    spec, slide = lock_identity_sets(lock)
+    f = id_fold(rec.specimen_id)
+    if f and f in spec:
+        return f"same specimen as a locked test image ({rec.specimen_id!r}; compared case-insensitively, assay ignored)"
+    f = id_fold(rec.slide_id)
+    if f and f in slide:
+        return f"same slide as a locked test image ({rec.slide_id!r}; compared case-insensitively, assay ignored)"
     return None
 
 
+def lock_identity_conflicts(manifest, lock: Optional[dict]) -> list[str]:
+    """Problems when a snapshot's TRAIN / VAL crops come from a source whose specimen or slide identity (case-folded, assay
+    ignored) matches the locked test set. ``ml train`` must refuse when this list is not empty (called from
+    ``train.plan_training`` next to the existing group / sha / frozen-crop checks). ``manifest`` = SnapshotManifest or dict."""
+    if not lock:
+        return []
+    d = manifest.model_dump(mode="json") if hasattr(manifest, "model_dump") else dict(manifest)
+    spec, slide = lock_identity_sets(lock)
+    by_id = {s.get("analysis_id"): s for s in d.get("sources", [])}
+    bad: list[str] = []
+    seen: set = set()
+    for c in d.get("crops", []):
+        if c.get("split") not in ("train", "val") or c.get("frozen_from"):
+            continue
+        src = by_id.get(c.get("analysis_id")) or {}
+        ident = src.get("identity") or {}
+        why = []
+        if id_fold(ident.get("specimen_id")) in spec:
+            why.append(f"specimen {ident.get('specimen_id')!r}")
+        if id_fold(ident.get("slide_id")) in slide:
+            why.append(f"slide {ident.get('slide_id')!r}")
+        if why and c.get("analysis_id") not in seen:
+            seen.add(c.get("analysis_id"))
+            bad.append(f"source {src.get('name') or c.get('analysis_id')} has {c.get('split')} crops but shares its "
+                       f"{' and '.join(why)} with the locked test set (case-insensitive, assay ignored): leakage")
+    return bad
+
+
 def write_lock(data_dir: str | Path, *, snapshot: str, test_content_sha256: str, groups: list[str],
-               images: list[dict], level: str, seed: int, replace: bool = False, reason: str = "") -> dict:
+               images: list[dict], level: str, seed: int, replace: bool = False, reason: str = "",
+               overrides: Optional[dict] = None) -> dict:
     existing = load_lock(data_dir)
     if existing and not replace:
         raise MLError(f"a test lock already exists (snapshot {existing.get('snapshot')}); the locked test set is "
@@ -154,7 +225,7 @@ def write_lock(data_dir: str | Path, *, snapshot: str, test_content_sha256: str,
     lock = {"schema": LOCK_SCHEMA, "version": 1, "created_at": utc_now(), "snapshot": snapshot,
             "test_content_sha256": test_content_sha256, "level": level, "seed": seed,
             "groups": sorted(groups), "images": sorted(images, key=lambda i: i["analysis_id"]),
-            "history": (existing or {}).get("history", [])}
+            "overrides": dict(overrides or {}), "history": (existing or {}).get("history", [])}
     if existing:
         lock["history"].append({"replaced_at": utc_now(), "reason": reason, "previous_snapshot": existing.get("snapshot"),
                                 "previous_lock_sha256": lock_fingerprint(existing)})
@@ -187,7 +258,7 @@ def assign_groups(sources: list[SourceInfo], *, seed: int = 0, fractions: Option
     recs = []
     for s in sources:
         r0 = _record(s, idents[s.analysis_id], None)
-        why = locked_reason(r0, lock)
+        why = locked_reason(r0, lock, s.file_sha256s)
         if why:
             locked[s.analysis_id] = why
             warnings.append(f"analysis {s.analysis_id} ({s.name}) is in the LOCKED test set ({why}); it goes to test only "
@@ -226,7 +297,9 @@ def lock_images_from(sources: list[SourceInfo], ga: GroupAssignment, split: str 
         if ga.split_of.get(s.analysis_id) != split:
             continue
         rec = _record(s, ga.identity_of[s.analysis_id], None)
-        out.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": s.sha256, "group": ga.group_of[s.analysis_id],
+        out.append({"analysis_id": s.analysis_id, "name": s.name, "sha256": s.sha256, "file_sha256s": sorted(s.file_sha256s),
+                    "group": ga.group_of[s.analysis_id],
+                    "identity": {"specimen_id": rec.specimen_id, "slide_id": rec.slide_id, "assay": rec.assay},
                     "keys": {"specimen": group_key(rec, "specimen"), "slide": group_key(rec, "slide"),
                              "source_image": group_key(rec, "source_image")}})
     return out
