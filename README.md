@@ -9,8 +9,7 @@ Two independent detectors propose spots (Big-FISH, classical; Spotiflow, AI, opt
 field, and the app writes the counts in the lab's own CSV / Excel layouts with full provenance. Everything runs on your own
 computer; nothing is uploaded.
 
-> **Hackathon winner.** Built with a marine-virology lab for its daily polony counts. The repository holds the app, the fine-tuned Spotiflow model (`artifacts/ft-7e4c89cb-8edc09e3`) with its locked test-set manifest, and the scripts that compare detections with the researcher's own marks (`scripts/compare_to_researcher.py`, `scripts/calibration/`).
-
+>
 ## Install (one command, no admin rights)
 
 **Windows** (PowerShell):
