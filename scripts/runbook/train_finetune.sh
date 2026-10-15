@@ -23,7 +23,7 @@ export D="$DATA_SRC"                       # runbook reads TIFFs from here
 export DEVICE="${DEVICE:-auto}"
 export WORKERS="${WORKERS:-4}"
 export TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu121}"
-export BRANCH="${BRANCH:-feat/legacy-imagej-spotiflow-training}"
+export BRANCH="${BRANCH:-main}"
 W="$BASE/work"; REPO="$BASE/polony-counting"; STATE="$BASE/.driver_state"
 RB="$REPO/scripts/runbook/real_training.sh"
 mkdir -p "$BASE" "$W"

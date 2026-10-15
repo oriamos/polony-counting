@@ -9,7 +9,7 @@ set -euo pipefail
 
 BASE="${BASE:?set BASE to a directory on a disk with >= 60 GB free}"
 REPO="${REPO:-$BASE/polony-counting}"
-BRANCH="${BRANCH:-feat/legacy-imagej-spotiflow-training}"
+BRANCH="${BRANCH:-main}"
 VENV="${VENV:-$BASE/venv}"
 D="${D:-$BASE/tiffs}"            # historical TIFFs (copied here from your storage)
 W="${W:-$BASE/work}"             # templates, mapping files, reports

@@ -6,7 +6,7 @@ Two naming schemes were observed:
   ``29-09-2026_T7_AB_AM-A.tif`` -> assay ``T7_AB``, sample ``AM``, slide replicate ``A``;
   ``..._AS-B_(635_532).tif`` is the rendered RGB composite of ``..._AS-B.tif``;
   ``..._FS-B_D.tif`` has an unexplained suffix ``_D`` (kept verbatim).
-* legacy training slides (``path_dict.json``): ``<batch>-<sample no.>-<replicate>.tif``,
+* historical training slides: ``<batch>-<sample no.>-<replicate>.tif``,
   e.g. ``1-33-A.tif``, optionally ``3-43-B(1).tif`` (a copy marker).
 
 The lab's CSVs use ``slide ID`` = ``<sample>_<replicate>`` (e.g. ``AM_A``), which is

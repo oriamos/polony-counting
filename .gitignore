@@ -303,3 +303,6 @@ frontend/e2e-artifacts/
 !frontend/src/lib/**
 !deploy/vercel/probe/requirements.txt
 !deploy/vercel/probe/.python-version
+
+# Claude Code worktrees / local agent state
+.claude/
