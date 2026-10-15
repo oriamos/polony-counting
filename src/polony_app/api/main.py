@@ -1004,7 +1004,10 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                     sp.update({"available": bool(d.get("available")), "reason": str(d.get("reason") or ""),
                                "version": d.get("version") or None,
                                "device": {**sp["device"], **(d.get("device") or {})},
-                               "models": list(d.get("models") or [])})
+                               "models": list(d.get("models") or []),
+                               "torch_version": d.get("torch_version") or None,
+                               "device_selected": d.get("device_selected") or None,
+                               "device_note": d.get("device_note") or None})
                     out.append(sp)
                     return out
                 ok = ad.available()

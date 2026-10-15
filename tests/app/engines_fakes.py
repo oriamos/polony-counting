@@ -47,7 +47,7 @@ class FakeSpotiflow:
     """Installs fake modules into sys.modules (via monkeypatch) and records every model.predict call."""
 
     def __init__(self, monkeypatch, tmp_path: Path, points_fn=None, fail_load=None, fail_predict=None,
-                 cuda=False):
+                 cuda=False, mps=False):
         self.calls: list[dict] = []
         self.loads: list[dict] = []
         self.points_fn = points_fn
@@ -84,12 +84,13 @@ class FakeSpotiflow:
         torch.__version__ = "0.0-fake"
         torch.Tensor = type("Tensor", (), {})      # scipy / sklearn probe sys.modules["torch"].Tensor lazily
         torch.cuda = types.SimpleNamespace(is_available=lambda: cuda)
-        torch.backends = types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False))
+        torch.backends = types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: mps))
         for n, m in (("spotiflow", mod), ("spotiflow.model", model), ("spotiflow.model.pretrained", pre),
                      ("torch", torch)):
             monkeypatch.setitem(sys.modules, n, m)
         from polony_app.engines import spotiflow_adapter
         spotiflow_adapter.clear_model_cache()
+        spotiflow_adapter.reset_device_fallback()
 
     def engine(self):
         from polony_app.engines import SpotiflowEngine

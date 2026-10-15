@@ -18,6 +18,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -116,15 +117,53 @@ def device_info() -> dict:
     return out
 
 
+_ACCEL_ERROR_RE = re.compile(
+    r"\bmps\b|mpsndarray|mpsgraph|cuda error|cuda out of memory|cudnn|cublas|out of memory|invalid buffer size"
+    r"|not (?:currently )?implemented for the|no kernel image|device-side assert", re.IGNORECASE)
+_DEVICE_FALLBACK: dict = {}       # process-wide: accelerator -> {"from", "to", "error"} once it failed at run time
+_FALLBACK_LOCK = threading.Lock()
+
+
+def is_device_failure(device: str, message: str) -> bool:
+    """True when an error message from inference on ``device`` looks like an accelerator / backend problem (missing
+    MPS op, CUDA error, out of memory) that a CPU retry can fix, rather than bad input. Pure; cpu never qualifies."""
+    return device in ("mps", "cuda") and bool(_ACCEL_ERROR_RE.search(message or ""))
+
+
+def record_device_fallback(device: str, error: str) -> dict:
+    rec = {"from": device, "to": "cpu", "error": ((error or "").strip().splitlines() or [""])[0][:300]}
+    with _FALLBACK_LOCK:
+        _DEVICE_FALLBACK.setdefault(device, rec)
+        return dict(_DEVICE_FALLBACK[device])
+
+
+def device_note() -> Optional[str]:
+    """One line for the UI / `status` when an accelerator failed in this process and CPU is used instead."""
+    with _FALLBACK_LOCK:
+        recs = list(_DEVICE_FALLBACK.values())
+    return "; ".join(f"{r['from']} failed at run time ({r['error']}); using cpu" for r in recs) or None
+
+
+def reset_device_fallback() -> None:
+    with _FALLBACK_LOCK:
+        _DEVICE_FALLBACK.clear()
+
+
 def resolve_device(requested: str) -> tuple[str, Optional[str]]:
     """(device, note). 'auto' -> cuda, then mps, then cpu. A requested but unavailable device falls back to
-    cpu with a note (never an error)."""
+    cpu with a note (never an error). A device that already failed at run time in this process stays on cpu."""
     info = device_info()
     if requested == "auto":
-        return ("cuda" if info["cuda"] else "mps" if info["mps"] else "cpu"), None
-    if requested == "cpu" or info.get(requested):
-        return requested, None
-    return "cpu", f"requested device '{requested}' is not available on this machine; fell back to cpu"
+        dev = "cuda" if info["cuda"] else "mps" if info["mps"] else "cpu"
+    elif requested == "cpu" or info.get(requested):
+        dev = requested
+    else:
+        return "cpu", f"requested device '{requested}' is not available on this machine; fell back to cpu"
+    with _FALLBACK_LOCK:
+        rec = _DEVICE_FALLBACK.get(dev)
+    if rec:
+        return "cpu", f"{dev} failed earlier in this session ({rec['error']}); using cpu"
+    return dev, None
 
 
 # ------------------------------------------------------------------ models + checksums
@@ -397,7 +436,9 @@ class SpotiflowEngine:
     def describe(self) -> dict:
         ok, why = self.available()
         return {"name": "spotiflow", "available": ok, "reason": why, "version": self.version() if ok else "",
-                "device": device_info(), "models": list_models(self.cache_dir)}
+                "device": device_info(), "models": list_models(self.cache_dir),
+                "torch_version": _pkg_version("torch") if ok else "", "device_selected": resolve_device("auto")[0],
+                "device_note": device_note()}
 
     # ---------------------------------------------------------------- detection
     def detect_page(self, image: np.ndarray, *, analysis_id: str, page: int, channel_role: Optional[str],
@@ -526,6 +567,8 @@ class SpotiflowEngine:
 
         pts = prob = None
         used_device = device
+        with _FALLBACK_LOCK:      # an earlier run in this process already moved this device to cpu
+            fallback = dict(next(iter(_DEVICE_FALLBACK.values()))) if dnote and "earlier in this session" in dnote else None
         for attempt in (0, 1):
             try:
                 model = _load_model(mi, used_device)
@@ -535,17 +578,19 @@ class SpotiflowEngine:
                 break
             except DetectionCancelled:
                 raise
-            except EngineError as exc:
-                if used_device != "cpu" and attempt == 0:
-                    notes.append(f"model load on {used_device} failed ({exc}); retried on cpu")
-                    used_device = "cpu"
-                    continue
-                raise
             except Exception as exc:
-                if used_device != "cpu" and attempt == 0:
-                    notes.append(f"inference on {used_device} failed ({type(exc).__name__}: {exc}); retried on cpu")
+                # a failed model load on an accelerator always retries on cpu; an inference error only when it
+                # looks like an accelerator problem (unsupported MPS op, CUDA error / OOM), never for bad input
+                is_load = isinstance(exc, EngineError)
+                if used_device != "cpu" and attempt == 0 and (is_load or is_device_failure(used_device, str(exc))):
+                    first = (str(exc).strip().splitlines() or [type(exc).__name__])[0]
+                    fallback = record_device_fallback(used_device, first)
+                    notes.append(f"{'model load' if is_load else 'inference'} on {used_device} failed ({first}); "
+                                 f"retried on cpu")
                     used_device = "cpu"
                     continue
+                if is_load:
+                    raise
                 raise EngineError(f"Spotiflow inference failed on {used_device} for page {page}: "
                                   f"{type(exc).__name__}: {exc}") from exc
         if cancelled():
@@ -601,6 +646,7 @@ class SpotiflowEngine:
                                   f"error: RMS 0.83/1.74/3.60 px, max 1.4/3.25/5.57 px at d=2/4/8 vs the native-scale "
                                   f"model (independent review, unrefined); RMS 1.25/1.83/3.31 px unrefined and "
                                   f"1.04/1.21/2.13 px refined vs a model-free blob centre (3 real slides)"),
+               **({"device_fallback": fallback} if fallback else {}),
                "page_to_channel": ("confirmed mapping" if channel_role else "unconfirmed (no colour assigned)")}
         run = EngineRunInfo(
             run_id=run_id, analysis_id=analysis_id, image_sha256=dict(image_sha256 or {}),

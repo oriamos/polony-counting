@@ -234,6 +234,9 @@ export interface EngineInfo {
   reason: string | null;
   version: string | null;
   device?: { cuda?: boolean; mps?: boolean; cpu?: boolean } | null;
+  torch_version?: string | null;
+  device_selected?: string | null;
+  device_note?: string | null;
   models?: EngineModelInfo[];
 }
 

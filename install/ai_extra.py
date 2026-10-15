@@ -96,10 +96,21 @@ def _spotiflow_pin() -> str:
     return "?"
 
 
+def mps_hint(system: str, machine: str, check_output: str) -> str:
+    """Hint for Apple Silicon when torch imports but the check reports device cpu (no MPS); '' otherwise."""
+    if system == "Darwin" and machine == "arm64" and check_output.strip().endswith("device cpu"):
+        return ("Apple GPU (MPS) is not available: it needs macOS 12.3 or newer and the arm64 build of Python. "
+                "The AI detector will run on the CPU (slower, same results).")
+    return ""
+
+
 def cmd_check() -> int:
     r = subprocess.run([sys.executable, "-c", CHECK_CODE], capture_output=True, text=True)
     if r.returncode == 0:
         print(r.stdout.strip())
+        hint = mps_hint(platform.system(), platform.machine(), r.stdout)
+        if hint:
+            print(hint)
         return 0
     err = (r.stderr.strip().splitlines() or ["unknown error"])[-1]
     print(f"AI detector check FAILED: {err}")

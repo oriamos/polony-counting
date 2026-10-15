@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import platform
 import os
 import signal
 import socket
@@ -458,9 +459,20 @@ def _ai_line() -> str:
     try:
         import torch
 
-        dev = "cuda" if torch.cuda.is_available() else (
-            "mps" if getattr(getattr(torch, "backends", None), "mps", None) and torch.backends.mps.is_available() else "cpu")
-        return f"AI detector: installed (spotiflow {metadata.version('spotiflow')}, torch {torch.__version__}, device {dev})"
+        mps = getattr(getattr(torch, "backends", None), "mps", None)
+        dev = "cuda" if torch.cuda.is_available() else ("mps" if mps and mps.is_available() else "cpu")
+        line = f"AI detector: installed (spotiflow {metadata.version('spotiflow')}, torch {torch.__version__}, device {dev})"
+        try:
+            from polony_app.engines.spotiflow_adapter import device_note
+
+            note = device_note()      # only set inside a running server; empty for a fresh `status` process
+            if note:
+                line += f"; {note}"
+        except Exception:  # noqa: BLE001  informational only
+            pass
+        if platform.system() == "Darwin" and platform.machine() == "arm64" and dev == "cpu":
+            line += "; MPS unavailable (needs macOS 12.3 or newer), CPU will be used"
+        return line
     except Exception as e:  # broken install: say so, Big-FISH still works
         return f"AI detector: installed but cannot be loaded ({type(e).__name__}: {str(e)[:150]}); Big-FISH still works"
 

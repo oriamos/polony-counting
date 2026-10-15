@@ -126,3 +126,17 @@ def test_launcher_has_prepare_model_and_ai_status_line():
     line = launcher._ai_line()
     assert line.startswith("AI detector: ")
     assert "prepare-model" in launcher.main.__code__.co_consts or hasattr(launcher, "cmd_prepare_model")
+
+
+def test_mps_hint_only_for_apple_silicon_on_cpu():
+    out = "spotiflow 0.6.5, torch 2.14.1, torchvision 0.29.1, device "
+    assert "macOS 12.3" in ai.mps_hint("Darwin", "arm64", out + "cpu")
+    assert ai.mps_hint("Darwin", "arm64", out + "mps") == ""
+    assert ai.mps_hint("Linux", "x86_64", out + "cpu") == ""
+    assert ai.mps_hint("Darwin", "x86_64", out + "cpu") == ""
+
+
+def test_install_sh_clears_quarantine_on_venv_and_runs_check():
+    sh = (INSTALL / "install.sh").read_text()
+    assert 'xattr -dr com.apple.quarantine "$VENV"' in sh and "command -v xattr" in sh
+    assert 'ai_extra.py" check' in sh

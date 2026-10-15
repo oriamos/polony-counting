@@ -256,6 +256,11 @@ main() {
     say "  Downloading and installing PyTorch + Spotiflow (this can take a long time) ..."
     POLONY_HOME="$PH" "$VPY" "$APP/install/ai_extra.py" install --cuda "$cuda" \
       || warn "the AI detector could not be installed; Big-FISH detection still works"
+    # macOS may quarantine the freshly downloaded native libraries (torch .dylib/.so); clear it so they load
+    if [ "$(uname -s)" = Darwin ] && command -v xattr >/dev/null 2>&1; then
+      xattr -dr com.apple.quarantine "$VENV" >/dev/null 2>&1 || true
+    fi
+    POLONY_HOME="$PH" "$VPY" "$APP/install/ai_extra.py" check || true
   }
   step 6 "AI detector (optional)"
   if [ "$DRY" = 1 ]; then

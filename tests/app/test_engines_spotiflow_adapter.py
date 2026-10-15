@@ -219,6 +219,56 @@ def test_device_selection_and_fallback(monkeypatch, tmp_path):
     assert res.run.device == "cpu" and any("retried on cpu" in n for n in res.run.notes)
 
 
+@pytest.mark.parametrize("device,msg,expected", [
+    ("mps", "NotImplementedError: The operator 'aten::foo' is not currently implemented for the MPS device.", True),
+    ("mps", "MPSNDArray: failed assertion", True),
+    ("mps", "Invalid buffer size: 20.00 GiB", True),
+    ("cuda", "CUDA error: an illegal memory access", True),
+    ("cuda", "CUDA out of memory. Tried to allocate 2 GiB", True),
+    ("mps", "expected 2D input, got shape (3,)", False),
+    ("mps", "temps and attempts", False),
+    ("cpu", "MPS CUDA error out of memory", False),
+    ("mps", "", False),
+])
+def test_is_device_failure(device, msg, expected):
+    assert sa.is_device_failure(device, msg) is expected
+
+
+def test_mps_runtime_failure_falls_back_to_cpu_once_per_process(monkeypatch, tmp_path):
+    fs = FakeSpotiflow(monkeypatch, tmp_path, mps=True)
+    calls = []
+
+    def f(a):
+        calls.append(1)
+        if len(calls) == 1:
+            raise NotImplementedError("The operator 'aten::x' is not currently implemented for the MPS device.\nmore")
+        return np.array([[2.0, 3.0]]), np.array([0.7])
+
+    fs.points_fn = f
+    eng = fs.engine()
+    res = call(eng, np.zeros((20, 20), np.uint16))
+    assert res.run.device == "cpu" and len(res.detections) == 1
+    fb = res.run.preprocessing["device_fallback"]
+    assert fb["from"] == "mps" and fb["to"] == "cpu" and fb["error"].endswith("MPS device.") and "\n" not in fb["error"]
+    assert "MPS" in sa.device_note() and "MPS" in eng.describe()["device_note"]
+    assert eng.describe()["device_selected"] == "cpu"
+    # the next slide goes straight to cpu: no second failed attempt, still recorded
+    res2 = call(eng, np.zeros((20, 20), np.uint16))
+    assert len(calls) == 3 and res2.run.device == "cpu" and res2.run.preprocessing["device_fallback"]["from"] == "mps"
+
+
+def test_unrelated_inference_error_is_not_retried(monkeypatch, tmp_path):
+    fs = FakeSpotiflow(monkeypatch, tmp_path, mps=True)
+
+    def boom(a):
+        raise ValueError("bad input shape")
+
+    fs.points_fn = boom
+    with pytest.raises(EngineError, match="bad input shape"):
+        call(fs.engine(), np.zeros((20, 20), np.uint16))
+    assert sa.device_note() is None
+
+
 def test_page_and_role_recorded_per_page(monkeypatch, tmp_path):
     fs = FakeSpotiflow(monkeypatch, tmp_path, points_fn=lambda a: (np.array([[2.0, 3.0]]), np.array([0.6])))
     eng = fs.engine()
