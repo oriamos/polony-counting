@@ -1,3 +1,9 @@
+> ## Project moved
+>
+> **PoCo / Polony Review now lives at <https://github.com/oriamos/poco>.** Development, issues, releases and the installers are there.
+> This repository is kept for reference and is no longer updated. Its install commands install the old code, so use the ones in the new
+> repository instead.
+
 [![CI](https://github.com/oriamos/polony-counting/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/ci.yml)
 [![Installers](https://github.com/oriamos/polony-counting/actions/workflows/install-test.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/install-test.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
