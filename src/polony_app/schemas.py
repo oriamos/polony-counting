@@ -1,5 +1,5 @@
-"""Shared typed contracts. OWNED BY THE ORCHESTRATOR: agents must not edit this
-file; request changes via the orchestrator. All coordinates are image pixel
+"""Shared typed contracts (pydantic models used by the API, the store and the exports;
+mirrored by hand in frontend/src/api/types.ts). All coordinates are image pixel
 coordinates, float, origin = top-left corner of the top-left pixel centre
 (i.e. pixel (0,0) has centre (0.0, 0.0)); `x` = column, `y` = row.
 Regions use the same space as the (post-registration) reference channel.

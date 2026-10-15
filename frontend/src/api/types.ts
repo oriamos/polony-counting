@@ -1,4 +1,4 @@
-// Hand-mirrored from src/polony_app/schemas.py (orchestrator-owned).
+// Hand-mirrored from src/polony_app/schemas.py.
 // Coordinates: image pixels, float, pixel (0,0) has its CENTRE at (0,0). x = column, y = row.
 
 export type ChannelRole = 'red' | 'green' | 'ignore';
