@@ -5,14 +5,13 @@
 #
 #   export DEVICE=cuda            # cuda | rocm | cpu | auto
 #   export TORCH_INDEX=https://download.pytorch.org/whl/cu121   # cu121 NVIDIA / rocm6.2 AMD / cpu
-#   bash train_hackathon.sh      # does everything; if interrupted, run again: finished steps are skipped
+#   bash train_finetune.sh      # does everything; if interrupted, run again: finished steps are skipped
 set -euo pipefail
 
 # --- where the data is (read in place, never modified, no copy needed) -----------------------
 DATA_SRC="${DATA_SRC:-}"
 if [ -z "$DATA_SRC" ]; then
-  for c in "$HOME/hackathon/training_data" "$HOME/hackathon_training_data" "$HOME/hackathon-training-data" \
-           "$HOME/hackathon training data" "$HOME/training_data"; do
+  for c in "$HOME/polony_training_data" "$HOME/training_data"; do
     [ -d "$c" ] && DATA_SRC="$c" && break
   done
 fi
