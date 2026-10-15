@@ -10,6 +10,7 @@ import { HelpDialog } from './components/HelpDialog';
 import { Hotkeys } from './components/Hotkeys';
 import { DraftBadge } from './components/TotalsTab';
 import { OriginalsBanner, StorageBadge } from './components/StorageBadge';
+import { ExperimentPanel } from './components/ExperimentPanel';
 
 export function App() {
   const theme = useApp((s) => s.theme);
@@ -61,7 +62,13 @@ export function App() {
 }
 
 function Header() {
-  const a = useApp((s) => s.current);
+  const mainView = useApp((s) => s.mainView);
+  const cur = useApp((s) => s.current);
+  const a = mainView === 'analysis' ? cur : null;
+  const exp = useApp((s) => s.experiment);
+  const experiments = useApp((s) => s.experiments);
+  const openExp = useApp((s) => s.openExperiment);
+  const expOfSlide = a?.experiment_id ? (exp?.id === a.experiment_id ? exp.name : experiments.find((x) => x.id === a.experiment_id)?.name ?? 'experiment') : null;
   const health = useApp((s) => s.health);
   const healthError = useApp((s) => s.healthError);
   const theme = useApp((s) => s.theme);
@@ -76,8 +83,19 @@ function Header() {
         </span>
         <strong>Polony Counter</strong>
       </div>
+      {mainView === 'experiment' && exp && (
+        <div className="crumb">
+          <span className="chip">experiment</span>
+          <span className="aname" title={exp.name}>{exp.name}</span>
+        </div>
+      )}
       {a && (
         <div className="crumb">
+          {expOfSlide && (
+            <button className="btn sm ghost" onClick={() => void openExp(a.experiment_id as string)} title="Back to the experiment page" data-testid="back-to-experiment">
+              ← {expOfSlide}
+            </button>
+          )}
           <span className="aname" title={a.name}>{a.name}</span>
           <StatusChip status={a.status} />
           <DraftBadge final={a.status === 'finalized'} />
@@ -103,6 +121,8 @@ function Main() {
   const a = useApp((s) => s.current);
   const loading = useApp((s) => s.loadingCurrent);
   const err = useApp((s) => s.loadError);
+  const mainView = useApp((s) => s.mainView);
+  if (mainView === 'experiment') return <ExperimentPanel />;
   if (loading)
     return (
       <main className="center">
@@ -122,7 +142,7 @@ function Main() {
       <main className="center">
         <div className="empty big">
           <h2>Welcome</h2>
-          <p>Select an analysis on the left, or drop one or two TIFF files to start a new one.</p>
+          <p>Select an analysis on the left, or drop one or two TIFF files to start a new one. For many slides of one run, create an <b>experiment</b>: import all slides, set one grid, run detection overnight, export one CSV.</p>
           <p className="muted">Workflow: upload → confirm channel mapping → draw counting regions → run detection → review → approve regions → finalize &amp; export.</p>
         </div>
       </main>

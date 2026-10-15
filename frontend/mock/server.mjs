@@ -233,6 +233,8 @@ const store = {
   seq: 100,
   failNext: null,
   rawRequests: [],
+  experiments: new Map(),
+  cancelBatch: new Set(),
 };
 
 function baseImage(kind, roles, extra = {}) {
@@ -288,6 +290,8 @@ function emptyAnalysis(id, name, image, status) {
     finalized_at: null,
     undo_depth: 0,
     redo_depth: 0,
+    experiment_id: null,
+    order_in_experiment: 0,
   };
 }
 
@@ -301,6 +305,8 @@ function seed() {
   store.csv.clear();
   store.undo.clear();
   store.redo.clear();
+  store.experiments.clear();
+  store.cancelBatch.clear();
   // 1: ready for review
   const demo = emptyAnalysis('demo', 'Demo slide (in review)', baseImage('raw_two_channel', ['red', 'green'], {
     embedded_rois: [{ source: 'ROI', roi_type: 'rect', name: 'embedded-1', left: 30, top: 30, right: 220, bottom: 200, n_points: null, c_position: 0, z_position: 0, t_position: 0 }],
@@ -792,9 +798,9 @@ function applyAction(a, type, p) {
   return refresh(a);
 }
 
-function runJob(a, req) {
+function runJob(a, req, extra = {}, stepMs = 280) {
   const id = `job-${++store.seq}`;
-  const job = { id, analysis_id: a.id, status: 'queued', progress: 0, message: 'queued', error: null, started_at: null, finished_at: null };
+  const job = { id, analysis_id: a.id, status: 'queued', progress: 0, message: 'queued', error: null, started_at: null, finished_at: null, kind: 'detect', parent_id: null, experiment_id: null, detail: null, ...extra };
   store.jobs.set(id, job);
   a.status = 'detecting';
   let step = 0;
@@ -842,7 +848,7 @@ function runJob(a, req) {
       job.finished_at = now();
       refresh(a);
     }
-  }, 280);
+  }, stepMs);
   return job;
 }
 
@@ -875,6 +881,293 @@ function exportBody(a, kind) {
   if (kind === 'bundle') return { type: 'application/zip', name: `${base}.zip`, body: 'PK-mock' };
   const rows = kind === 'objects' ? ['id,x,y,cls,status', ...live(a).map((o) => `${o.id},${o.x},${o.y},${o.cls},${status}`)] : ['scope,status', `slide,${status}`];
   return { type: 'text/csv', name: `${base}.csv`, body: rows.join('\n') + '\n' };
+}
+
+
+// ------------------------------------------------------------------ experiments (docs/app/EXPERIMENTS_API.md)
+const getE = (eid) => {
+  const e = store.experiments.get(eid);
+  if (!e) throw new HttpError(404, 'experiment_not_found', `experiment ${eid} not found`);
+  return e;
+};
+const expSlides = (eid) => [...store.analyses.values()].filter((a) => a.experiment_id === eid).sort((p, q) => p.order_in_experiment - q.order_in_experiment);
+const isActiveJob = (j) => !!j && (j.status === 'queued' || j.status === 'running');
+const lastBatch = (eid) => [...store.jobs.values()].filter((j) => j.kind === 'batch' && j.experiment_id === eid).pop() ?? null;
+const lastJobOf = (aid) => [...store.jobs.values()].filter((j) => j.analysis_id === aid).pop() ?? null;
+const mappingOk = (a) => !!a.image?.channels.every((c) => c.role_confirmed);
+function expDict(e) {
+  return { ...clone(e), status: isActiveJob(lastBatch(e.id)) ? 'running' : 'open' };
+}
+function slideRow(a) {
+  const regs = a.regions.filter((r) => r.kind === 'counting');
+  const approved = regs.length > 0 && regs.every((r) => r.approved);
+  return {
+    id: a.id, name: a.name, order_in_experiment: a.order_in_experiment, status: a.status,
+    export_status: a.status === 'finalized' ? 'finalized' : approved ? 'approved' : 'draft',
+    updated_at: a.updated_at, finalized_at: a.finalized_at, mapping_confirmed: mappingOk(a),
+    image: a.image ? { width: a.image.width, height: a.image.height, kind: a.image.kind, dtype: a.image.dtype, n_channels: a.image.channels.length } : null,
+    has_grid: !!a.slide.grid, n_counting_regions: regs.length, n_fields: regs.filter((r) => r.field_index != null).length,
+    n_approved: regs.filter((r) => r.approved).length, approved, review_queue: a.objects.length ? queue(a).length : 0,
+    detection_ran_at: a.provenance.detection_ran_at, engine: a.provenance.detection_ran_at ? a.detection_request.engine || 'bigfish' : null,
+    counts: counts(a).slide, last_job: lastJobOf(a.id),
+  };
+}
+const expView = (eid) => ({ ...expDict(getE(eid)), slides: expSlides(eid).map(slideRow), last_batch: lastBatch(eid) });
+function batchView(eid) {
+  const b = lastBatch(eid);
+  if (!b) return { batch: null, slides: [], summary: null };
+  const latest = new Map();
+  for (const j of store.jobs.values()) if (j.parent_id === b.id) latest.set(j.analysis_id, j);
+  const active = isActiveJob(b);
+  const slides = b.detail.slides.map((p) => {
+    const c = latest.get(p.analysis_id);
+    const status = p.skip ? 'skipped' : c ? c.status : active ? 'pending' : 'not_run';
+    return { analysis_id: p.analysis_id, name: p.name, order: p.order, status, skip_reason: p.skip, override: !!p.override, job_id: c?.id ?? null, progress: c?.progress ?? 0, message: c?.message ?? '', error: c?.error ?? null, started_at: c?.started_at ?? null, finished_at: c?.finished_at ?? null };
+  });
+  const summary = { total: slides.filter((x) => x.status !== 'skipped').length };
+  for (const k of ['done', 'failed', 'cancelled', 'running', 'queued', 'pending', 'not_run', 'skipped']) summary[k] = slides.filter((x) => x.status === k).length;
+  return { batch: b, slides, summary };
+}
+const EXP_KEYS = ['name', 'notes', 'default_detection', 'default_grid'];
+function checkKeys(body, allowed) {
+  const unk = Object.keys(body || {}).filter((k) => !allowed.includes(k));
+  if (unk.length) throw new HttpError(422, 'unknown_fields', `unknown field(s): ${unk.join(', ')}`, { fields: unk });
+}
+function checkDetection(d, where) {
+  if (d && d.preview_window != null) throw new HttpError(422, 'invalid_request', `${where}.preview_window is not a run setting`);
+}
+const runReq = (d) => {
+  const base = defReq();
+  const x = clone(d || {});
+  return { ...base, ...x, red: { ...base.red, ...(x.red || {}) }, green: { ...base.green, ...(x.green || {}) }, preview_window: null };
+};
+function failedChild(bid, eid, aid, error) {
+  const j = { id: `job-${++store.seq}`, analysis_id: aid, status: 'failed', progress: 0, message: '', error, started_at: now(), finished_at: now(), kind: 'detect', parent_id: bid, experiment_id: eid, detail: null };
+  store.jobs.set(j.id, j);
+  return j;
+}
+/** Sequential "unattended" run: skip and continue; a slide whose name contains "fail" fails in the engine. */
+async function runExperimentBatch(e, b, plan, reqs) {
+  const run = plan.filter((p) => !p.skip);
+  let ok = 0, failed = 0;
+  b.status = 'running';
+  b.started_at = now();
+  for (let i = 0; i < run.length; i++) {
+    if (store.cancelBatch.has(b.id)) {
+      b.status = 'cancelled';
+      b.message = `cancelled after ${i} of ${run.length} slides (${ok} done, ${failed} failed)`;
+      b.finished_at = now();
+      e.status = 'open';
+      return;
+    }
+    const p = run[i];
+    b.progress = i / run.length;
+    b.message = `slide ${i + 1} / ${run.length}: ${p.name} (${ok} done, ${failed} failed)`;
+    const a = store.analyses.get(p.analysis_id);
+    let status = 'failed';
+    if (!a) failedChild(b.id, e.id, p.analysis_id, 'not_found: analysis not found');
+    else if (!mappingOk(a)) failedChild(b.id, e.id, a.id, 'channel_mapping_unconfirmed: confirm the red/green channel mapping before detecting');
+    else if (!a.regions.some((r) => r.kind === 'counting')) failedChild(b.id, e.id, a.id, 'no_counting_region: no counting region: apply a grid or draw a counting region first');
+    else if (/fail/i.test(a.name)) {
+      const j = failedChild(b.id, e.id, a.id, null);
+      j.status = 'running';
+      j.finished_at = null;
+      await delay(400);
+      j.status = 'failed';
+      j.error = `RuntimeError: mock engine failure on '${a.name}' (the file name contains "fail")`;
+      j.finished_at = now();
+    } else {
+      const j = runJob(a, reqs[a.id], { parent_id: b.id, experiment_id: e.id }, 60);
+      while (isActiveJob(j)) await delay(50);
+      status = j.status;
+    }
+    if (status === 'done') ok++;
+    else failed++;
+    b.progress = (i + 1) / run.length;
+    b.message = `${ok + failed} / ${run.length} slides (${ok} done, ${failed} failed)`;
+  }
+  const nSkip = plan.length - run.length;
+  b.status = failed ? 'done_with_failures' : 'done';
+  b.message = `${ok} / ${run.length} done, ${failed} failed${nSkip ? `, ${nSkip} skipped` : ''}`;
+  b.finished_at = now();
+  e.status = 'open';
+}
+function csvRows(e, sel) {
+  const head = ['Slide name', 'What counted', 'NofPol', 'NofGrids', ...Array.from({ length: 24 }, (_, i) => `Field${i + 1}`), 'Experiment', 'Status', 'Engine'];
+  const lines = [head.join(',')];
+  const included = [], skipped = [];
+  const LABEL = { red: 'red, not yellow', green: 'green, not yellow', yellow: 'yellow' };
+  for (const a of expSlides(e.id)) {
+    const fields = a.regions.filter((r) => r.kind === 'counting' && r.field_index != null);
+    if (!a.provenance.detection_ran_at) { skipped.push({ analysis_id: a.id, name: a.name, reason: 'no_detection' }); continue; }
+    if (!fields.length) { skipped.push({ analysis_id: a.id, name: a.name, reason: 'no_grid_fields' }); continue; }
+    included.push({ analysis_id: a.id, name: a.name, slide_name: a.name, status: slideRow(a).export_status });
+    for (const cls of sel) {
+      const per = Array(24).fill('');
+      let tot = 0;
+      for (const r of fields) {
+        const n = live(a).filter((o) => o.region_id === r.id && cls.includes(o.cls)).length;
+        if (r.field_index <= 24) per[r.field_index - 1] = n;
+        tot += n;
+      }
+      const q = (v) => (/[",\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+      lines.push([a.name, cls.map((c) => LABEL[c]).join(' and '), tot, fields.length, ...per, e.name, slideRow(a).export_status, a.detection_request.engine || 'bigfish'].map(q).join(','));
+    }
+  }
+  return { text: lines.join('\r\n') + '\r\n', included, skipped };
+}
+async function handleExperiments(req, res, url, route, m) {
+  let mt;
+  const readJson = async () => JSON.parse((await readBody(req)).toString() || '{}');
+  if (route === '/experiments' && m === 'GET') {
+    const list = [...store.experiments.values()].sort((p, q) => q.updated_at.localeCompare(p.updated_at)).map((e) => {
+      const sl = expSlides(e.id);
+      return { ...expDict(e), n_slides: sl.length, n_detected: sl.filter((a) => a.status === 'in_review' || a.status === 'finalized').length, n_finalized: sl.filter((a) => a.status === 'finalized').length, last_batch: lastBatch(e.id) };
+    });
+    return send(res, 200, list);
+  }
+  if (route === '/experiments' && m === 'POST') {
+    const b = await readJson();
+    checkKeys(b, EXP_KEYS);
+    if (!(b.name || '').trim()) throw new HttpError(422, 'invalid_name', 'the experiment needs a name');
+    checkDetection(b.default_detection, 'default_detection');
+    const id = (++store.seq).toString(16).padStart(12, '0');
+    store.experiments.set(id, { id, name: b.name.trim().slice(0, 120), notes: b.notes || '', created_at: now(), updated_at: now(), default_grid: b.default_grid ?? null, default_detection: b.default_detection ?? defReq(), status: 'open' });
+    return send(res, 200, expView(id));
+  }
+  if (!(mt = route.match(/^\/experiments\/([^/]+)(\/.*)?$/))) throw new HttpError(404, 'not_found', `${m} ${route}`);
+  const e = getE(mt[1]);
+  const sub = mt[2] || '';
+  if (sub === '' && m === 'GET') return send(res, 200, expView(e.id));
+  if (sub === '' && m === 'PUT') {
+    const b = await readJson();
+    checkKeys(b, EXP_KEYS);
+    if ('name' in b) {
+      if (!(b.name || '').trim()) throw new HttpError(422, 'invalid_name', 'the experiment needs a name');
+      e.name = b.name.trim().slice(0, 120);
+    }
+    if ('notes' in b) e.notes = b.notes || '';
+    if ('default_detection' in b) {
+      checkDetection(b.default_detection, 'default_detection');
+      e.default_detection = b.default_detection ?? defReq();
+    }
+    if ('default_grid' in b) e.default_grid = b.default_grid;
+    e.updated_at = now();
+    return send(res, 200, expView(e.id));
+  }
+  if (sub === '' && m === 'DELETE') {
+    if (isActiveJob(lastBatch(e.id))) throw new HttpError(409, 'batch_in_progress', 'a batch run of this experiment is active; cancel it first');
+    const sl = expSlides(e.id);
+    const del = url.searchParams.get('delete_slides') === 'true';
+    if (del) {
+      const busy = sl.filter((a) => a.status === 'detecting').map((a) => a.id);
+      if (busy.length) throw new HttpError(409, 'job_in_progress', 'a detection job is running on a slide of this experiment', { analysis_ids: busy });
+      const fin = sl.filter((a) => a.status === 'finalized').map((a) => a.id);
+      if (fin.length) throw new HttpError(409, 'analysis_finalized', 'finalized slides are not deleted; reopen them first, or delete the experiment without delete_slides (its slides are kept)', { analysis_ids: fin });
+      sl.forEach((a) => store.analyses.delete(a.id));
+    } else sl.forEach((a) => ((a.experiment_id = null), (a.order_in_experiment = 0)));
+    for (const [k, j] of store.jobs) if (j.kind === 'batch' && j.experiment_id === e.id) store.jobs.delete(k);
+    store.experiments.delete(e.id);
+    return send(res, 200, { ok: true, deleted_slides: del ? sl.map((a) => a.id) : [], detached_slides: del ? [] : sl.map((a) => a.id) });
+  }
+  const nextOrder = () => Math.max(0, ...expSlides(e.id).map((a) => a.order_in_experiment)) + 1;
+  if (sub === '/import' && m === 'POST') {
+    await delay(150);
+    const buf = (await readBody(req)).toString('latin1');
+    const files = [...buf.matchAll(/name="files"; filename="([^"]+)"/g)].map((x) => x[1]);
+    const tpl = expSlides(e.id).find(mappingOk);
+    let order = nextOrder();
+    const created = [], errors = [];
+    for (const f of files) {
+      if (!/\.tiff?$/i.test(f)) {
+        errors.push({ file: f, code: 'unsupported_file', message: `'${f}': only .tif/.tiff files are accepted` });
+        continue;
+      }
+      const id = (++store.seq).toString(16).padStart(12, '0');
+      const a = emptyAnalysis(id, f.replace(/\.tiff?$/i, ''), baseImage('raw_two_channel', null), 'needs_channel_mapping');
+      a.image.channels.forEach((c) => (c.source_file = f));
+      a.experiment_id = e.id;
+      a.order_in_experiment = order++;
+      let copied = null;
+      if (tpl && tpl.image.kind === a.image.kind) {
+        a.image.channels.forEach((c, i) => ((c.role = tpl.image.channels[i].role), (c.role_confirmed = true)));
+        a.status = 'ready';
+        copied = tpl.id;
+      }
+      store.analyses.set(id, a);
+      created.push({ id, name: a.name, order_in_experiment: a.order_in_experiment, status: a.status, mapping_copied_from: copied });
+    }
+    if (!created.length) throw new HttpError(422, 'import_failed', 'no file could be imported', { errors });
+    return send(res, 200, { created, errors });
+  }
+  if (sub === '/slides' && m === 'POST') {
+    const b = await readJson();
+    const ids = [...new Set(b.analysis_ids || [])];
+    const other = ids.map(getA).filter((a) => a.experiment_id && a.experiment_id !== e.id).map((a) => ({ analysis_id: a.id, experiment_id: a.experiment_id }));
+    if (other.length) throw new HttpError(409, 'in_other_experiment', 'these analyses belong to another experiment; remove them from it first', { analyses: other });
+    let order = nextOrder();
+    for (const id of ids) {
+      const a = getA(id);
+      if (a.experiment_id === e.id) continue;
+      a.experiment_id = e.id;
+      a.order_in_experiment = order++;
+    }
+    return send(res, 200, expView(e.id));
+  }
+  if ((mt = sub.match(/^\/slides\/([^/]+)$/)) && m === 'DELETE') {
+    const a = getA(mt[1]);
+    if (a.experiment_id !== e.id) throw new HttpError(404, 'not_in_experiment', 'this analysis is not part of the experiment');
+    a.experiment_id = null;
+    a.order_in_experiment = 0;
+    return send(res, 200, expView(e.id));
+  }
+  if (sub === '/order' && m === 'PUT') {
+    const b = await readJson();
+    const cur = expSlides(e.id).map((a) => a.id);
+    if (JSON.stringify([...(b.analysis_ids || [])].sort()) !== JSON.stringify([...cur].sort())) throw new HttpError(422, 'invalid_order', 'analysis_ids must list every slide of the experiment exactly once', { analysis_ids: cur });
+    b.analysis_ids.forEach((id, i) => (getA(id).order_in_experiment = i + 1));
+    return send(res, 200, expView(e.id));
+  }
+  if (sub === '/run' && m === 'GET') return send(res, 200, batchView(e.id));
+  if (sub === '/run' && m === 'POST') {
+    const b = await readJson();
+    checkKeys(b, ['only_missing', 'analysis_ids', 'overrides']);
+    if (isActiveJob(lastBatch(e.id))) throw new HttpError(409, 'batch_in_progress', 'a batch run of this experiment is already active');
+    let sl = expSlides(e.id);
+    if (b.analysis_ids) {
+      const extra = b.analysis_ids.filter((id) => !sl.some((a) => a.id === id));
+      if (extra.length) throw new HttpError(422, 'not_in_experiment', 'analysis_ids must be slides of this experiment', { analysis_ids: extra });
+      sl = sl.filter((a) => b.analysis_ids.includes(a.id));
+    }
+    const ov = b.overrides || {};
+    for (const [k, d] of Object.entries(ov)) checkDetection(d, `overrides.${k}`);
+    const plan = sl.map((a) => ({ analysis_id: a.id, name: a.name, order: a.order_in_experiment, skip: a.status === 'finalized' ? 'finalized' : b.only_missing && a.provenance.detection_ran_at ? 'already_detected' : null, override: a.id in ov }));
+    if (!plan.some((p) => !p.skip)) throw new HttpError(422, 'nothing_to_run', `no slide to run (all finalized${b.only_missing ? ' or already detected)' : ')'}`, { slides: plan });
+    const reqs = Object.fromEntries(sl.map((a) => [a.id, runReq(ov[a.id] || e.default_detection)]));
+    const job = { id: `job-${++store.seq}`, analysis_id: `experiment:${e.id}`, status: 'queued', progress: 0, message: 'queued', error: null, started_at: null, finished_at: null, kind: 'batch', parent_id: null, experiment_id: e.id, detail: { slides: plan, only_missing: !!b.only_missing, default_detection: clone(e.default_detection), overrides: clone(ov) } };
+    store.jobs.set(job.id, job);
+    e.status = 'running';
+    setTimeout(() => void runExperimentBatch(e, job, plan, reqs), 100);
+    return send(res, 200, job);
+  }
+  const series = () => {
+    const raw = url.searchParams.getAll('series');
+    const sel = (raw.length ? raw : ['red', 'green', 'yellow']).map((x) => x.split(',').map((c) => c.trim()));
+    if (sel.some((c) => c.some((x) => !['red', 'green', 'yellow'].includes(x)))) throw new HttpError(422, 'invalid_selection', 'unknown class');
+    return sel;
+  };
+  const stem = e.name.replace(/[^\w.-]+/g, '_');
+  if (sub === '/export.csv' && m === 'GET') {
+    const r = csvRows(e, series());
+    return send(res, 200, '﻿' + r.text, { 'Content-Type': 'text/csv', 'Content-Disposition': `attachment; filename="${stem}_experiment.csv"`, 'X-Slides-Included': String(r.included.length), 'X-Slides-Skipped': String(r.skipped.length) });
+  }
+  if (sub === '/provenance.json' && m === 'GET') {
+    const r = csvRows(e, series());
+    const lb = batchView(e.id);
+    const body = { exported_at: now(), app_version: 'mock', schema_version: 1, experiment: clone(e), csv: { header: r.text.split('\r\n')[0].split(','), included_slides: r.included, skipped_slides: r.skipped }, last_batch: lb.batch ? { job_id: lb.batch.id, status: lb.batch.status, message: lb.batch.message, error: lb.batch.error, summary: lb.summary } : null, slides: expSlides(e.id).map((a) => ({ analysis_id: a.id, name: a.name, order_in_experiment: a.order_in_experiment, grid: a.slide.grid, skipped_fields: (a.slide.skipped_fields || []).map((x) => x.field_index) })) };
+    return send(res, 200, JSON.stringify(body, null, 2), { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="${stem}_provenance.json"` });
+  }
+  throw new HttpError(404, 'not_found', `${m} /api${route}`);
 }
 
 // ------------------------------------------------------------------ http
@@ -927,7 +1220,7 @@ async function handle(req, res) {
     const body = JSON.parse((await readBody(req)).toString() || '{}');
     if (!store.sfAvailable) throw new HttpError(409, 'engine_unavailable', 'Spotiflow is not installed.');
     const id = `job-${++store.seq}`;
-    const job = { id, analysis_id: '', status: 'running', progress: 0, message: `downloading ${body.model_name}`, error: null, started_at: now(), finished_at: null };
+    const job = { id, analysis_id: 'engine-spotiflow', status: 'running', progress: 0, message: `downloading ${body.model_name}`, error: null, started_at: now(), finished_at: null, kind: 'prepare_model', parent_id: null, experiment_id: null, detail: null };
     store.jobs.set(id, job);
     const t = setInterval(() => {
       job.progress = Math.min(1, job.progress + 0.25);
@@ -957,6 +1250,12 @@ async function handle(req, res) {
   }
   if (route === '/lab-export' && m === 'POST') {
     const b = JSON.parse((await readBody(req)).toString() || '{}');
+    if ((b.experiment_id != null) === (b.analysis_ids != null)) throw new HttpError(422, 'invalid_request', 'give analysis_ids or experiment_id (not both)');
+    if (b.experiment_id != null) {
+      getE(b.experiment_id);
+      b.analysis_ids = expSlides(b.experiment_id).filter((a) => a.status === 'finalized').map((a) => a.id);
+      if (!b.analysis_ids.length) throw new HttpError(409, 'no_finalized_slides', 'the experiment has no finalized slide');
+    }
     const problems = [];
     for (const id of b.analysis_ids || []) {
       const a = store.analyses.get(id);
@@ -970,8 +1269,9 @@ async function handle(req, res) {
     const nm = b.style === 'counts' ? 'Counts_mock' : `${b.series}_mock`;
     return send(res, 200, 'mock-lab-export', { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${nm}.${ext}"` });
   }
+  if (route.startsWith('/experiments')) return handleExperiments(req, res, url, route, m);
   if (route === '/analyses' && m === 'GET')
-    return send(res, 200, [...store.analyses.values()].map((a) => ({ id: a.id, name: a.name, status: a.status, updated_at: a.updated_at, finalized_at: a.finalized_at, counts: a.objects.length ? counts(a).slide : null })));
+    return send(res, 200, [...store.analyses.values()].map((a) => ({ id: a.id, name: a.name, status: a.status, updated_at: a.updated_at, finalized_at: a.finalized_at, counts: a.objects.length ? counts(a).slide : null, experiment_id: a.experiment_id ?? null, order_in_experiment: a.order_in_experiment ?? 0 })));
   if (route === '/analyses' && m === 'POST') {
     await delay(300);
     const buf = (await readBody(req)).toString('latin1');
@@ -1293,6 +1593,11 @@ async function handle(req, res) {
   if ((mt = route.match(/^\/jobs\/([^/]+)(\/cancel)?$/))) {
     const j = store.jobs.get(mt[1]);
     if (!j) throw new HttpError(404, 'job_not_found', 'job not found');
+    if (mt[2] && m === 'POST' && j.kind === 'batch') {
+      // like the server: the slide being detected finishes, no further slide starts
+      if (j.status === 'running' || j.status === 'queued') store.cancelBatch.add(j.id);
+      return send(res, 200, j);
+    }
     if (mt[2] && m === 'POST') {
       if (j.status === 'running' || j.status === 'queued') {
         j.status = 'cancelled';

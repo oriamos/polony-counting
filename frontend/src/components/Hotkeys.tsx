@@ -28,6 +28,13 @@ export function Hotkeys() {
         S.patch({ helpOpen: !S.helpOpen });
         return;
       }
+      // ] = next unreviewed slide of the experiment (on its page, or while one of its slides is open)
+      if (k === ']' && !e.ctrlKey && !e.metaKey && !e.altKey && (S.mainView === 'experiment' ? !!S.experiment : !!a?.experiment_id)) {
+        e.preventDefault();
+        void S.openNextUnreviewed();
+        return;
+      }
+      if (S.mainView === 'experiment') return;
       if (!a) return;
       if ((e.ctrlKey || e.metaKey) && lower === 'z') {
         e.preventDefault();

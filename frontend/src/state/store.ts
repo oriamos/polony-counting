@@ -14,6 +14,10 @@ import type {
   EngineInfo,
   EngineName,
   EngineRunInfo,
+  ExperimentRun,
+  ExperimentRunRequest,
+  ExperimentSummary,
+  ExperimentView,
   RawDetection,
   ImageView,
   Job,
@@ -27,6 +31,10 @@ import type {
 import type { PreviewCell } from '../lib/reference';
 import { centerOn, fitBox, fitView, type View } from '../lib/geometry';
 import { storedGridCells } from '../lib/labgrid';
+import { isJobActive, nextUnreviewed } from '../lib/experiment';
+
+/** Poll interval for running jobs (detection, model preparation, experiment runs). */
+export const JOB_POLL_MS = 600;
 
 export type Tool =
   | 'select'
@@ -138,6 +146,17 @@ export interface AppState {
   theme: 'auto' | 'light' | 'dark';
   toasts: Toast[];
 
+  /** experiments (left rail) */
+  experiments: ExperimentSummary[];
+  experimentsError: string | null;
+  /** the selected experiment (kept while one of its slides is open) */
+  experiment: ExperimentView | null;
+  experimentRun: ExperimentRun | null;
+  experimentLoading: boolean;
+  experimentError: string | null;
+  /** what the main area shows */
+  mainView: 'analysis' | 'experiment';
+
   // actions
   toast: (kind: Toast['kind'], text: string) => void;
   dismissToast: (id: number) => void;
@@ -186,6 +205,18 @@ export interface AppState {
   setLayer: (p: Partial<EngineLayers>) => void;
   loadRaw: () => Promise<void>;
   qcSample: (n: number, seed: number) => Promise<void>;
+
+  refreshExperiments: () => Promise<void>;
+  /** select an experiment and show its page (null = close it) */
+  openExperiment: (eid: string | null) => Promise<void>;
+  /** reload the selected experiment (view + run); also starts polling while its batch runs */
+  refreshExperiment: () => Promise<void>;
+  setExperiment: (v: ExperimentView) => void;
+  runExperiment: (body?: ExperimentRunRequest) => Promise<boolean>;
+  cancelExperimentRun: () => Promise<void>;
+  pollExperimentRun: () => Promise<void>;
+  /** open the next slide that is not fully approved (after the open slide when it belongs to the experiment) */
+  openNextUnreviewed: () => Promise<void>;
 }
 
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
@@ -268,6 +299,14 @@ export const useApp = create<AppState>((set, get) => ({
   })(),
   toasts: [],
 
+  experiments: [],
+  experimentsError: null,
+  experiment: null,
+  experimentRun: null,
+  experimentLoading: false,
+  experimentError: null,
+  mainView: 'analysis',
+
   patch: (p) => set(p),
 
   toast: (kind, text) => {
@@ -318,6 +357,7 @@ export const useApp = create<AppState>((set, get) => ({
       return;
     }
     set({
+      mainView: 'analysis',
       loadingCurrent: true,
       loadError: null,
       selection: [],
@@ -554,8 +594,8 @@ export const useApp = create<AppState>((set, get) => ({
       let job = await api.detect(current.id, { ...detReq, preview_window: null });
       set({ job, preview: null });
       const id = current.id;
-      while (job.status === 'queued' || job.status === 'running') {
-        await new Promise((r) => setTimeout(r, 600));
+      while (isJobActive(job.status)) {
+        await new Promise((r) => setTimeout(r, JOB_POLL_MS));
         if (get().current?.id !== id) return;
         job = await api.job(job.id);
         set({ job });
@@ -568,6 +608,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
       if (get().current?.id === id) get().setAnalysis(a);
       if (job.status === 'done') get().toast('success', 'Detection finished');
+      else if (job.status === 'done_with_failures') get().toast('info', `Detection finished with failures: ${job.message}`);
       else if (job.status === 'failed') get().toast('error', `Detection failed: ${job.error ?? 'unknown error'}`);
     } catch (e) {
       set({ job: { id: '', analysis_id: current.id, status: 'failed', progress: 0, message: '', error: errText(e), started_at: null, finished_at: null } });
@@ -596,8 +637,8 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       let job = await api.prepareSpotiflow(name);
       set({ prepareJob: job });
-      while (job.status === 'queued' || job.status === 'running') {
-        await new Promise((r) => setTimeout(r, 500));
+      while (isJobActive(job.status)) {
+        await new Promise((r) => setTimeout(r, JOB_POLL_MS));
         job = await api.job(job.id);
         set({ prepareJob: job });
       }
@@ -722,6 +763,143 @@ export const useApp = create<AppState>((set, get) => ({
         } else get().toast('error', `reopen: ${errText(e)}`);
       }
     }),
+
+  refreshExperiments: async () => {
+    try {
+      set({ experiments: await api.listExperiments(), experimentsError: null });
+    } catch (e) {
+      set({ experimentsError: errText(e) });
+    }
+  },
+
+  openExperiment: async (eid) => {
+    requestedExperiment = eid;
+    if (!eid) {
+      runPollToken++;
+      set({ experiment: null, experimentRun: null, experimentError: null, mainView: 'analysis' });
+      return;
+    }
+    const same = get().experiment?.id === eid;
+    set({ mainView: 'experiment', experimentError: null, ...(same ? {} : { experiment: null, experimentRun: null, experimentLoading: true }) });
+    await get().refreshExperiment();
+    set({ experimentLoading: false });
+  },
+
+  refreshExperiment: async () => {
+    const target = requestedExperiment;
+    if (!target) return;
+    try {
+      const [v, run] = await Promise.all([api.getExperiment(target), api.experimentRun(target)]);
+      if (requestedExperiment !== target) return;
+      get().setExperiment(v);
+      set({ experimentRun: run, experimentError: null });
+      if (run.batch && isJobActive(run.batch.status)) void get().pollExperimentRun();
+    } catch (e) {
+      if (requestedExperiment === target) set({ experimentError: errText(e) });
+    }
+  },
+
+  setExperiment: (v) => {
+    set((s) => ({
+      experiment: v,
+      experiments: s.experiments.map((x) => (x.id === v.id ? { ...x, name: v.name, notes: v.notes, status: v.status, default_grid: v.default_grid, default_detection: v.default_detection, last_batch: v.last_batch, n_slides: v.slides.length } : x)),
+    }));
+  },
+
+  runExperiment: async (body = {}) => {
+    const e = get().experiment;
+    if (!e) return false;
+    try {
+      const job = await api.runExperiment(e.id, body);
+      set((s) => ({ experimentRun: { batch: job, slides: s.experimentRun?.slides ?? [], summary: null } }));
+      void get().pollExperimentRun();
+      return true;
+    } catch (err) {
+      get().toast('error', `run refused: ${errText(err)}`);
+      return false;
+    }
+  },
+
+  cancelExperimentRun: async () => {
+    const b = get().experimentRun?.batch;
+    if (!b || !isJobActive(b.status)) return;
+    try {
+      await api.cancelJob(b.id);
+      get().toast('info', 'Cancel requested: the slide being detected finishes, no further slide starts.');
+    } catch (e) {
+      get().toast('error', `cancel: ${errText(e)}`);
+    }
+  },
+
+  pollExperimentRun: async () => {
+    const eid = get().experiment?.id;
+    if (!eid) return;
+    const token = ++runPollToken;
+    let sig = '';
+    for (;;) {
+      let run: ExperimentRun;
+      try {
+        run = await api.experimentRun(eid);
+      } catch {
+        await new Promise((r) => setTimeout(r, JOB_POLL_MS * 3));
+        if (token !== runPollToken || get().experiment?.id !== eid) return;
+        continue;
+      }
+      if (token !== runPollToken || get().experiment?.id !== eid) return;
+      set((s) => ({
+        experimentRun: run,
+        experiments: s.experiments.map((x) => (x.id === eid ? { ...x, last_batch: run.batch, status: run.batch && isJobActive(run.batch.status) ? 'running' : 'open' } : x)),
+      }));
+      const active = !!run.batch && isJobActive(run.batch.status);
+      const next = JSON.stringify(run.summary) + (run.batch?.status ?? '');
+      if (next !== sig || !active) {
+        // a slide finished (or the run ended): its counts / status changed
+        sig = next;
+        try {
+          const v = await api.getExperiment(eid);
+          if (token !== runPollToken || get().experiment?.id !== eid) return;
+          get().setExperiment(v);
+        } catch {
+          /* next tick */
+        }
+      }
+      if (!active) {
+        const b = run.batch;
+        if (b?.status === 'done') get().toast('success', `Run finished: ${b.message}`);
+        else if (b?.status === 'done_with_failures') get().toast('error', `Run finished with failures: ${b.message}`);
+        else if (b?.status === 'cancelled') get().toast('info', `Run cancelled: ${b.message}`);
+        else if (b?.status === 'failed') get().toast('error', `Run interrupted: ${b.error ?? b.message}`);
+        void get().refreshExperiments();
+        void get().refreshList();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, JOB_POLL_MS));
+      if (token !== runPollToken || get().experiment?.id !== eid) return;
+    }
+  },
+
+  openNextUnreviewed: async () => {
+    const s = get();
+    const eid = s.mainView === 'experiment' ? s.experiment?.id : s.current?.experiment_id ?? s.experiment?.id;
+    if (!eid) return;
+    try {
+      const v = await api.getExperiment(eid); // approvals change while reviewing: never use a stale view
+      get().setExperiment(v);
+      const after = s.mainView === 'analysis' && s.current?.experiment_id === eid ? s.current.id : null;
+      const n = nextUnreviewed(v.slides, after);
+      if (!n) {
+        get().toast('success', `Every slide of "${v.name}" is approved or finalized`);
+        return;
+      }
+      await get().openAnalysis(n.id);
+    } catch (e) {
+      get().toast('error', `next unreviewed: ${errText(e)}`);
+    }
+  },
 }));
+
+let runPollToken = 0;
+/** the experiment the user selected last (responses for another one are dropped) */
+let requestedExperiment: string | null = null;
 
 export const liveObjects = (a: Analysis | null) => (a ? a.objects.filter((o) => !o.deleted) : []);

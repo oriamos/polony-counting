@@ -20,6 +20,13 @@ import type {
   SaveSelection,
   SaveSlideReport,
   EngineRunInfo,
+  ExperimentDeleteResult,
+  ExperimentGrid,
+  ExperimentImportResult,
+  ExperimentRun,
+  ExperimentRunRequest,
+  ExperimentSummary,
+  ExperimentView,
   RawDetection,
   DetectionRequest,
   HealthResponse,
@@ -146,7 +153,35 @@ export const api = {
   },
   setCsvMapping: (id: string, color_mapping: string | null) =>
     request<CsvImport>('PUT', `/csv-imports/${id}`, { color_mapping }),
+
+  // ---- experiments (docs/app/EXPERIMENTS_API.md)
+  listExperiments: () => request<ExperimentSummary[]>('GET', '/experiments'),
+  createExperiment: (body: { name: string; notes?: string; default_detection?: Partial<DetectionRequest>; default_grid?: ExperimentGrid | null }) =>
+    request<ExperimentView>('POST', '/experiments', body),
+  getExperiment: (eid: string) => request<ExperimentView>('GET', `/experiments/${eid}`),
+  /** only the keys present change; default_grid: null clears it, default_detection: null resets it */
+  updateExperiment: (
+    eid: string,
+    body: Partial<{ name: string; notes: string; default_detection: Partial<DetectionRequest> | null; default_grid: ExperimentGrid | null }>,
+  ) => request<ExperimentView>('PUT', `/experiments/${eid}`, body),
+  deleteExperiment: (eid: string, deleteSlides = false) =>
+    request<ExperimentDeleteResult>('DELETE', `/experiments/${eid}${deleteSlides ? '?delete_slides=true' : ''}`),
+  importToExperiment: (eid: string, files: File[]) => {
+    const fd = new FormData();
+    files.forEach((f) => fd.append('files', f, f.name));
+    return request<ExperimentImportResult>('POST', `/experiments/${eid}/import`, undefined, fd);
+  },
+  attachSlides: (eid: string, analysis_ids: string[]) => request<ExperimentView>('POST', `/experiments/${eid}/slides`, { analysis_ids }),
+  detachSlide: (eid: string, aid: string) => request<ExperimentView>('DELETE', `/experiments/${eid}/slides/${aid}`),
+  orderSlides: (eid: string, analysis_ids: string[]) => request<ExperimentView>('PUT', `/experiments/${eid}/order`, { analysis_ids }),
+  runExperiment: (eid: string, body: ExperimentRunRequest = {}) => request<Job>('POST', `/experiments/${eid}/run`, body),
+  experimentRun: (eid: string) => request<ExperimentRun>('GET', `/experiments/${eid}/run`),
 };
+
+/** series: each entry a comma-separated class set (red, green, yellow); omitted = red, green, yellow */
+const seriesQs = (series?: string[]) => (series?.length ? '?' + series.map((x) => `series=${encodeURIComponent(x)}`).join('&') : '');
+export const experimentCsvUrl = (eid: string, series?: string[]) => `/api/experiments/${eid}/export.csv${seriesQs(series)}`;
+export const experimentProvenanceUrl = (eid: string, series?: string[]) => `/api/experiments/${eid}/provenance.json${seriesQs(series)}`;
 
 export interface DisplayParams {
   lo: number | null;
@@ -173,12 +208,9 @@ export const labExportUrl = (id: string, series: string, format: LabFormat) =>
   `/api/analyses/${id}/lab-export?series=${encodeURIComponent(series)}&format=${format}`;
 
 /** Batch lab export. Resolves with the file; a 422 (or other error) rejects with ApiError carrying the server's messages. */
-export async function batchLabExport(body: {
-  analysis_ids: string[];
-  style: LabStyle;
-  series: string | null;
-  format: LabFormat;
-}): Promise<{ blob: Blob; filename: string }> {
+export async function batchLabExport(
+  body: { style: LabStyle; series: string | null; format: LabFormat } & ({ analysis_ids: string[] } | { experiment_id: string }),
+): Promise<{ blob: Blob; filename: string }> {
   let res: Response;
   try {
     res = await fetch('/api/lab-export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

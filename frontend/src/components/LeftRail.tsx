@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, batchLabExport, type LabFormat, type LabStyle } from '../api/client';
 import type { AnalysisStatus, CsvImport } from '../api/types';
 import { useApp } from '../state/store';
-import { BatchPanel } from './BatchPanel';
 import { OpenFromDisk } from './OpenFromDisk';
+import { ExperimentsList } from './ExperimentsList';
 
 export const STATUS_LABEL: Record<AnalysisStatus, string> = {
   created: 'created',
@@ -21,8 +21,8 @@ export function StatusChip({ status }: { status: AnalysisStatus }) {
 export function LeftRail() {
   return (
     <aside className="left" aria-label="Analyses">
+      <ExperimentsList />
       <AnalysesList />
-      <BatchPanel />
       <LabBatchPanel />
       <CsvPanel />
     </aside>
@@ -37,6 +37,10 @@ function AnalysesList() {
   const open = useApp((s) => s.openAnalysis);
   const refresh = useApp((s) => s.refreshList);
   const del = useApp((s) => s.deleteAnalysis);
+  const mainView = useApp((s) => s.mainView);
+  const experiments = useApp((s) => s.experiments);
+  const openExp = useApp((s) => s.openExperiment);
+  const expName = new Map(experiments.map((e) => [e.id, e.name]));
   return (
     <section className="rail-section">
       <header className="rail-head">
@@ -57,7 +61,7 @@ function AnalysesList() {
       {!loading && !err && analyses.length === 0 && <div className="empty">No analyses yet. Drop 1–2 TIFF files above to start.</div>}
       <ul className="alist">
         {analyses.map((a) => (
-          <li key={a.id} className={current?.id === a.id ? 'active' : ''}>
+          <li key={a.id} className={current?.id === a.id && mainView === 'analysis' ? 'active' : ''}>
             <button className="alist-main" onClick={() => void open(a.id)} data-testid={`analysis-${a.id}`}>
               <span className="alist-name">{a.name}</span>
               <span className="alist-meta">
@@ -68,6 +72,22 @@ function AnalysesList() {
                   </span>
                 )}
               </span>
+              {a.experiment_id && (
+                <span
+                  className="alist-exp small"
+                  role="link"
+                  tabIndex={-1}
+                  title="Slide of this experiment (click to open the experiment)"
+                  data-testid={`analysis-exp-${a.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void openExp(a.experiment_id as string);
+                  }}
+                >
+                  ▤ {expName.get(a.experiment_id) ?? 'experiment'}
+                  {a.order_in_experiment ? ` · #${a.order_in_experiment}` : ''}
+                </span>
+              )}
             </button>
             <button
               className="btn sm ghost danger-hover"
