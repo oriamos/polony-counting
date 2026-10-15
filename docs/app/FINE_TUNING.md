@@ -97,8 +97,10 @@ python -m polony_app.ml train --snapshot <v> --base general|<registry id>|<model
 ```
 * **Trained at the snapshot's configuration.** Images are normalised with the page lo/hi and downsampled by the snapshot's `downscale`; Spotiflow's own
   per-image normalisation is switched off (`normalizer=None`). The registry entry records `inference_config` = `{downscale, normaliser}`, the lo/hi policy and the
-  per-page lo/hi. **Run the model in the app with the same downscale and normaliser** (`valid_unsaturated`); `resolve_model()` returns this configuration
-  (`ModelRef.inference_config`, `.trained_downscale`, `.config_warning(downscale, normaliser)`) so the engine/app can warn when they differ.
+  per-page lo/hi. **Run the model with the same downscale and normaliser** (`valid_unsaturated`). `resolve_model()` returns this configuration
+  (`ModelRef.inference_config`, `.trained_downscale`, `.config_warning(downscale, normaliser)`) and the training/evaluation/promotion CLI checks it.
+  The current React/app detection path is not yet wired to this registry resolver; see [TRAINING_GUIDE.md](TRAINING_GUIDE.md#714-promote-only-after-accepting-the-evidence)
+  for the exact-ID/API workaround and do not assume that promotion changes the app's default `general` model.
 * **Small-data safeguard.** `train` **refuses** (unless `--allow-small`, which is recorded as a warning in the entry) when the training split has fewer than 4
   independent groups or fewer than 20 crops.
 * **Best epoch is registered, last epoch is reported.** The weights are Spotiflow's `best.pt` (lowest validation loss). The entry's `metrics.training`
@@ -121,8 +123,10 @@ candidate **and** the model it would replace (the active one, else `general`). `
 current configuration), and refuses a candidate with lower F1 (at 10 px). It also refuses when the candidate's configuration (downscale, normaliser) differs from the **app's current inference
 configuration** (`--app-downscale`, `--app-normaliser`; default: the app's default Spotiflow settings) unless `--acknowledge-config` — then the analyses must be run at the model's downscale.
 `--force --reason "..."` overrides everything and is recorded.
-`rollback` restores the previously active model (or the app default). The app resolves `SpotiflowParams.model_name` through `polony_app.ml.registry.resolve_model(name, data_dir)`:
-a registry id → its weights folder (sha256 re-checked), `"active"` → the promoted model, anything else → an official pretrained name.
+`rollback` restores the previously active registry entry (or no promoted registry entry). The CLI resolves model names through
+`polony_app.ml.registry.resolve_model(name, data_dir)`: a registry id → its weights folder (sha256 re-checked), `"active"` → the promoted model,
+anything else → an official pretrained name. **Current limitation:** app detection itself does not call this resolver, so promotion alone does not
+route the React/app detection flow to the candidate. See [TRAINING_GUIDE.md](TRAINING_GUIDE.md#714-promote-only-after-accepting-the-evidence).
 
 ## Hardware
 CPU is the default and enough for small corrections sets (the opt-in test fine-tunes a tiny model for 2 epochs in about a second). Real pretrained-size models on many crops are slower on CPU; `--device auto` uses CUDA/MPS when present.
