@@ -1,4 +1,4 @@
-import type { Region } from '../api/types';
+import type { Analysis, GridSpec as ApiGridSpec, Region } from '../api/types';
 import { pointInPolygon, rectPolygon, type Poly } from './geometry';
 
 /** Template columns end at field 24; the server refuses larger numbers. */
@@ -17,6 +17,11 @@ export interface GridSpec {
   order: GridOrder;
   corner: StartCorner;
   firstIndex: number;
+  /** seed of the random shift (null/absent = not randomised); the server picks it on Randomise */
+  seed?: number | null;
+  /** shift of the whole grid from (originX, originY), px; effective origin = origin + shift */
+  shiftDx?: number;
+  shiftDy?: number;
 }
 
 export interface GridCell {
@@ -31,6 +36,8 @@ export interface GridCell {
  * row; col-major: walk down a column first. The start corner sets the direction of both walks. No serpentine.
  */
 export function generateGrid(g: GridSpec): GridCell[] {
+  const ox = g.originX + (g.shiftDx ?? 0);
+  const oy = g.originY + (g.shiftDy ?? 0);
   const rows = Math.max(0, Math.floor(g.rows));
   const cols = Math.max(0, Math.floor(g.cols));
   const rev = {
@@ -46,8 +53,99 @@ export function generateGrid(g: GridSpec): GridCell[] {
     row,
     col,
     index: g.firstIndex + n,
-    polygon: rectPolygon(g.originX + col * g.cellW, g.originY + row * g.cellH, g.originX + (col + 1) * g.cellW, g.originY + (row + 1) * g.cellH),
+    polygon: rectPolygon(ox + col * g.cellW, oy + row * g.cellH, ox + (col + 1) * g.cellW, oy + (row + 1) * g.cellH),
   }));
+}
+
+/** The grid cell containing image point (x, y) (cells are half-open [x0, x1) x [y0, y1)); null outside the grid. */
+export function cellAt(g: GridSpec, x: number, y: number): GridCell | null {
+  const rows = Math.max(0, Math.floor(g.rows));
+  const cols = Math.max(0, Math.floor(g.cols));
+  if (!(g.cellW > 0 && g.cellH > 0)) return null;
+  const col = Math.floor((x - g.originX - (g.shiftDx ?? 0)) / g.cellW);
+  const row = Math.floor((y - g.originY - (g.shiftDy ?? 0)) / g.cellH);
+  if (row < 0 || col < 0 || row >= rows || col >= cols) return null;
+  return generateGrid(g).find((c) => c.row === row && c.col === col) ?? null;
+}
+
+/** Small seeded PRNG (floats in [0, 1)); bit-identical to `mulberry32` in src/polony_app/fields/grid.py. */
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** One axis of randomShift: whole pixels, uniform over the slack; 0 when the grid is larger than the image. */
+function axisShift(origin: number, n: number, cell: number, size: number, u: number): number {
+  const lo = -0.5 - origin;
+  const hi = size - 0.5 - n * cell - origin;
+  if (hi < lo) return 0;
+  const a = Math.ceil(lo), b = Math.floor(hi);
+  if (a > b) return lo; // less than one pixel of slack: put it at the edge
+  return a + Math.min(b - a, Math.floor(u * (b - a + 1))) + 0; // + 0 turns -0 into 0
+}
+
+/**
+ * Random position for the whole grid, relative to (originX, originY): cell size and count never change and the grid
+ * stays inside the image ([-0.5, W-0.5] in the pixel-centre convention). Mirrors `random_shift` on the server, which
+ * is authoritative (it picks the seed on Randomise); with `mulberry32(seed)` both give the same shift.
+ */
+export function randomShift(g: GridSpec, imageW: number, imageH: number, rng: () => number): { dx: number; dy: number } {
+  const ux = rng();
+  const uy = rng();
+  return { dx: axisShift(g.originX, Math.floor(g.cols), g.cellW, imageW, ux), dy: axisShift(g.originY, Math.floor(g.rows), g.cellH, imageH, uy) };
+}
+
+/** Server spec -> form spec. */
+export function fromApiGrid(s: ApiGridSpec): GridSpec {
+  return {
+    rows: s.rows,
+    cols: s.cols,
+    cellW: s.cell_w,
+    cellH: s.cell_h,
+    originX: s.origin_x,
+    originY: s.origin_y,
+    order: s.order,
+    corner: s.corner,
+    firstIndex: s.first_index,
+    seed: s.seed,
+    shiftDx: s.shift_dx,
+    shiftDy: s.shift_dy,
+  };
+}
+
+/** Form spec -> server spec. */
+export function toApiGrid(g: GridSpec): ApiGridSpec {
+  return {
+    rows: g.rows,
+    cols: g.cols,
+    cell_w: g.cellW,
+    cell_h: g.cellH,
+    origin_x: g.originX,
+    origin_y: g.originY,
+    order: g.order,
+    corner: g.corner,
+    first_index: g.firstIndex,
+    seed: g.seed ?? null,
+    shift_dx: g.shiftDx ?? 0,
+    shift_dy: g.shiftDy ?? 0,
+  };
+}
+
+export type GridFieldState = 'on' | 'off' | 'missing';
+
+/** On/off state of every cell of the stored grid: on = a field region exists, off = remembered in skipped_fields,
+ * missing = neither (the region was deleted by hand; re-apply the grid to get it back). */
+export function storedGridCells(a: Analysis): (GridCell & { state: GridFieldState })[] {
+  const g = a.slide.grid;
+  if (!g) return [];
+  const on = new Set(a.regions.filter(isLabField).map((r) => r.field_index as number));
+  const off = new Set((a.slide.skipped_fields ?? []).map((s) => s.field_index));
+  return generateGrid(fromApiGrid(g)).map((c) => ({ ...c, state: on.has(c.index) ? 'on' : off.has(c.index) ? 'off' : 'missing' }));
 }
 
 /** Default grid for an image: 4 x 7 cells of ~316 px (the researcher's test image), centred, oriented by aspect. */

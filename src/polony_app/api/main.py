@@ -29,6 +29,7 @@ from polony_app.schemas import (
     ChannelRole,
     DetectionRequest,
     EngineName,
+    GridSpec,
     JobStatus,
     Region,
     ReportingMode,
@@ -68,6 +69,14 @@ class OpenPathBody(BaseModel):
 class GridSelectionBody(BaseModel):
     field_index: int
     counted: bool
+
+
+class GridBody(BaseModel):
+    grid: Optional[GridSpec] = None    # null = remove the grid (its unapproved field regions) and clear the spec
+    randomise: bool = False            # server picks a random shift (and a seed unless `seed` is given)
+    seed: Optional[int] = None         # with randomise: reproduce a given shift
+    replace: bool = True               # drop lab-field regions / skipped fields that are not part of the new grid
+    force: bool = False                # clearing: also remove approved grid fields
 
 
 class CountSelectionBody(BaseModel):
@@ -462,17 +471,93 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                 regs = [r for r in a.regions if r.kind == RegionKind.counting and r.field_index is not None] + [new]
                 regs.sort(key=lambda r: r.field_index or 0)
                 regions = regs + [r for r in a.regions if not (r.kind == RegionKind.counting and r.field_index is not None)]
-                engine.set_regions(st, regions)
-                st.analysis.slide.skipped_fields = [s_ for s_ in st.analysis.slide.skipped_fields if s_.field_index != fi]
+                engine.set_regions(st, regions, {"grid": a.slide.grid, "skipped_fields": [
+                    s_ for s_ in a.slide.skipped_fields if s_.field_index != fi]})
             else:
                 if cur is None:
                     if skipped:
                         return _respond(st)
                     raise ReviewError("unknown_field", f"field {fi} is not part of the grid", 404)
                 sk = SkippedField(field_index=fi, name=cur.name, polygon=[tuple(p) for p in cur.polygon])
-                engine.set_regions(st, [r for r in a.regions if r.id != cur.id])
-                st.analysis.slide.skipped_fields = [s_ for s_ in st.analysis.slide.skipped_fields
-                                                    if s_.field_index != fi] + [sk]
+                engine.set_regions(st, [r for r in a.regions if r.id != cur.id], {"grid": a.slide.grid, "skipped_fields": [
+                    s_ for s_ in a.slide.skipped_fields if s_.field_index != fi] + [sk]})
+            return _respond(st)
+
+    @api.put("/analyses/{aid}/grid")
+    def put_grid(aid: str, body: GridBody, raw: Any = Depends(_raw_body)):
+        """Store the counting-grid spec and (re)create the lab field regions from it in one undoable step.
+        Per field index: a field that was switched off stays off (its geometry in slide.skipped_fields follows the
+        grid), a field that exists keeps its region id, so its approval survives only if its polygon did not move
+        (approval fingerprint). randomise=true: the server shifts the whole grid to a random position inside the
+        image (cell size and count unchanged) and records the seed. grid=null: removes the grid."""
+        from polony_app.fields import grid as grid_mod
+        from polony_app.schemas import RegionKind, SkippedField
+
+        unk = unknown_keys(GridBody, raw)
+        if unk:
+            return err(422, "unknown_fields", "unknown field(s): " + ", ".join(unk), {"fields": unk})
+        with store.edit(aid_ok(aid)) as st:
+            engine.guard_editable(st)
+            a = st.analysis
+            is_field = lambda r: r.kind == RegionKind.counting and r.field_index is not None  # noqa: E731
+            others = [r for r in a.regions if not is_field(r)]
+            fields = [r for r in a.regions if is_field(r)]
+            if body.grid is None and not body.randomise:
+                if a.slide.grid is None:
+                    return _respond(st)
+                own = {fi for fi, *_ in grid_mod.spec_cells(a.slide.grid)}
+                approved = sorted(r.field_index for r in fields if r.field_index in own and r.approved)
+                if approved and not body.force:
+                    return err(409, "grid_fields_approved",
+                               f"approved grid field(s) {', '.join(map(str, approved))}: unapprove them first "
+                               "(or pass force=true)", {"fields": approved})
+                engine.set_regions(st, [r for r in fields if r.field_index not in own] + others, {
+                    "grid": None, "skipped_fields": [s_ for s_ in a.slide.skipped_fields if s_.field_index not in own]})
+                return _respond(st)
+            spec = (body.grid or a.slide.grid)
+            if spec is None:
+                return err(422, "no_grid", "randomise needs a grid: send one or apply a grid first")
+            spec = spec.model_copy(deep=True)
+            prob = grid_mod.spec_problem(spec)
+            if prob:
+                return err(422, "invalid_grid", prob)
+            if body.randomise:
+                if a.image is None:
+                    return err(409, "no_image", "analysis has no image")
+                if body.seed is not None and not (0 <= body.seed < 2**32):
+                    return err(422, "invalid_grid", "seed must be in 0..2^32-1")
+                import secrets
+
+                spec.seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
+                spec.shift_dx, spec.shift_dy = grid_mod.random_shift(spec, a.image.width, a.image.height, spec.seed)
+            cells = grid_mod.spec_cells(spec)
+            own = {fi for fi, *_ in cells}
+            by_index: dict[int, Region] = {}
+            for r in fields:
+                by_index.setdefault(r.field_index, r)          # a duplicated field number: the first one is kept
+            skipped = {s_.field_index: s_ for s_ in a.slide.skipped_fields}
+            taken = {r.id for r in a.regions}
+            grid_regions: list[Region] = []
+            new_skipped: list[SkippedField] = []
+            for fi, _r, _c, poly in cells:
+                cur = by_index.get(fi)
+                if cur is not None:
+                    grid_regions.append(Region(id=cur.id, kind=RegionKind.counting, name=cur.name, field_index=fi,
+                                               polygon=[tuple(p) for p in poly]))
+                elif fi in skipped:
+                    new_skipped.append(SkippedField(field_index=fi, name=skipped[fi].name, polygon=[tuple(p) for p in poly]))
+                else:
+                    rid = new_id()
+                    while rid in taken:
+                        rid = new_id()
+                    taken.add(rid)
+                    grid_regions.append(Region(id=rid, kind=RegionKind.counting, name=f"Field-{fi}", field_index=fi,
+                                               polygon=[tuple(p) for p in poly]))
+            kept = [] if body.replace else [r for r in fields if r.field_index not in own]
+            kept_skipped = [] if body.replace else [s_ for s_ in a.slide.skipped_fields if s_.field_index not in own]
+            regs = sorted(grid_regions + kept, key=lambda r: r.field_index or 0)
+            engine.set_regions(st, regs + others, {"grid": spec, "skipped_fields": sorted(
+                kept_skipped + new_skipped, key=lambda s_: s_.field_index)})
             return _respond(st)
 
     @api.post("/analyses/{aid}/save-slide")

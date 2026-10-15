@@ -1,10 +1,16 @@
 """Counting grid geometry (canonical pixel coordinates; pixel centre = integer)."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
+
+if TYPE_CHECKING:  # pragma: no cover
+    from polony_app.schemas import GridSpec
+
+MAX_FIELD = 24   # the lab template has columns Field1..Field24
 
 
 @dataclass(frozen=True)
@@ -84,3 +90,83 @@ def pearson(a: Sequence[float], b: Sequence[float]) -> Optional[float]:
     if np.std(x) == 0 or np.std(y) == 0:
         return None
     return float(np.corrcoef(x, y)[0, 1])
+
+
+# ------------------------------------------------------------------ generated grid (GridSpec)
+# Mirrors frontend/src/lib/labgrid.ts (generateGrid, randomShift, mulberry32): same numbering, same polygons, and
+# the same seed gives the same shift in both. The server is authoritative.
+def spec_cells(spec: "GridSpec") -> list[tuple[int, int, int, list[list[float]]]]:
+    """(field_index, row, col, polygon) of every cell, in numbering order. Polygons are at the effective origin
+    (origin + shift) and are not clipped to the image."""
+    rows, cols = max(0, int(spec.rows)), max(0, int(spec.cols))
+    rev_r = spec.corner in ("bl", "br")    # numbering starts at the bottom
+    rev_c = spec.corner in ("tr", "br")    # numbering starts at the right
+    r_order = [rows - 1 - i if rev_r else i for i in range(rows)]
+    c_order = [cols - 1 - i if rev_c else i for i in range(cols)]
+    if spec.order == "row-major":
+        seq = [(r, c) for r in r_order for c in c_order]
+    else:
+        seq = [(r, c) for c in c_order for r in r_order]
+    ox, oy = spec.origin_x + spec.shift_dx, spec.origin_y + spec.shift_dy
+    out = []
+    for n, (r, c) in enumerate(seq):
+        x0, y0 = ox + c * spec.cell_w, oy + r * spec.cell_h
+        x1, y1 = ox + (c + 1) * spec.cell_w, oy + (r + 1) * spec.cell_h
+        out.append((spec.first_index + n, r, c, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]))
+    return out
+
+
+def spec_problem(spec: "GridSpec") -> Optional[str]:
+    """Why a grid spec cannot be applied (None = fine)."""
+    nums = (spec.cell_w, spec.cell_h, spec.origin_x, spec.origin_y, spec.shift_dx, spec.shift_dy)
+    if not all(math.isfinite(v) for v in nums):
+        return "grid sizes and positions must be finite numbers"
+    if spec.rows < 1 or spec.cols < 1:
+        return "rows and cols must be >= 1"
+    if spec.cell_w <= 0 or spec.cell_h <= 0:
+        return "cell_w and cell_h must be > 0"
+    if spec.first_index < 1:
+        return "first_index must be >= 1"
+    last = spec.first_index + spec.rows * spec.cols - 1
+    if last > MAX_FIELD:
+        return f"field numbers {spec.first_index}..{last} exceed {MAX_FIELD} (the lab template ends at field {MAX_FIELD})"
+    if spec.seed is not None and not (0 <= spec.seed < 2**32):
+        return "seed must be in 0..2^32-1"
+    return None
+
+
+def mulberry32(seed: int):
+    """Small seeded PRNG (uniform floats in [0, 1)), bit-identical to the TypeScript one in labgrid.ts."""
+    m = 0xFFFFFFFF
+    state = seed & m
+
+    def nxt() -> float:
+        nonlocal state
+        state = (state + 0x6D2B79F5) & m
+        t = state
+        t = ((t ^ (t >> 15)) * (t | 1)) & m
+        t = (((t + (((t ^ (t >> 7)) * (t | 61)) & m)) & m) ^ t) & m
+        return ((t ^ (t >> 14)) & m) / 4294967296
+
+    return nxt
+
+
+def _axis_shift(origin: float, n: int, cell: float, size: int, u: float) -> float:
+    """Shift along one axis keeping the whole grid on the image ([-0.5, size-0.5], pixel-centre convention).
+    Whole pixels, uniform over the slack; the slack is 0 when the grid is larger than the image."""
+    lo = -0.5 - origin
+    hi = size - 0.5 - n * cell - origin
+    if hi < lo:
+        return 0.0
+    a, b = math.ceil(lo), math.floor(hi)
+    if a > b:                 # less than one pixel of slack: put it at the edge
+        return float(lo)
+    return float(a + min(b - a, int(u * (b - a + 1))))
+
+
+def random_shift(spec: "GridSpec", width: int, height: int, seed: int) -> tuple[float, float]:
+    """(dx, dy) relative to the spec's origin: cell size and count never change, the grid stays inside the image."""
+    rng = mulberry32(seed)
+    ux, uy = rng(), rng()
+    return (_axis_shift(spec.origin_x, spec.cols, spec.cell_w, width, ux),
+            _axis_shift(spec.origin_y, spec.rows, spec.cell_h, height, uy))

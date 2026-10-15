@@ -8,6 +8,7 @@ import type {
   CountsResponse,
   CsvImport,
   DetectedObject,
+  GridRequest,
   DetectionRequest,
   ConsensusSummaryResponse,
   EngineInfo,
@@ -25,6 +26,7 @@ import type {
 } from '../api/types';
 import type { PreviewCell } from '../lib/reference';
 import { centerOn, fitBox, fitView, type View } from '../lib/geometry';
+import { storedGridCells } from '../lib/labgrid';
 
 export type Tool =
   | 'select'
@@ -34,7 +36,9 @@ export type Tool =
   | 'draw-count-poly'
   | 'draw-excl-rect'
   | 'draw-excl-poly'
-  | 'preview-window';
+  | 'preview-window'
+  /** click a cell of the stored grid to switch it on/off for counting */
+  | 'grid-pick';
 
 export interface Toast {
   id: number;
@@ -113,6 +117,8 @@ export interface AppState {
   csvImports: CsvImport[];
   /** grid-field generator preview polygons (not yet applied) */
   gridPreview: { index: number; polygon: [number, number][]; flag?: boolean }[] | null;
+  /** field number of the stored-grid cell under the cursor (grid-pick tool) */
+  gridHover: number | null;
 
   /** researcher reference marks (null until loaded / not available) */
   reference: ReferenceInfo | null;
@@ -145,6 +151,12 @@ export interface AppState {
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   saveRegions: (regions: Region[]) => Promise<void>;
+  /** PUT /grid: store the grid spec and (re)create its field regions; null on refusal (toast shown) */
+  putGrid: (body: GridRequest) => Promise<Analysis | null>;
+  /** switch one grid field on/off for counting (PUT /grid-selection) */
+  setGridField: (field: number, counted: boolean) => Promise<void>;
+  /** grid-pick keyboard: A all, N none, I invert */
+  setGridFields: (mode: 'all' | 'none' | 'invert') => Promise<void>;
   setSelection: (ids: string[]) => void;
   toggleSelect: (id: string) => void;
   setTool: (t: Tool) => void;
@@ -234,6 +246,7 @@ export const useApp = create<AppState>((set, get) => ({
   regionErrors: {},
   csvImports: [],
   gridPreview: null,
+  gridHover: null,
 
   reference: null,
   showReference: false,
@@ -318,6 +331,7 @@ export const useApp = create<AppState>((set, get) => ({
       tool: 'select',
       regionErrors: {},
       gridPreview: null,
+      gridHover: null,
       reference: null,
       showReference: false,
       refPlane: null,
@@ -449,10 +463,50 @@ export const useApp = create<AppState>((set, get) => ({
       }
     }),
 
+  putGrid: (body) =>
+    serial(async () => {
+      const a = get().current;
+      if (!a) return null;
+      set((s) => ({ busy: s.busy + 1 }));
+      try {
+        const next = await api.putGrid(a.id, body);
+        get().setAnalysis(next);
+        return next;
+      } catch (e) {
+        get().toast('error', `grid: ${errText(e)}`);
+        return null;
+      } finally {
+        set((s) => ({ busy: s.busy - 1 }));
+      }
+    }),
+
+  setGridField: (field, counted) =>
+    serial(async () => {
+      const a = get().current;
+      if (!a) return;
+      try {
+        get().setAnalysis(await api.setGridField(a.id, field, counted));
+      } catch (e) {
+        get().toast('error', `field ${field}: ${errText(e)}`);
+      }
+    }),
+
+  setGridFields: async (mode) => {
+    const a = get().current;
+    if (!a) return;
+    // one PUT /grid-selection per field that changes (each is its own undo step)
+    for (const c of storedGridCells(a)) {
+      if (c.state === 'missing') continue;
+      const on = c.state === 'on';
+      const want = mode === 'all' ? true : mode === 'none' ? false : !on;
+      if (want !== on) await get().setGridField(c.index, want);
+    }
+  },
+
   setSelection: (ids) => set({ selection: ids }),
   toggleSelect: (id) =>
     set((s) => ({ selection: s.selection.includes(id) ? s.selection.filter((x) => x !== id) : [...s.selection, id] })),
-  setTool: (t) => set({ tool: t, splitPts: [] }),
+  setTool: (t) => set({ tool: t, splitPts: [], gridHover: null }),
 
   setImageView: (v) => set({ imageView: v, autoRange: null }),
   setDisplay: (patch) => set((s) => ({ display: { ...s.display, [s.imageView]: { ...s.display[s.imageView], ...patch } } })),

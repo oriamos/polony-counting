@@ -81,6 +81,24 @@ with `PUT /regions` as a counting region 'Chamber'). Method: the scanner backgro
 whose 20th-percentile background is below 60 % of the chamber median, >= 1 % of the area; a hint only. On the 8 real slides: chamber 81.5-81.8 % of
 the frame, 95-100 % of the researcher's marks inside the 40-px counting area, bubble suggestion at the bottom rows (0-3 marks inside).
 
+## Generated grid (`PUT /api/analyses/{id}/grid`)
+The grid made with **Generate grid…** is stored as `slide.grid` (`GridSpec`: `rows, cols, cell_w, cell_h, origin_x, origin_y,
+order (row-major|col-major), corner (tl|tr|bl|br), first_index, seed, shift_dx, shift_dy`). Cell polygons are derived from it
+(`fields/grid.py spec_cells`, mirrored by `frontend/src/lib/labgrid.ts`): effective origin = origin + shift, not clipped.
+Body `{grid, randomise=false, seed=null, replace=true, force=false}`, response = the analysis. The call stores the spec and
+rebuilds the lab field regions in one undoable action (undo also restores `slide.grid` and `slide.skipped_fields`):
+a field that exists keeps its region id (approval survives only if the polygon is unchanged, via the approval fingerprint),
+a switched-off field stays off with its remembered geometry moved along, new numbers are created on. `replace=false` keeps
+lab fields whose numbers are not in the grid. `randomise=true` (grid omitted = the stored one): the server draws a seed
+(or uses `seed`) and sets `shift_dx/dy` = whole pixels, uniform over the room left between the grid and the image
+border ([-0.5, W-0.5]), 0 on an axis where the grid is larger than the image; generator = mulberry32, identical in Python
+and TypeScript. `grid=null` removes the grid's field regions and skipped fields and clears the spec (409
+`grid_fields_approved` while one is approved, unless `force`). 422 `invalid_grid` (sizes, field numbers > 24),
+409 `analysis_finalized`. `PUT /settings` cannot change `slide.grid`.
+
+Provenance: `provenance.json` -> `slide.grid` holds the spec; a randomised grid is reproducible from `origin_x/y`, `seed`
+and the image size (`random_shift(spec, W, H, seed)`).
+
 ## Other additions
 * Ingest: a two-page ImageJ stack whose Info hint contains '635' gets `suggested_role` red (page 0) / green (page 1); `role` stays null and
   `role_confirmed` false; a warning says the suggestion comes from 8 validated GenePix stacks and that RGB composites are clipped.

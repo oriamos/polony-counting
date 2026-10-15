@@ -17,6 +17,7 @@ const ROWS: [string, string][] = [
   ['J / K', 'Next / previous item in the review queue'],
   ['Ctrl+Z / Ctrl+Shift+Z', 'Undo / redo (server-side)'],
   ['Polygon tool', 'Click vertices; double-click, Enter or click the first point to finish; Backspace removes last vertex; Esc cancels'],
+  ['Grid pick tool', 'Click a grid field to count it, click again to skip it; A all, N none, I invert; Esc leaves the tool'],
   ['Region vertex', 'Drag to move; double-click an edge to add; Alt+click to remove'],
   ['Esc', 'Cancel current tool / clear selection'],
   ['?', 'This help'],

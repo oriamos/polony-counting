@@ -8,6 +8,7 @@ import type {
   CompareResponse,
   ExaminedFieldsResult,
   FieldImportRequest,
+  GridRequest,
   ReferenceInfo,
   CountsResponse,
   CsvImport,
@@ -99,6 +100,7 @@ export const api = {
   openPath: (path: string, name?: string) => request<Analysis>('POST', '/analyses/open-path', { path, name }),
   setGridField: (id: string, field_index: number, counted: boolean) =>
     request<Analysis>('PUT', `/analyses/${id}/grid-selection`, { field_index, counted }),
+  putGrid: (id: string, body: GridRequest) => request<Analysis>('PUT', `/analyses/${id}/grid`, body),
   saveSlide: (id: string, selections: SaveSelection[], output_dir?: string) =>
     request<SaveSlideReport>('POST', `/analyses/${id}/save-slide`, { selections, output_dir: output_dir || null }),
   setChannels: (id: string, mapping: { index: number; role: 'red' | 'green' | 'ignore' }[]) =>

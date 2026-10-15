@@ -387,6 +387,24 @@ class SkippedField(BaseModel):
     polygon: list[tuple[float, float]]
 
 
+class GridSpec(BaseModel):
+    """Counting grid as the researcher generated it (rows x cols cells of cell_w x cell_h px). The cell polygons are
+    derived from it (fields/grid.py `spec_cells`, mirrored by frontend/src/lib/labgrid.ts). Effective top-left corner
+    = (origin_x + shift_dx, origin_y + shift_dy); `seed` is set when the shift was randomised (reproducible)."""
+    rows: int
+    cols: int
+    cell_w: float
+    cell_h: float
+    origin_x: float
+    origin_y: float
+    order: Literal["row-major", "col-major"] = "row-major"   # numbering walks along rows first / down columns first
+    corner: Literal["tl", "tr", "bl", "br"] = "tl"           # start corner of the numbering
+    first_index: int = 1                                      # field number of the first cell
+    seed: Optional[int] = None                                # seed of the random shift (None = not randomised)
+    shift_dx: float = 0.0
+    shift_dy: float = 0.0
+
+
 class SlideMeta(BaseModel):
     """Explicit scientific inputs. None = not provided (gates concentration)."""
     slide_id: Optional[str] = None          # lab slide ID, e.g. "AI_A" (sample + "_" + replicate letter)
@@ -406,6 +424,7 @@ class SlideMeta(BaseModel):
     concentration_formula_confirmed: bool = False  # researcher must confirm formula+geometry; gates ALL concentration output
     csv_color_mapping: Optional[dict[str, str]] = None  # e.g. {"T7A": "red"} ONLY if user set
     skipped_fields: list[SkippedField] = []   # grid cells switched off (blank in the CSVs); see /grid-selection
+    grid: Optional[GridSpec] = None           # the applied counting grid; set only through PUT /grid
 
 
 class Provenance(BaseModel):

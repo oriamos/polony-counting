@@ -4,6 +4,7 @@ import type { ConsensusStatus, DetectedObject, EmbeddedRoi, RawDetection, Region
 import { objectStatus, triangleD } from '../lib/consensus';
 import { glyphFor, glyphPath, ringRadiusImage } from '../lib/glyph';
 import { polygonBounds } from '../lib/geometry';
+import { storedGridCells } from '../lib/labgrid';
 
 /** Region status shown in badges and styling. */
 export type RegionStatus = 'unreviewed' | 'inspected' | 'approved' | 'exclusion';
@@ -326,6 +327,55 @@ export const RegionLabelsLayer = memo(function RegionLabelsLayer({ regions, scal
     </g>
   );
 });
+
+/**
+ * Every cell of the APPLIED grid (slide.grid): counted = solid outline + field number, skipped = dotted grey,
+ * hovered (grid-pick tool) = highlighted. The field regions themselves are drawn by RegionsLayer as usual.
+ */
+export function GridCellsLayer({ scale }: { scale: number }) {
+  const a = useApp((s) => s.current);
+  const hover = useApp((s) => s.gridHover);
+  const picking = useApp((s) => s.tool === 'grid-pick');
+  if (!a?.slide.grid) return null;
+  const k = 1 / scale;
+  const cells = storedGridCells(a);
+  return (
+    <g data-testid="grid-cells" data-count={cells.length} pointerEvents="none">
+      {cells.map((c) => {
+        const pts = c.polygon.map((p) => p.join(',')).join(' ');
+        const xs = c.polygon.map((p) => p[0]);
+        const ys = c.polygon.map((p) => p[1]);
+        const on = c.state === 'on';
+        const hot = picking && hover === c.index;
+        const color = on ? LIGHT : '#8b93a1';
+        return (
+          <g key={c.index} data-field={c.index} data-on={on ? '1' : '0'} data-hover={hot ? '1' : '0'}>
+            {hot && <polygon points={pts} fill={on ? 'rgba(255,255,255,0.14)' : 'rgba(139,147,161,0.18)'} stroke="none" />}
+            {!on && <polygon points={pts} fill="none" stroke={DARK} strokeWidth={3 * k} strokeDasharray={`${2 * k} ${4 * k}`} />}
+            <polygon
+              points={pts}
+              fill="none"
+              stroke={hot ? '#00e5ff' : color}
+              strokeWidth={(hot ? 2.4 : on ? 1 : 1.4) * k}
+              strokeDasharray={on ? undefined : `${2 * k} ${4 * k}`}
+            />
+            {(on || picking) && (
+              <HaloText
+                x={(Math.min(...xs) + Math.max(...xs)) / 2}
+                y={(Math.min(...ys) + Math.max(...ys)) / 2 + 6 * k}
+                scale={scale}
+                size={16}
+                anchor="middle"
+                fill={on ? LIGHT : '#8b93a1'}
+                text={on ? String(c.index) : `${c.index} off`}
+              />
+            )}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
 
 /** Unapplied grid-field generator preview (dashed cyan; amber = flagged). */
 export function GridPreviewLayer({ scale }: { scale: number }) {
