@@ -206,7 +206,9 @@ async function coordSuite() {
   await reset();
   await openAnalysis('demo');
   const box = await tid('viewer').boundingBox();
-  const at = { x: box.x + 300, y: box.y + 200 };
+  // Whole CSS pixels: the wheel anchor and the pointer sample then land on the same point. At scale ~2.4 a
+  // sub-pixel offset between the two would show up as ~0.2 image px of drift (seen in CI, not locally).
+  const at = { x: Math.round(box.x + 300), y: Math.round(box.y + 200) };
   await page.mouse.move(at.x, at.y);
   const readout = async () => {
     const t = await tid('coord-readout').innerText();
@@ -215,11 +217,14 @@ async function coordSuite() {
   };
   const before = await readout();
   await page.mouse.wheel(0, -300);
-  await page.mouse.move(at.x + 0.01, at.y); // refresh readout
+  // leave and return to the anchor so the readout is re-sampled at the same screen point under the new view
+  await page.mouse.move(at.x + 3, at.y);
+  await page.mouse.move(at.x, at.y);
   await page.waitForTimeout(100);
   const after = await readout();
   const s = await viewState();
-  const ok = before && after && Math.abs(before.x - after.x) < 0.2 && Math.abs(before.y - after.y) < 0.2;
+  // one readout unit (the readout shows 0.1 px); the anchor is exact, so anything larger is a real regression
+  const ok = before && after && Math.abs(before.x - after.x) <= 0.1 && Math.abs(before.y - after.y) <= 0.1;
   check('zoom about cursor keeps image point fixed', ok, `before=${JSON.stringify(before)} after=${JSON.stringify(after)} scale=${s.s.toFixed(2)}`);
   // readout equals model
   const exp = { x: (at.x - s.left - s.tx) / s.s, y: (at.y - s.top - s.ty) / s.s };
