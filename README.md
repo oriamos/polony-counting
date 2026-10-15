@@ -20,6 +20,15 @@ This installs the app into your user folder (about 650 MB, downloads Python 3.12
 and puts a **Polony Review** icon on your Desktop. Re-run the command to update. Optional AI detector (Spotiflow + PyTorch, +0.8-2.5 GB): add `--with-ai` (`-WithAi` on Windows). The app has no login and listens on `127.0.0.1` only.
 Details, uninstall, troubleshooting and test status: [docs/app/INSTALL.md](docs/app/INSTALL.md).
 
+## Where to find what
+
+| I want to... | Read |
+|---|---|
+| Install the app | [docs/app/INSTALL.md](docs/app/INSTALL.md) (or the one-command installer above) |
+| Use the app (upload, review, export) | [docs/app/USER_GUIDE.md](docs/app/USER_GUIDE.md) |
+| Train / fine-tune a model | [docs/app/FINE_TUNING.md](docs/app/FINE_TUNING.md) (from reviewed corrections), [docs/app/LEGACY_FINETUNING.md](docs/app/LEGACY_FINETUNING.md) (from the historical ImageJ TIFFs) |
+| Evaluate a model | [docs/app/EVALUATION.md](docs/app/EVALUATION.md) |
+
 ## Polony Review App (new)
 
 A local human-in-the-loop web app (FastAPI + React) for reviewing and approving red / green / yellow polony counts with full provenance. Two independent detectors: Big-FISH (classical, no torch) and optional Spotiflow (AI, needs the `--with-ai` extra); a deterministic consensus between them; a lab-format Excel/CSV export; optional shared Postgres database.
