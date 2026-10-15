@@ -1,15 +1,17 @@
 # Fine-tuning Spotiflow from reviewed corrections
 
+**Start here:** [TRAINING_GUIDE.md](TRAINING_GUIDE.md) explains fields, splits, training loss and the larger run recorded on 15 October 2026. This page is the technical guide for app-reviewed corrections.
+
 Everything is **explicit**. The app never trains, evaluates or switches a model by itself. Code: `src/polony_app/ml/`,
 CLI: `python -m polony_app.ml <command>` (`--data-dir` defaults to the app's data directory / `POLONY_DATA_DIR`).
 Neither engine is ground truth; the *human-reviewed final points* are the only labels used, and they carry the reviewer's biases (see Limitations).
 
-> **Status of the evidence — read this first.** An independent leave-specimen-out sanity experiment (÷4, 10 epochs, starting from `general`)
+> **Earlier small-data experiment (not the larger saved run).** An independent leave-specimen-out sanity experiment (÷4, 10 epochs, starting from `general`)
 > showed **no evidence that fine-tuning beat the pretrained model at the same threshold** (F1 within −0.03 … +0.02). Training on 2–3 slides was
 > **unstable** (validation loss diverged after epoch 1 in one fold). The pipeline that produced those models also **trained at the wrong scale
 > (native instead of the downscale used at inference) and with a different normalisation** (per-crop percentiles instead of page-level ones); the
 > normalisation difference alone moved recall by 0.2–0.4, far more than fine-tuning did. Both defects are fixed below, but **any claim that a
-> fine-tuned model is better needs a leave-one-slide-out evaluation with the corrected pipeline** (every slide held out once, same threshold, same
+> fine-tuned model generalises robustly benefits from a leave-one-slide-out evaluation with the corrected pipeline** (every slide held out once, same threshold, same
 > configuration). Until then a candidate is a hypothesis, `train` refuses very small training sets, and promotion refuses configuration mismatches.
 
 ```
