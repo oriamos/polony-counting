@@ -19,6 +19,7 @@ const ROWS: [string, string][] = [
   ['Polygon tool', 'Click vertices; double-click, Enter or click the first point to finish; Backspace removes last vertex; Esc cancels'],
   ['Grid pick tool', 'Click a grid field to count it, click again to skip it; A all, N none, I invert; Esc leaves the tool'],
   ['Region vertex', 'Drag to move; double-click an edge to add; Alt+click to remove'],
+  [']', 'Experiment: open the next slide that is not fully approved (on the experiment page or from one of its slides)'],
   ['Esc', 'Cancel current tool / clear selection'],
   ['?', 'This help'],
 ];

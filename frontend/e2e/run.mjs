@@ -1057,8 +1057,154 @@ async function layoutSuite() {
   await reset();
 }
 
-const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, gridPickSuite, themeSuite, referenceSuite, engineSuite, layoutSuite];
-for (const s of suites) {
+// ============================================================= 10. experiments: import, grid for all, unattended run, review, one CSV
+async function experimentSuite() {
+  await reset();
+  await page.goto(BASE + '/');
+  const api = async (p, init) => (await fetch(`${BASE}/api${p}`, init)).json();
+  const st = () => page.evaluate(() => window.__polony.getState());
+  await tid('exp-new').click();
+  await tid('exp-name').fill('Night run');
+  await tid('exp-notes').fill('T7 phage');
+  await tid('exp-create').click();
+  await page.waitForSelector('[data-testid=experiment-page]');
+  const [exp0] = await api('/experiments');
+  check('New experiment creates it with the engine defaults and opens its page', exp0?.name === 'Night run' && exp0.default_detection.engine === 'bigfish' && exp0.default_detection.preview_window === null && (await st()).mainView === 'experiment', JSON.stringify(exp0?.default_detection));
+  const eid = exp0.id;
+  check('left rail lists the experiment with an "open" chip', (await tid(`exp-chip-${eid}`).innerText()) === 'open');
+
+  // import 3 TIFFs (one named to fail in the engine) + a non-TIFF that is refused
+  const buf = Buffer.from('II*\0fake');
+  await tid('exp-file-input').setInputFiles([
+    { name: 'slide_01.tif', mimeType: 'image/tiff', buffer: buf },
+    { name: 'slide_02_fail.tif', mimeType: 'image/tiff', buffer: buf },
+    { name: 'slide_03.tif', mimeType: 'image/tiff', buffer: buf },
+    { name: 'notes.txt', mimeType: 'text/plain', buffer: buf },
+  ]);
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid^="exp-row-"]').length === 3);
+  check('import: one row per slide, in file order', JSON.stringify(await page.$$eval('[data-testid^="exp-row-"]', (r) => r.map((x) => x.dataset.name))) === '["slide_01","slide_02_fail","slide_03"]');
+  check('import: the refused file is listed with its error', /notes\.txt: 'notes\.txt': only \.tif\/\.tiff files are accepted/.test(await tid('exp-import-errors').innerText()));
+  const v0 = await api(`/experiments/${eid}`);
+  const [s1, s2, s3] = v0.slides.map((s) => s.id);
+
+  // the researcher confirms the mapping of the first slide and builds its grid (Regions tab, covered by gridPickSuite)
+  await tid(`exp-open-${s1}`).click();
+  await page.waitForSelector('[data-testid=mapping-dialog]');
+  await tid('role-0-red').check();
+  await tid('role-1-green').check();
+  await tid('confirm-mapping').click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid=mapping-dialog]'));
+  const spec = { rows: 2, cols: 3, cell_w: 100, cell_h: 100, origin_x: 20, origin_y: 20, order: 'row-major', corner: 'tl', first_index: 1, seed: null, shift_dx: 0, shift_dy: 0 };
+  const J = { 'Content-Type': 'application/json' };
+  await api(`/analyses/${s1}/grid`, { method: 'PUT', headers: J, body: JSON.stringify({ grid: spec }) });
+  await api(`/analyses/${s1}/grid-selection`, { method: 'PUT', headers: J, body: JSON.stringify({ field_index: 6, counted: false }) });
+  check('the analyses list shows the experiment of a slide', (await tid(`analysis-exp-${s1}`).innerText()).includes('Night run'));
+  await tid('back-to-experiment').click();
+  await page.waitForSelector('[data-testid=experiment-page]');
+
+  // copy the confirmed mapping to the other slides (one explicit confirmation)
+  page.once('dialog', (d) => d.accept());
+  await tid('exp-copy-mapping').click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid=exp-mapping-note]'));
+  check('mapping copied to the 2 other slides', (await api(`/experiments/${eid}`)).slides.every((s) => s.mapping_confirmed));
+
+  // grid for all: template = slide 1 (2 x 3, field 6 skipped)
+  await page.waitForFunction(() => /skipped: 6/.test(document.querySelector('[data-testid=exp-grid-spec]')?.innerText ?? ''));
+  check('grid box shows the template slide grid', /2 × 3 fields of 100 × 100 px at \(20, 20\)/.test(await tid('exp-grid-spec').innerText()));
+  await tid('exp-grid-apply-missing').click();
+  await page.waitForFunction(() => /2 ok, 0 refused/.test(document.querySelector('[data-testid=exp-grid-results]')?.innerText ?? ''));
+  const a2 = await api(`/analyses/${s2}`), a3 = await api(`/analyses/${s3}`);
+  const same = (a) => a.slide.grid && a.slide.grid.rows === 2 && a.slide.grid.cols === 3 && a.slide.grid.cell_w === 100 && a.slide.grid.origin_x === 20 && a.slide.grid.origin_y === 20;
+  const skippedOf = (a) => JSON.stringify(a.slide.skipped_fields.map((x) => x.field_index));
+  check('Apply to all: same spec on every slide without a grid', same(a2) && same(a3));
+  check('Apply to all: the same skipped field (6) on every slide', skippedOf(a2) === '[6]' && skippedOf(a3) === '[6]' && a2.regions.filter((r) => r.field_index != null).length === 5);
+  const e1 = await api(`/experiments/${eid}`);
+  check('the template grid is stored as the experiment default_grid', e1.default_grid?.rows === 2 && JSON.stringify(e1.default_grid.skipped_fields) === '[6]' && e1.default_grid.template_id === s1, JSON.stringify(e1.default_grid));
+
+  // apply to all (overwrite) asks first and names the slides with a grid
+  let msg = '';
+  page.once('dialog', (d) => ((msg = d.message()), d.dismiss()));
+  await tid('exp-grid-apply-all').click();
+  await page.waitForTimeout(200);
+  check('Apply to all slides confirms, naming slides that already have a grid', /^2 slides already have a grid; overwrite\?/.test(msg), msg);
+
+  // randomise on all: fresh seed per slide, shown per slide
+  page.once('dialog', (d) => d.accept());
+  await tid('exp-grid-randomise').click();
+  await page.waitForFunction((ids) => ids.every((id) => document.querySelector(`[data-testid=exp-grid-${id}]`)?.dataset.seed), [s1, s2, s3]);
+  const seeds = await page.$$eval('[data-testid^="exp-grid-"][data-seed]', (els) => els.map((e) => e.dataset.seed).filter(Boolean));
+  const srvSeeds = await Promise.all([s1, s2, s3].map(async (id) => String((await api(`/analyses/${id}`)).slide.grid.seed)));
+  check('Randomise on all: one fresh seed per slide, shown in the table', seeds.length === 3 && new Set(seeds).size === 3 && JSON.stringify(seeds) === JSON.stringify(srvSeeds), `${seeds} vs ${srvSeeds}`);
+  check('Randomise keeps the skipped field', skippedOf(await api(`/analyses/${s3}`)) === '[6]');
+  check('seed in the row tooltip', (await tid(`exp-grid-${s2}`).getAttribute('title')) === `seed ${srvSeeds[1]}`);
+
+  // run and leave: progress, then done_with_failures with the failed row showing its error
+  await tid('exp-run-all').click();
+  await tid('exp-progress').waitFor();
+  const sawRunning = await page.waitForFunction(() => document.querySelector('[data-testid=exp-progress]')?.dataset.status === 'running', null, { timeout: 3000 }).then(() => true).catch(() => false);
+  check('Run: progress bar while the batch runs, Cancel offered', sawRunning && (await tid('exp-cancel').count()) === 1);
+  await page.waitForFunction(() => document.querySelector('[data-testid=exp-progress]')?.dataset.status === 'done_with_failures', null, { timeout: 15000 });
+  check('run ends done_with_failures (terminal)', (await tid('exp-batch-status').innerText()) === 'done with failures' && (await tid('exp-cancel').count()) === 0);
+  check('progress label: 3 / 3 finished, 2 done, 1 failed', (await tid('exp-progress-label').innerText()) === '3 / 3 finished · 2 done · 1 failed', await tid('exp-progress-label').innerText());
+  check('the failed row is red and shows its error', (await tid(`exp-row-${s2}`).getAttribute('data-status')) === 'failed' && /RuntimeError: mock engine failure on 'slide_02_fail'/.test(await tid(`exp-err-${s2}`).innerText()));
+  check('done rows show their counts', (await tid(`exp-row-${s1}`).getAttribute('data-status')) === 'done' && /\d+ \/ \d+ \/ \d+/.test(await tid(`exp-row-${s1}`).innerText()));
+  await page.waitForFunction((id) => document.querySelector(`[data-testid=exp-chip-${id}]`)?.innerText === 'done with failures', eid);
+  check('left-rail chip shows done with failures', true);
+  await shot('experiment-done-with-failures');
+
+  // Retry the failed row: a run of that slide only
+  await tid(`exp-retry-${s2}`).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid=exp-progress]')?.dataset.status === 'running', null, { timeout: 3000 }).catch(() => undefined);
+  await page.waitForFunction(() => !['running', 'queued'].includes(document.querySelector('[data-testid=exp-progress]')?.dataset.status), null, { timeout: 10000 });
+  const r2 = await api(`/experiments/${eid}/run`);
+  check('Retry runs only the failed slide', r2.batch.detail.slides.length === 1 && r2.batch.detail.slides[0].analysis_id === s2 && r2.summary.total === 1, JSON.stringify(r2.summary));
+  check('after Retry the row shows the new failure', /mock engine failure/.test(await tid(`exp-err-${s2}`).innerText()));
+
+  // Next unreviewed: ] on the experiment page opens the first unapproved slide, ] on a slide the next one
+  await tid('exp-run').click({ position: { x: 4, y: 4 } });
+  await page.keyboard.press(']');
+  await page.waitForSelector('[data-testid=viewer]');
+  check('] on the experiment page opens the first unreviewed slide', (await st()).current.id === s1 && (await st()).mainView === 'analysis');
+  await page.mouse.move(5, 5);
+  await page.keyboard.press(']');
+  await page.waitForFunction((id) => window.__polony.getState().current?.id === id && !window.__polony.getState().loadingCurrent, s2);
+  check('] on a slide opens the next unreviewed slide', true);
+  await tid('back-to-experiment').click();
+  await tid('exp-next-unreviewed').click();
+  await page.waitForFunction((id) => window.__polony.getState().current?.id === id && window.__polony.getState().mainView === 'analysis', s1);
+  check('Next unreviewed button opens the first unreviewed slide', true);
+  await tid('back-to-experiment').click();
+
+  // finalize refuses with the unreviewed slides; one CSV for the experiment
+  await tid('exp-finalize').click();
+  await tid('exp-finalize-blocked').waitFor();
+  check('Finalize experiment refuses, listing the unreviewed slides', /3 slide\(s\) are not fully approved/.test(await tid('exp-finalize-blocked').innerText()) && /slide_02_fail/.test(await tid('exp-finalize-blocked').innerText()));
+  const href = await tid('exp-csv').getAttribute('href');
+  check('Download CSV link points at the experiment CSV', href === `/api/experiments/${eid}/export.csv`, href);
+  check('Provenance link present', (await tid('exp-provenance').getAttribute('href')) === `/api/experiments/${eid}/provenance.json`);
+  const [dl] = await Promise.all([page.waitForEvent('download'), tid('exp-csv').click()]);
+  const csvText = fs.readFileSync(await dl.path(), 'utf8');
+  check('experiment CSV: one row per slide per colour, failed slide left out', dl.suggestedFilename() === 'Night_run_experiment.csv' && csvText.split('\r\n').filter((l) => /^slide_0[13],/.test(l)).length === 6 && !/slide_02_fail/.test(csvText), dl.suggestedFilename());
+  check('Lab export disabled until a slide is finalized', await tid('exp-lab').isDisabled());
+
+  // reorder: ▼ on the first slide
+  await tid(`exp-down-${s1}`).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid^="exp-row-"]')?.dataset.name === 'slide_02_fail');
+  check('▼ moves a slide down (PUT /order)', JSON.stringify((await api(`/experiments/${eid}`)).slides.map((s) => s.id)) === JSON.stringify([s2, s1, s3]));
+
+  // delete keeps the slides as loose analyses
+  await tid('exp-delete').click();
+  await tid('exp-delete-keep').click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid=experiment-page]'));
+  const left = await api('/analyses');
+  check('Delete (keep slides): experiment gone, slides kept as loose analyses', (await api('/experiments')).length === 0 && [s1, s2, s3].every((id) => left.some((a) => a.id === id && a.experiment_id === null)));
+  await reset();
+}
+
+const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, gridPickSuite, themeSuite, referenceSuite, engineSuite, layoutSuite, experimentSuite];
+// E2E_ONLY=experimentSuite,gridPickSuite runs a subset while developing
+const only = (process.env.E2E_ONLY || "").split(",").filter(Boolean);
+for (const s of suites.filter((x) => !only.length || only.includes(x.name))) {
   try {
     await s();
   } catch (e) {

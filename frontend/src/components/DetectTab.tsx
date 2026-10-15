@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { DetectionParams, DetectionRequest } from '../api/types';
 import { useApp } from '../state/store';
 import { EngineRuns, EngineSection } from './EngineSection';
+import { isJobActive, JOB_STATUS_LABEL } from '../lib/experiment';
 
 export function NumInput({
   value,
@@ -178,7 +179,7 @@ export function DetectTab() {
   const patch = useApp((s) => s.patch);
   if (!req) return null;
   const mapped = a.status !== 'needs_channel_mapping' && a.status !== 'created';
-  const running = job?.status === 'queued' || job?.status === 'running' || a.status === 'detecting';
+  const running = isJobActive(job?.status) || a.status === 'detecting';
   const locked = a.status === 'finalized';
   const hasEdits = a.objects.some((o) => o.origin !== 'auto' || o.reviewed);
   const hasApprovals = a.regions.some((r) => r.approved);
@@ -295,7 +296,7 @@ export function DetectTab() {
               <div className={`bar ${job.status}`} style={{ width: `${Math.round(job.progress * 100)}%` }} />
             </div>
             <div className="small">
-              <strong>{job.status}</strong> {Math.round(job.progress * 100)}% {job.message && <span className="muted">· {job.message}</span>}
+              <strong>{JOB_STATUS_LABEL[job.status] ?? job.status}</strong> {Math.round(job.progress * 100)}% {job.message && <span className="muted">· {job.message}</span>}
             </div>
             {job.error && (
               <div className="notice err" role="alert">

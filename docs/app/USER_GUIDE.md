@@ -14,7 +14,7 @@ Screenshots in `img/` come from an earlier acceptance run on test_img.tif; the n
 
 ## Layout
 
-* **Left rail**: list of analyses (status chip, counts), TIFF upload (drag and drop), CSV import.
+* **Left rail**: experiments (section 14b), list of analyses (status chip, counts, experiment), TIFF upload (drag and drop), CSV import.
 * **Centre**: viewer (wheel zoom about the cursor, drag to pan, Fit / 1:1, five views, contrast sliders that affect display only, coordinate readout, scale bar) and toolbar.
 * **Right panel**: inspector for the selection and tabs **Review**, **Regions**, **Detect**, **Totals**, **Finish**.
 * `?` opens the shortcut list.
@@ -146,6 +146,7 @@ API: `GET /api/fs/list`, `POST /api/analyses/open-path`, `PUT /api/analyses/{id}
 | Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) | undo / redo |
 | A / N / I (Pick fields tool) | count all grid fields / none / invert |
 | Polygon tool | click vertices; double-click, Enter or click the first point to finish; Backspace removes the last vertex; Esc cancels |
+| ] | experiment: open the next slide that is not fully approved (on the experiment page or from one of its slides) |
 | Esc | cancel tool / clear selection |
 | ? | help |
 
@@ -215,9 +216,52 @@ For finalized slides, **Lab export** (or `GET /api/analyses/{id}/lab-export?seri
 * A **Notes** sheet (and `lab_export_notes.txt` in zips) lists the series mapping, analysis ids, SHA-256 of the original images, the field-to-region table and warnings (fields partly covered by an exclusion are counted over the remaining area only; uncertain objects; regions without a field number).
 * Refused with a clear message: unfinalized analyses, field number > 24 or duplicated, missing metadata (the exact list is returned).
 
-## 14b. Batch upload (many TIFFs at once)
+## 14b. Experiments (many slides, one run overnight, one CSV)
 
-Left rail > **Batch upload** > *Open*. Choose several multi-channel TIFFs (one file = one analysis). Pick the detector (Big-FISH, or Hybrid if the AI extra is installed), keep or drop the automatic chamber as counting region, and tick the **one confirmation** that TIFF page 0 is red and page 1 is green for *all* files (colours are never inferred; a file that does not fit fails and is listed). *Run* then creates the analyses, sets the mapping, and runs detection file by file; *Stop after this file* cancels the rest. When done, **Download summary CSV** gives one row per file (red-only, green-only, yellow, uncertain, red/green-positive, notes). Everything is **DRAFT**: no region is inspected or approved, uncertain objects are not in the colour totals, and nothing is validated. Open each analysis from the list to review it; `bundle (DRAFT)` downloads its full export. With **Compare with the researcher's marks** ticked (default), each TIFF that carries embedded marks gets her fields imported as counting regions before detection, and a second CSV (`polony_batch_vs_researcher_DRAFT.csv`) lists, per file, plane (0 = red, 1 = green) and app count type (red-positive, green-positive, yellow): `eligible_examined_fields`, `positive_marked_fields`, `verified_zero_fields`, `unknown_fields_excluded`, `conflict_fields_excluded`, `eligibility_source`, total reference vs total app, delta, Pearson r, slope and MAE. **A field counts as examined on a plane only if it has her marks on that plane, or an examined-fields manifest (optional file picker in the panel) says she counted it there, zero included.** A field she marked on page 0 is *not* assumed examined on page 1: it is `unknown`, excluded from every total and metric, and a plane with no examined field has blank totals and metrics (never 0). The old column `fields_compared` was replaced by `eligible_examined_fields`. The summary CSV counts the whole chamber while the researcher counted only her fields, so compare per field, not slide totals; agreement with her marks is not accuracy. TIFFs without marks are noted as `no marks`.
+An **experiment** holds all slides of one run. You import them together, give them one grid, start detection on all of
+them and go home; the next morning you review slide by slide and download one CSV. (This replaces the old *Batch
+upload* panel.)
+
+1. **Create.** Left rail > **Experiments** > **+ New experiment**. Give a name (e.g. `Clade run 12`), optional notes,
+   and the detector for the night run (Big-FISH, or Hybrid / Spotiflow when the AI extra is installed). With an
+   analysis open you can tick *Use the detection parameters of the open analysis* to reuse thresholds you tuned on it.
+   The experiment page opens.
+2. **Import.** Drop all TIFFs anywhere on the experiment page (or click the drop box). One file = one slide, added in
+   file order. Files that cannot be read are listed with the reason; the others are imported anyway.
+3. **Channel mapping.** Open the first slide (**Open**), confirm red / green in the dialog, and come back with
+   **← experiment name** at the top. Then **Copy the mapping of “slide” to N slides…** applies the same confirmed
+   mapping to every slide with the same file layout (only do this if all files were scanned the same way). Slides you
+   import later into the same experiment get the mapping automatically.
+4. **Grid for all slides.** On one slide, make the grid as usual (Regions tab > Grid generator, click the fields to
+   count). Back on the experiment page the **Grid for all slides** box shows it as the *Template*:
+   * **Apply to slides without grid** copies it (same rows, columns, cell size, position and the same skipped fields)
+     to every slide that has none.
+   * **Apply to all slides…** also replaces existing grids. It first tells you how many slides already have a grid and
+     how many have approved fields: a field keeps its approval only if it did not move, so approvals may be lost.
+   * **Randomise on all…** moves the grid of every slide to its own random position (a fresh seed per slide; cell size
+     and number never change). Hover the *Grid* cell of a row to see its seed; the seeds are also in the provenance.
+   * A slide whose image size differs from the template is flagged *grid may exceed image*. Finalized slides are never
+     changed. The grid is also stored in the experiment, so slides imported later can get it with one click.
+5. **Run overnight.** **▶ Run all slides** detects the slides one after another on the server. You can close the
+   browser tab (keep the app running and the computer awake). A slide that fails (no mapping, no grid, engine error) is
+   marked red with the reason and the run continues with the next one. **Cancel run** stops after the slide being
+   detected. **Run missing only** skips slides that already have a result.
+6. **Next morning.** Open the experiment: the bar says e.g. *9 / 10 finished · 9 done · 1 failed*; the run ends
+   *done* or *done with failures*. Each row shows mapping, grid, run status (with the error for a failed slide),
+   red / green / yellow counts, fields counted, review queue and approval. Fix the cause of a red row (open it), then
+   press **Retry** on that row. **Next unreviewed** (key `]`, also while a slide is open) opens the next slide whose
+   counting regions are not all approved; review and approve it as usual, then press `]` again.
+7. **Finalize.** **Finalize experiment…** finalizes every approved slide. It refuses while any slide is not fully
+   approved and lists those slides (click a name to open it).
+8. **One CSV.** **Download CSV** gives `<experiment>_experiment.csv`: one row per slide and colour (red, green, yellow)
+   with the same columns as your `experiment_counts.csv` (`Slide name, What counted, NofPol, NofGrids, Field1..Field24`)
+   plus `Experiment`, `Status` (finalized / approved / draft) and `Engine`. Slides without detection or without grid
+   fields are left out. Keep **Provenance (JSON)** next to it (settings, model, grid seed per slide, skipped slides).
+   **Lab export (xlsx)** writes the Counts-style workbook of the finalized slides.
+
+Slides can be reordered (drag a row, or ▲▼), opened, or detached (the analysis is kept as a loose analysis). **Delete…**
+removes the experiment and either keeps its slides as loose analyses or deletes them too (refused while a run is active,
+or for finalized slides).
 
 ## 15. CSV import
 

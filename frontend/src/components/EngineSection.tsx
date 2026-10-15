@@ -5,6 +5,7 @@ import { runLabel, shortChecksum } from '../lib/consensus';
 import { useApp } from '../state/store';
 import { NumInput } from './DetectTab';
 import { AgreementInfo } from './EngineLayers';
+import { isJobActive, JOB_STATUS_LABEL } from '../lib/experiment';
 
 const CHOICES: { id: EngineChoice; label: string }[] = [
   { id: 'bigfish', label: 'Big-FISH (default)' },
@@ -32,7 +33,7 @@ export function EngineSection({ req, set, disabled }: { req: DetectionRequest; s
   const needsSf = choice !== 'bigfish';
   const models = sf?.models?.length ? sf.models : FALLBACK_MODELS.map((name) => ({ name, cached: false, version: null, checksum: null }));
   const cur = models.find((m) => m.name === spot.model_name);
-  const preparing = prepareJob?.status === 'queued' || prepareJob?.status === 'running';
+  const preparing = isJobActive(prepareJob?.status);
   const gpu = sf?.device?.cuda ? 'CUDA GPU' : sf?.device?.mps ? 'Apple GPU (MPS)' : null;
   return (
     <section className="runbox" data-testid="engine-section">
@@ -143,7 +144,7 @@ export function EngineSection({ req, set, disabled }: { req: DetectionRequest; s
                 <div className={`bar ${prepareJob.status}`} style={{ width: `${Math.round(prepareJob.progress * 100)}%` }} />
               </div>
               <div className="small">
-                <strong>{prepareJob.status}</strong> {Math.round(prepareJob.progress * 100)}% {prepareJob.message && <span className="muted">· {prepareJob.message}</span>}
+                <strong>{JOB_STATUS_LABEL[prepareJob.status] ?? prepareJob.status}</strong> {Math.round(prepareJob.progress * 100)}% {prepareJob.message && <span className="muted">· {prepareJob.message}</span>}
               </div>
               {prepareJob.error && (
                 <div className="notice err" role="alert">

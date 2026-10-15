@@ -321,10 +321,29 @@ export type AnalysisStatus =
   | 'in_review'
   | 'finalized';
 
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+/** `done_with_failures`: batch only (finished, at least one slide failed). Terminal: everything but queued/running. */
+export type JobStatus = 'queued' | 'running' | 'done' | 'done_with_failures' | 'failed' | 'cancelled';
+export type JobKind = 'detect' | 'batch' | 'prepare_model';
+
+/** The plan of a batch job (Job.detail when kind = 'batch'). */
+export interface BatchPlanSlide {
+  analysis_id: string;
+  name: string;
+  order: number;
+  /** null = runs; 'finalized' | 'already_detected' = skipped */
+  skip: string | null;
+  override: boolean;
+}
+export interface BatchDetail {
+  slides: BatchPlanSlide[];
+  only_missing: boolean;
+  default_detection?: Partial<DetectionRequest>;
+  overrides?: Record<string, Partial<DetectionRequest>>;
+}
 
 export interface Job {
   id: string;
+  /** the slide; `experiment:<eid>` for a batch; `engine-spotiflow` for prepare_model */
   analysis_id: string;
   status: JobStatus;
   progress: number;
@@ -332,6 +351,122 @@ export interface Job {
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  kind?: JobKind;
+  parent_id?: string | null;
+  experiment_id?: string | null;
+  detail?: BatchDetail | Record<string, unknown> | null;
+}
+
+// ---- experiments (docs/app/EXPERIMENTS_API.md) ----
+export type ExperimentStatus = 'open' | 'running';
+
+/** What the experiment page stores in `default_grid` (opaque to the server): the template slide's GridSpec plus the
+ * field numbers it skips and the slide it came from. */
+export interface ExperimentGrid extends GridSpec {
+  skipped_fields?: number[];
+  template_id?: string | null;
+}
+
+export interface Experiment {
+  id: string;
+  name: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+  default_grid: ExperimentGrid | null;
+  default_detection: Partial<DetectionRequest>;
+  status: ExperimentStatus;
+}
+
+export interface ExperimentSummary extends Experiment {
+  n_slides: number;
+  n_detected: number;
+  n_finalized: number;
+  last_batch: Job | null;
+}
+
+export type SlideExportStatus = 'finalized' | 'approved' | 'draft';
+
+export interface ExperimentSlide {
+  id: string;
+  name: string;
+  order_in_experiment: number;
+  status: AnalysisStatus;
+  export_status: SlideExportStatus;
+  updated_at: string;
+  finalized_at: string | null;
+  mapping_confirmed: boolean;
+  image: { width: number; height: number; kind: ImageKind; dtype: string; n_channels: number } | null;
+  has_grid: boolean;
+  n_counting_regions: number;
+  n_fields: number;
+  n_approved: number;
+  /** every counting region approved (false without counting regions) */
+  approved: boolean;
+  review_queue: number;
+  detection_ran_at: string | null;
+  engine: EngineChoice | null;
+  counts: Counts;
+  /** newest job of any kind on this slide (a failed batch slide shows its error here) */
+  last_job: Job | null;
+}
+
+export interface ExperimentView extends Experiment {
+  slides: ExperimentSlide[];
+  last_batch: Job | null;
+}
+
+export type RunSlideStatus = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'skipped' | 'not_run';
+
+export interface RunSlide {
+  analysis_id: string;
+  name: string;
+  order: number;
+  status: RunSlideStatus;
+  skip_reason: string | null;
+  override: boolean;
+  job_id: string | null;
+  progress: number;
+  message: string;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface RunSummary {
+  /** excludes skipped */
+  total: number;
+  done: number;
+  failed: number;
+  cancelled: number;
+  running: number;
+  queued: number;
+  pending: number;
+  not_run: number;
+  skipped: number;
+}
+
+export interface ExperimentRun {
+  batch: Job | null;
+  slides: RunSlide[];
+  summary: RunSummary | null;
+}
+
+export interface ExperimentRunRequest {
+  only_missing?: boolean;
+  analysis_ids?: string[];
+  overrides?: Record<string, Partial<DetectionRequest>>;
+}
+
+export interface ExperimentImportResult {
+  created: { id: string; name: string; order_in_experiment: number; status: AnalysisStatus; mapping_copied_from: string | null }[];
+  errors: { file: string; code: string; message: string }[];
+}
+
+export interface ExperimentDeleteResult {
+  ok: boolean;
+  deleted_slides: string[];
+  detached_slides: string[];
 }
 
 export type LabCountType = 'red_only' | 'green_only' | 'yellow' | 'red_positive' | 'green_positive';
@@ -424,6 +559,8 @@ export interface Analysis {
   redo_depth: number;
   alignment_dy?: number;
   alignment_dx?: number;
+  experiment_id?: string | null;
+  order_in_experiment?: number;
 }
 
 export interface Counts {
@@ -449,6 +586,9 @@ export interface AnalysisSummary {
   updated_at: string;
   finalized_at: string | null;
   counts?: Counts | null;
+  /** experiment this analysis is a slide of (null = loose analysis) */
+  experiment_id?: string | null;
+  order_in_experiment?: number;
 }
 
 export interface CountsResponse {
