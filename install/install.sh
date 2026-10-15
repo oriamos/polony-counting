@@ -180,6 +180,7 @@ main() {
       "$VPY" -m pip install -q --disable-pip-version-check -r "$APP/requirements-app.txt" -r "$APP/install/extra-requirements.txt" || die "installing the libraries failed (see the messages above)"
       SP="$("$VPY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
       printf '%s\n' "$APP/src" > "$SP/polony_review.pth"
+      if [ "$OS" = linux ]; then say "  Window mode on Linux needs GTK WebKit (otherwise the browser is used): Debian/Ubuntu package: apt install python3-gi gir1.2-webkit2-4.1; Fedora package: dnf install python3-gobject webkit2gtk4.1"; fi
     fi
 
     # ---------------------------------------------------------------- 4. config + checks

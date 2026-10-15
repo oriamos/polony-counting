@@ -1,22 +1,27 @@
 """Desktop launcher for the Polony Review app (standard library only).
 
-    python -m polony_app.launcher [launch] [--no-browser]   start the server (if needed) + open the browser
+    python -m polony_app.launcher [launch] [--no-browser] [--browser]
+                                                             start the server (if needed) + open a native window
+                                                             (pywebview) or, as fallback / with --browser, the browser
     python -m polony_app.launcher stop                       stop the background server
     python -m polony_app.launcher status                     print whether it runs, where, which data dir, shared database
     python -m polony_app.launcher set-database|clear-database  (hidden input) shared Neon/PostgreSQL database in config.json
-    python -m polony_app.launcher --self-test                start a throw-away server, GET /api/health and '/', stop
+    python -m polony_app.launcher --self-test [--window]     start a throw-away server, GET /api/health and '/', stop
+                                                             (--window: also open and close a native window; skipped without a display)
 
 Files (all under the install home, default ~/PolonyReview, or %LOCALAPPDATA%\\PolonyReview on Windows;
 override with POLONY_HOME):
-    config.json          {"data_dir": ..., "port": ...}   (written by the installer / remembered port)
+    config.json          {"data_dir": ..., "port": ..., "window": {"width": ..., "height": ...}}
     run/server.json      {"pid": ..., "port": ...}        (pid file of the detached server)
     logs/launcher.log    what the launcher did / why it failed
     logs/server.log      output of the server
 
 Environment: POLONY_HOME, POLONY_DATA_DIR (beats config.json), POLONY_PORT (preferred port),
-POLONY_CI=1 (never open a browser or show dialogs; used by the CI tests).
-The server always binds to 127.0.0.1 only. The launcher never stops a server by itself (no idle
-shutdown: a running detection must not be killed); use `stop`.
+POLONY_CI=1 (never open a window/browser or show dialogs; used by the CI tests),
+POLONY_WINDOW=0 (do not use the native window, open the browser instead; same as --browser).
+The server always binds to 127.0.0.1 only and stays a detached background process; the window is just a client.
+Closing the window stops the server only when no detection is running; with a running detection the user is asked
+(keep it running / cancel the detection and stop). Otherwise the launcher never stops a server by itself; use `stop`.
 """
 from __future__ import annotations
 
@@ -348,8 +353,134 @@ def open_browser(url: str) -> None:
         log(f"could not open a browser: {e}; open {url} manually")
 
 
+# ------------------------------------------------------------------ native window (pywebview, imported lazily)
+WINDOW_TITLE = "Polony Review"
+DEFAULT_WINDOW = (1360, 880)
+MIN_WINDOW = (960, 640)
+KEEP_RUNNING_QUESTION = "A detection is running. Keep Polony Review running in the background?"
+
+
+def use_window(force_browser: bool = False, no_browser: bool = False) -> bool:
+    """Should `launch` try the native window? (Import availability is checked when opening it.)"""
+    if force_browser or no_browser or ci_mode():
+        return False
+    return os.environ.get("POLONY_WINDOW", "").strip().lower() not in ("0", "false", "no", "off")
+
+
+def display_available() -> bool:
+    return IS_WIN or sys.platform == "darwin" or bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def window_size(cfg: dict) -> tuple[int, int]:
+    w = cfg.get("window")
+    try:
+        width, height = int(w["width"]), int(w["height"])
+        if width >= MIN_WINDOW[0] and height >= MIN_WINDOW[1] and width < 20000 and height < 20000:
+            return width, height
+    except (KeyError, TypeError, ValueError):
+        pass
+    return DEFAULT_WINDOW
+
+
+def active_jobs(port: int, timeout: float = 5.0) -> Optional[list]:
+    """Running/queued jobs of the server on `port`; None when that cannot be determined (old server, error)."""
+    try:
+        with urllib.request.urlopen(f"http://{HOST}:{port}/api/jobs/active", timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        return d if isinstance(d, list) else None
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
+
+
+def cancel_jobs(port: int, jobs: list) -> None:
+    for j in jobs:
+        try:
+            req = urllib.request.Request(f"http://{HOST}:{port}/api/jobs/{j['id']}/cancel", data=b"", method="POST")
+            urllib.request.urlopen(req, timeout=10).close()
+        except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError) as e:
+            log(f"could not cancel job: {e}")
+
+
+def close_decision(jobs: Optional[list], confirm_keep: Callable[[], bool]) -> str:
+    """What closing the window means: 'stop' (idle), 'keep' (leave the server running), 'cancel' (cancel, then stop).
+    Unknown job state counts as running: the server is left alone."""
+    if jobs is None:
+        return "keep"
+    if not jobs:
+        return "stop"
+    return "keep" if confirm_keep() else "cancel"
+
+
+def finish_close(decision: str, port: int, wait_s: float = 20.0) -> None:
+    """Carry out the close decision after the window is gone. Never stops a server that still runs a detection."""
+    if decision == "keep":
+        log("window closed; server left running")
+        return
+    if decision == "cancel":
+        cancel_jobs(port, active_jobs(port) or [])
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline and active_jobs(port):
+            time.sleep(0.5)
+    if active_jobs(port):  # still busy (or just started elsewhere): leave it
+        log("window closed; a detection is still running, server left running")
+        return
+    cmd_stop()
+
+
+class WindowApi:
+    """Exposed to the page as window.pywebview.api (js_api)."""
+
+    def __init__(self, webview_module) -> None:
+        self._wv = webview_module
+
+    def pick_files(self) -> list:
+        wv = self._wv
+        if not wv.windows:
+            return []
+        kind = getattr(getattr(wv, "FileDialog", None), "OPEN", None)
+        if kind is None:
+            kind = wv.OPEN_DIALOG
+        res = wv.windows[0].create_file_dialog(kind, allow_multiple=True, file_types=("TIFF images (*.tif;*.tiff)",))
+        return [str(p) for p in (res or [])]
+
+
+def open_window(url: str, port: int, cfg: dict) -> bool:
+    """Show the app in a native window until it is closed. False (reason logged) when no window could be made."""
+    try:
+        import webview  # pywebview; optional, may lack GTK WebKit on Linux
+    except Exception as e:
+        log(f"native window unavailable ({type(e).__name__}: {e}); using the browser")
+        return False
+    state = {"decision": "stop"}
+    try:
+        width, height = window_size(cfg)
+        win = webview.create_window(WINDOW_TITLE, url, width=width, height=height, min_size=MIN_WINDOW,
+                                    js_api=WindowApi(webview))
+
+        def on_closing():
+            try:
+                w, h = int(win.width), int(win.height)
+                if (w, h) != (width, height):
+                    c = load_config()
+                    c["window"] = {"width": w, "height": h}
+                    save_config(c)
+            except Exception as e:  # remembering the size is a nicety
+                log(f"could not remember the window size: {e}")
+            jobs = active_jobs(port)
+            state["decision"] = close_decision(jobs, lambda: bool(win.create_confirmation_dialog(WINDOW_TITLE, KEEP_RUNNING_QUESTION)))
+            return True
+
+        win.events.closing += on_closing
+        webview.start()
+    except Exception as e:
+        log(f"native window failed ({type(e).__name__}: {e}); using the browser")
+        return False
+    finish_close(state["decision"], port)
+    return True
+
+
 # ------------------------------------------------------------------ commands
-def cmd_launch(no_browser: bool = False) -> int:
+def cmd_launch(no_browser: bool = False, force_browser: bool = False) -> int:
     cfg = load_config()
     preferred = int(os.environ.get("POLONY_PORT") or cfg.get("port") or DEFAULT_PORT)
     # an already-running server (ours) is reused, wherever the pid file says it listens
@@ -391,6 +522,10 @@ def cmd_launch(no_browser: bool = False) -> int:
     url = f"http://{HOST}:{port}/"
     if no_browser:
         log(f"ready: {url}")
+    elif use_window(force_browser) and display_available():
+        if not open_window(url, port, cfg):
+            print("Polony Review: native window not available, opening the browser instead (details in logs/launcher.log).")
+            open_browser(url)
     else:
         open_browser(url)
     return 0
@@ -546,7 +681,41 @@ def cmd_clear_database() -> int:
     return 0
 
 
-def self_test() -> int:
+def window_smoke(port: int) -> bool:
+    """Open the UI in a native window, check that the page rendered, close it. Skipped (True) without display/pywebview."""
+    if not display_available():
+        print("window smoke: skipped (no display)")
+        return True
+    try:
+        import webview
+    except Exception as e:
+        print(f"window smoke: skipped (pywebview not usable: {type(e).__name__}: {e})")
+        return True
+    result: dict = {}
+    win = webview.create_window(WINDOW_TITLE, f"http://{HOST}:{port}/", width=800, height=600)
+
+    def probe():
+        try:
+            for _ in range(60):
+                time.sleep(0.5)
+                if win.evaluate_js('!!document.getElementById("root") && document.getElementById("root").children.length > 0'):
+                    result["ok"] = True
+                    break
+        except Exception as e:
+            result["err"] = str(e)
+        finally:
+            win.destroy()
+
+    try:
+        webview.start(probe)
+    except Exception as e:
+        print(f"window smoke: skipped (no web view available: {type(e).__name__}: {e})")
+        return True
+    print(f"window smoke: {'ok' if result.get('ok') else 'FAILED ' + result.get('err', '')}")
+    return bool(result.get("ok"))
+
+
+def self_test(window: bool = False) -> int:
     """Start a throw-away server on a free port, check /api/health and the UI at '/', stop it."""
     port = free_port()
     with tempfile.TemporaryDirectory(prefix="polony-selftest-") as td:
@@ -579,6 +748,9 @@ def self_test() -> int:
             print(f"web UI served at '/': {'yes' if ui else 'NO'}")
             if not ui:
                 return 1
+            if window and not window_smoke(port):
+                print("SELF-TEST FAILED: native window")
+                return 1
             print("SELF-TEST OK")
             return 0
         finally:
@@ -594,11 +766,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("command", nargs="?", default="launch", choices=["launch", "stop", "status", "set-database", "clear-database", "prepare-model"])
     ap.add_argument("--model", default="general", help="prepare-model: Spotiflow model name (default: general)")
     ap.add_argument("--no-browser", action="store_true", help="start the server but do not open a browser")
+    ap.add_argument("--browser", action="store_true", help="open the browser instead of the native window")
+    ap.add_argument("--window", action="store_true", help="--self-test: also open and close a native window (skipped without a display)")
     ap.add_argument("--self-test", action="store_true", help="start a temporary server, check it, stop it")
     a = ap.parse_args(argv)
     try:
         if a.self_test:
-            return self_test()
+            return self_test(window=a.window)
         if a.command == "stop":
             return cmd_stop()
         if a.command == "status":
@@ -609,7 +783,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_set_database()
         if a.command == "clear-database":
             return cmd_clear_database()
-        return cmd_launch(no_browser=a.no_browser)
+        return cmd_launch(no_browser=a.no_browser, force_browser=a.browser)
     except Exception as e:  # last resort: the person double-clicked an icon, they must see something
         import traceback
 

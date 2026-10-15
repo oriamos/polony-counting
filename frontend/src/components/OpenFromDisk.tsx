@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api/client';
 import type { FsListing } from '../api/types';
+import { nativePickerAvailable, pickNativeFiles } from '../lib/nativePicker';
 import { useApp } from '../state/store';
 import { Modal } from './Modal';
 
@@ -61,6 +62,16 @@ function OpenDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const browse = async () => {
+    setErr('');
+    try {
+      const paths = await pickNativeFiles();
+      if (paths.length) await openFile(paths[0]);
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
   const target = picked && listing ? join(listing.path, picked) : null;
   return (
     <Modal title="Open scan from disk" onClose={onClose}>
@@ -69,6 +80,11 @@ function OpenDialog({ onClose }: { onClose: () => void }) {
         <button className="btn sm" onClick={() => void go(typed)}>
           Go
         </button>
+        {nativePickerAvailable() && (
+          <button className="btn sm" onClick={() => void browse()} disabled={busy} data-testid="disk-browse">
+            Browse…
+          </button>
+        )}
       </div>
       {err && (
         <div className="notice err small" role="alert" data-testid="disk-error">
