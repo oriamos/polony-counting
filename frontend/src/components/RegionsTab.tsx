@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { EmbeddedRoi, Region } from '../api/types';
+import type { Analysis, EmbeddedRoi, Region } from '../api/types';
 import { polygonArea, polygonBounds, rectPolygon } from '../lib/geometry';
 import { liveObjects, useApp } from '../state/store';
 import {
@@ -8,8 +8,11 @@ import {
   describeIssues,
   exclusionCoverage,
   fieldIssues,
+  fromApiGrid,
   generateGrid,
   hasIssues,
+  storedGridCells,
+  toApiGrid,
   MAX_FIELD,
   type GridOrder,
   type GridSpec,
@@ -331,19 +334,28 @@ function FieldNumber({ region: r, locked }: { region: Region; locked: boolean })
   );
 }
 
+/** The form edits the BASE grid (no shift): a stored grid is loaded without its random shift. */
+const formGrid = (a: Analysis): GridSpec =>
+  a.slide.grid ? { ...fromApiGrid(a.slide.grid), seed: null, shiftDx: 0, shiftDy: 0 } : defaultGrid(a.image?.width ?? 2212, a.image?.height ?? 1264);
+
 function GridGenerator() {
   const a = useApp((s) => s.current)!;
   const patch = useApp((s) => s.patch);
-  const saveRegions = useApp((s) => s.saveRegions);
+  const putGrid = useApp((s) => s.putGrid);
+  const setTool = useApp((s) => s.setTool);
+  const tool = useApp((s) => s.tool);
   const toast = useApp((s) => s.toast);
   const [open, setOpen] = useState(false);
-  const [g, setG] = useState<GridSpec>(() => defaultGrid(a.image?.width ?? 2212, a.image?.height ?? 1264));
+  const [g, setG] = useState<GridSpec>(() => formGrid(a));
   const [mode, setMode] = useState<'replace' | 'add'>('replace');
   useEffect(() => {
-    setG(defaultGrid(a.image?.width ?? 2212, a.image?.height ?? 1264));
+    setG(formGrid(a));
     patch({ gridPreview: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [a.id]);
+  const stored = a.slide.grid ?? null;
+  const storedCells = storedGridCells(a);
+  const nOn = storedCells.filter((c) => c.state === 'on').length;
   useEffect(() => () => patch({ gridPreview: null }), [patch]);
 
   const existingFields = a.regions.filter((r) => r.kind === 'counting' && r.field_index != null);
@@ -370,28 +382,38 @@ function GridGenerator() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cells, cover.join(',')]);
 
-  const apply = () => {
+  // Apply = this exact grid (no shift). Fields keep their on/off choice by number; a field whose polygon does not
+  // move keeps its approval (the server decides, see PUT /grid).
+  const apply = async () => {
     if (blocked) return;
     const msg =
       mode === 'replace'
-        ? `Replace ${existingFields.length} existing field region(s) with ${cells.length} new Field-N regions? Their approvals/inspections are lost.`
+        ? `Replace ${existingFields.length} existing field region(s) with ${cells.length} Field-N regions? Fields that move lose their approvals/inspections; switched-off fields stay off.`
         : `Add ${cells.length} Field-N regions to the ${a.regions.length} existing region(s)?`;
     if (!confirm(msg)) return;
-    const stamp = Date.now().toString(36);
-    const made: Region[] = cells.map((c, i) => ({
-      id: `reg-f${stamp}-${i}`,
-      kind: 'counting',
-      name: `Field-${c.index}`,
-      polygon: c.polygon,
-      approved: false,
-      approved_at: null,
-      approval_fingerprint: null,
-      inspected: false,
-      field_index: c.index,
-    }));
-    void saveRegions([...kept, ...made]);
+    const next = await putGrid({ grid: toApiGrid({ ...g, seed: null, shiftDx: 0, shiftDy: 0 }), replace: mode === 'replace' });
+    if (!next) return;
     patch({ gridPreview: null });
-    toast('success', `${made.length} field regions created`);
+    setTool('grid-pick');
+    toast('success', `${cells.length}-field grid applied. Click fields to count them; click again to skip.`);
+  };
+  // Randomise = same rows/cols/cell size, the whole grid shifted to a random position inside the image (server
+  // picks and records the seed).
+  const randomise = async () => {
+    if (blocked) return;
+    const approved = a.regions.filter((r) => r.kind === 'counting' && r.field_index != null && r.approved).length;
+    if (approved && !confirm(`Move the grid to a random position? ${approved} approved field(s) lose their approval.`)) return;
+    const next = await putGrid({ grid: toApiGrid({ ...g, seed: null, shiftDx: 0, shiftDy: 0 }), randomise: true, replace: mode === 'replace' });
+    if (!next?.slide.grid) return;
+    patch({ gridPreview: null });
+    setTool('grid-pick');
+    const s = next.slide.grid;
+    toast('success', `Grid randomised (seed ${s.seed}): shifted by ${s.shift_dx}, ${s.shift_dy} px. Ctrl+Z undoes.`);
+  };
+  const remove = async () => {
+    if (!stored) return;
+    if (!confirm(`Remove the grid and its ${nOn} unapproved field region(s)? (refused while a field is approved)`)) return;
+    if (await putGrid({ grid: null })) setTool('select');
   };
 
   const num = (label: string, key: keyof GridSpec, min = 0, step = 1) => (
@@ -409,10 +431,34 @@ function GridGenerator() {
           {open ? 'Close' : 'Generate grid…'}
         </button>
       </div>
+      {stored && (
+        <div className="row wrap small" data-testid="grid-stored">
+          <span className="mono">
+            {stored.rows} × {stored.cols} grid · {nOn} of {storedCells.length} fields counted
+            {stored.seed != null ? ` · randomised (seed ${stored.seed}, shift ${stored.shift_dx}, ${stored.shift_dy} px)` : ''}
+          </span>
+          <button
+            className={`btn sm${tool === 'grid-pick' ? ' primary' : ''}`}
+            onClick={() => setTool(tool === 'grid-pick' ? 'select' : 'grid-pick')}
+            aria-pressed={tool === 'grid-pick'}
+            data-testid="grid-pick"
+          >
+            {tool === 'grid-pick' ? 'Done picking' : 'Pick fields'}
+          </button>
+          <button className="btn sm ghost" onClick={() => void remove()} data-testid="grid-remove">
+            Remove grid
+          </button>
+        </div>
+      )}
+      {tool === 'grid-pick' && (
+        <div className="muted small" data-testid="grid-pick-help">
+          Click fields to count them; click again to skip. Keys: A all, N none, I invert. Esc leaves.
+        </div>
+      )}
       {open && (
         <>
           <div className="muted small">
-            Creates counting regions named Field-N (field number N) on a rows × columns grid. Defaults assume a 4 × 7 grid of about 316 px cells centred on the image; check the preview against the picture.
+            Creates counting regions named Field-N (field number N) on a rows × columns grid. Defaults assume a 4 × 7 grid of about 316 px cells centred on the image; check the preview against the picture. After Apply, click fields on the image to switch them on/off for counting.
           </div>
           <div className="form-grid">
             {num('Rows', 'rows', 1)}
@@ -458,6 +504,11 @@ function GridGenerator() {
             </div>
           )}
           {outside > 0 && <div className="small warn-text">{outside} cell(s) extend beyond the image.</div>}
+          {stored?.seed != null && (
+            <div className="small muted" data-testid="grid-shift-note">
+              The applied grid is shifted by {stored.shift_dx}, {stored.shift_dy} px from the origin above (seed {stored.seed}). Apply puts it back at the origin; Randomise picks a new position.
+            </div>
+          )}
           {(partial > 0 || full > 0) && (
             <div className="small warn-text" data-testid="grid-exclusion-warn">
               {partial > 0 ? `${partial} field(s) partially covered by an exclusion (count is over the remaining area)` : ''}
@@ -472,8 +523,17 @@ function GridGenerator() {
             <button className="btn sm ghost" onClick={() => patch({ gridPreview: null })}>
               Hide preview
             </button>
-            <button className="btn sm primary" disabled={blocked} onClick={apply} data-testid="grid-apply">
+            <button className="btn sm primary" disabled={blocked} onClick={() => void apply()} data-testid="grid-apply">
               Apply ({cells.length} regions)
+            </button>
+            <button
+              className="btn sm"
+              disabled={blocked || !a.image}
+              onClick={() => void randomise()}
+              title="Same rows, columns and cell size; the whole grid moves to a random position inside the image"
+              data-testid="grid-randomise"
+            >
+              Randomise
             </button>
           </div>
         </>

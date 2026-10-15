@@ -213,6 +213,7 @@ class Tx:
         self.before_objs: dict[str, dict | None] = {}
         self.before_regions: list[dict] | None = None
         self.before_prov: dict | None = None
+        self.before_grid: dict | None = None
         self.before_book: dict | None = None
         self.cleared_approvals: list[str] = []
 
@@ -238,6 +239,16 @@ class Tx:
     def touch_regions(self) -> None:
         if self.before_regions is None:
             self.before_regions = [r.model_dump(mode="json") for r in self.a.regions]
+
+    def _grid(self) -> dict:
+        sl = self.a.slide
+        return {"grid": sl.grid.model_dump(mode="json") if sl.grid is not None else None,
+                "skipped_fields": [s_.model_dump(mode="json") for s_ in sl.skipped_fields]}
+
+    def touch_grid(self) -> None:
+        """Snapshot slide.grid + slide.skipped_fields (grid on/off state) so undo restores them with the regions."""
+        if self.before_grid is None:
+            self.before_grid = self._grid()
 
     def touch_prov(self) -> None:
         if self.before_prov is None:
@@ -283,6 +294,7 @@ class Tx:
             if self.before_prov is not None
             else None,
             "bookkeeping": self._book() if self.before_book is not None else None,
+            "grid": self._grid() if self.before_grid is not None else None,
         }
 
     def commit(self, type_: ActionType, payload: dict, undoable: bool = True) -> ReviewAction:
@@ -294,6 +306,7 @@ class Tx:
                 "regions": self.before_regions,
                 "provenance": self.before_prov,
                 "bookkeeping": self.before_book,
+                "grid": self.before_grid,
             },
             "after": self._after_snapshot(),
         }
@@ -336,6 +349,12 @@ def _apply_snapshot(state: AnalysisState, snap: dict) -> None:
         from polony_app.schemas import Provenance
 
         a.provenance = Provenance.model_validate(snap["provenance"])
+    grid = snap.get("grid")
+    if grid is not None:
+        from polony_app.schemas import GridSpec, SkippedField
+
+        a.slide.grid = GridSpec.model_validate(grid["grid"]) if grid.get("grid") is not None else None
+        a.slide.skipped_fields = [SkippedField.model_validate(x) for x in grid.get("skipped_fields", [])]
     book = snap.get("bookkeeping")
     if book is not None:
         state.detection_sig = copy.deepcopy(book.get("detection_sig"))
@@ -798,7 +817,9 @@ def _after_history_move(state: AnalysisState) -> None:
 
 
 # ------------------------------------------------------------------ regions (PUT /regions)
-def set_regions(state: AnalysisState, new_regions: list[Region]) -> ReviewAction | None:
+def set_regions(state: AnalysisState, new_regions: list[Region], grid_state: dict | None = None) -> ReviewAction | None:
+    """Replace the regions (one undoable action). `grid_state` = {"grid": GridSpec | None, "skipped_fields": [...]}
+    sets the slide's grid spec and switched-off fields in the same action, so undo/redo restore them too."""
     guard_editable(state)
     a = state.analysis
     seen: set[str] = set()
@@ -831,6 +852,10 @@ def set_regions(state: AnalysisState, new_regions: list[Region]) -> ReviewAction
     tx = Tx(state)
     tx.touch_regions()
     a.regions = merged
+    if grid_state is not None:
+        tx.touch_grid()
+        a.slide.grid = grid_state["grid"]
+        a.slide.skipped_fields = list(grid_state["skipped_fields"])
     if changed:
         for o in a.objects:
             nid = point_region_id(a, o.x, o.y)
@@ -1000,9 +1025,10 @@ def set_settings(state: AnalysisState, reporting_mode=None, slide=None, detectio
         a.reporting_mode = reporting_mode
         a.provenance.reporting_mode = reporting_mode
     if slide is not None:
-        keep_area = a.slide.counting_area_px2
+        keep_area, keep_grid = a.slide.counting_area_px2, a.slide.grid
         a.slide = slide.model_copy(deep=True)
         a.slide.counting_area_px2 = keep_area  # computed from regions, not user-set
+        a.slide.grid = keep_grid               # set only through PUT /grid (it owns the field regions)
     if detection_request is not None:
         a.detection_request = detection_request
     # staleness is derived: setting the parameters back to the ones used clears it again

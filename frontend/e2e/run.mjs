@@ -583,6 +583,74 @@ async function detectSuite() {
   check('old total-area field removed', (await tid('slide-total-area').count()) === 0);
 }
 
+// ============================================================= grid: click to select, Randomise (persisted spec)
+async function gridPickSuite() {
+  await reset();
+  await openAnalysis('demo');
+  await tid('tab-regions').click();
+  await tid('grid-toggle').click();
+  const setNum = async (k, v) => tid(`grid-${k}`).fill(String(v));
+  await setNum('rows', 2); await setNum('cols', 3); await setNum('cellW', 100); await setNum('cellH', 100); await setNum('originX', 20); await setNum('originY', 20);
+  page.once('dialog', (d) => d.accept());
+  await tid('grid-apply').click();
+  await page.waitForSelector('[data-testid=grid-cells]');
+  const st = () => page.evaluate(() => window.__polony.getState());
+  check('Apply switches to the grid-pick tool', (await page.evaluate(() => window.__polony.getState().tool)) === 'grid-pick' && (await tid('grid-pick-help').count()) === 1);
+  const onCells = () => page.evaluate(() => [...document.querySelectorAll('[data-testid=grid-cells] g[data-on="1"]')].map((g) => +g.dataset.field));
+  check('stored grid drawn, all 6 fields counted', (await page.locator('[data-testid=grid-cells] g[data-field]').count()) === 6 && (await onCells()).length === 6);
+  let srv = (await (await fetch(`${BASE}/api/analyses/demo`)).json()).slide.grid;
+  check('grid spec persisted on the server', srv && srv.rows === 2 && srv.cols === 3 && srv.cell_w === 100 && srv.seed === null, JSON.stringify(srv));
+  // N = none, then click two cells
+  await page.mouse.move(5, 5);
+  await page.keyboard.press('n');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid=grid-cells] g[data-on="1"]').length === 0);
+  check('N switches every field off', (await onCells()).length === 0);
+  const click = async (x, y) => {
+    const p = await toScreen(x, y);
+    const before = (await onCells()).length;
+    await page.mouse.click(p.x, p.y);
+    await page.waitForFunction((n) => document.querySelectorAll('[data-testid=grid-cells] g[data-on="1"]').length !== n, before);
+  };
+  await click(170, 70); // field 2 (row 0, col 1)
+  await click(170, 170); // field 5 (row 1, col 1)
+  check('clicking two cells selects fields 2 and 5', JSON.stringify((await onCells()).sort()) === '[2,5]', JSON.stringify(await onCells()));
+  const p2 = await toScreen(170, 70);
+  await page.mouse.move(p2.x, p2.y);
+  await page.waitForSelector('[data-testid=grid-cells] g[data-hover="1"]');
+  check('hovered cell highlighted', (await page.locator('[data-testid=grid-cells] g[data-hover="1"]').getAttribute('data-field')) === '2');
+  // reload: grid and selection unchanged, the spec is loaded into the form
+  await openAnalysis('demo');
+  await tid('tab-regions').click();
+  await page.waitForSelector('[data-testid=grid-cells]');
+  check('after reload fields 2 and 5 still selected', JSON.stringify((await onCells()).sort()) === '[2,5]');
+  await tid('grid-toggle').click();
+  check('stored spec loaded into the generator form', (await tid('grid-rows').inputValue()) === '2' && (await tid('grid-cellW').inputValue()) === '100' && (await tid('grid-originX').inputValue()) === '20');
+  // Randomise: same size and count, inside the image, selection kept by field number, seed recorded
+  await tid('grid-randomise').click();
+  await page.waitForFunction(() => window.__polony.getState().current.slide.grid?.seed != null);
+  srv = (await (await fetch(`${BASE}/api/analyses/demo`)).json()).slide;
+  const g = srv.grid;
+  const regs = (await (await fetch(`${BASE}/api/analyses/demo`)).json()).regions.filter((r) => r.field_index != null);
+  const polys = [...regs.map((r) => r.polygon), ...srv.skipped_fields.map((x) => x.polygon)];
+  const inside = polys.every((p) => p.every(([x, y]) => x >= -0.5 && y >= -0.5 && x <= 511.5 && y <= 383.5));
+  const sized = polys.every((p) => p[1][0] - p[0][0] === 100 && p[2][1] - p[1][1] === 100);
+  check('Randomise keeps size/count, stays inside, records the seed', g.rows === 2 && g.cols === 3 && polys.length === 6 && inside && sized && Number.isInteger(g.seed), JSON.stringify(g));
+  check('Randomise keeps the selected field numbers', JSON.stringify(regs.map((r) => r.field_index).sort()) === '[2,5]' && (await tid('grid-stored').innerText()).includes(`seed ${g.seed}`));
+  check('grid-pick active after Randomise', (await st()).tool === 'grid-pick');
+  // I = invert
+  await page.mouse.move(5, 5);
+  await page.keyboard.press('i');
+  await page
+    .waitForFunction(() => [...document.querySelectorAll('[data-testid=grid-cells] g[data-on="1"]')].map((g) => g.dataset.field).sort().join() === '1,3,4,6')
+    .catch(() => undefined);
+  check('I inverts the selection', JSON.stringify((await onCells()).sort()) === '[1,3,4,6]', JSON.stringify(await onCells()));
+  // Esc leaves the tool; A then means add mode again
+  await page.keyboard.press('Escape');
+  check('Esc leaves grid-pick', (await st()).tool === 'select');
+  await shot('grid-pick');
+  await reset();
+}
+
 // ============================================================= lab export
 async function labSuite() {
   await reset();
@@ -989,7 +1057,7 @@ async function layoutSuite() {
   await reset();
 }
 
-const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, themeSuite, referenceSuite, engineSuite, layoutSuite];
+const suites = [alignmentSuite, coordSuite, regionSuite, editSuite, reviewSuite, mappingSuite, detectSuite, labSuite, gridPickSuite, themeSuite, referenceSuite, engineSuite, layoutSuite];
 for (const s of suites) {
   try {
     await s();

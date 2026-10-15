@@ -284,7 +284,7 @@ function emptyAnalysis(id, name, image, status) {
       reporting_mode: 'exclusive',
       stale_detection: false,
     },
-    slide: { slide_id: null, sampling_date: null, polony_date: null, qc: null, field_area: null, grid_area: null, lab_series: [], efficiency_input: null, sample_volume_ul: null, concentration_factor: null, sampled_area_note: null, counting_area_px2: null, pixel_size_um: null, csv_color_mapping: null },
+    slide: { slide_id: null, sampling_date: null, polony_date: null, qc: null, field_area: null, grid_area: null, lab_series: [], efficiency_input: null, sample_volume_ul: null, concentration_factor: null, sampled_area_note: null, counting_area_px2: null, pixel_size_um: null, csv_color_mapping: null, skipped_fields: [], grid: null },
     finalized_at: null,
     undo_depth: 0,
     redo_depth: 0,
@@ -436,9 +436,40 @@ function refresh(a) {
   }
   return a;
 }
+// ---- counting grid geometry: same rules as fields/grid.py / src/lib/labgrid.ts
+function gridCells(g) {
+  const rows = Math.max(0, Math.floor(g.rows)), cols = Math.max(0, Math.floor(g.cols));
+  const rr = g.corner === 'bl' || g.corner === 'br', rc = g.corner === 'tr' || g.corner === 'br';
+  const ro = Array.from({ length: rows }, (_, i) => (rr ? rows - 1 - i : i));
+  const co = Array.from({ length: cols }, (_, i) => (rc ? cols - 1 - i : i));
+  const seq = [];
+  if (g.order === 'row-major') for (const r of ro) for (const c of co) seq.push([r, c]);
+  else for (const c of co) for (const r of ro) seq.push([r, c]);
+  const ox = g.origin_x + (g.shift_dx || 0), oy = g.origin_y + (g.shift_dy || 0);
+  return seq.map(([r, c], n) => {
+    const x0 = ox + c * g.cell_w, y0 = oy + r * g.cell_h, x1 = ox + (c + 1) * g.cell_w, y1 = oy + (r + 1) * g.cell_h;
+    return { fi: g.first_index + n, polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] };
+  });
+}
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function axisShift(origin, n, cell, size, u) {
+  const lo = -0.5 - origin, hi = size - 0.5 - n * cell - origin;
+  if (hi < lo) return 0;
+  const p = Math.ceil(lo), q = Math.floor(hi);
+  if (p > q) return lo;
+  return p + Math.min(q - p, Math.floor(u * (q - p + 1))) + 0;
+}
 function snapshot(a) {
   const st = store.undo.get(a.id) || [];
-  st.push(clone({ objects: a.objects, regions: a.regions, stale: a.provenance.stale_detection }));
+  st.push(clone({ objects: a.objects, regions: a.regions, stale: a.provenance.stale_detection, grid: a.slide.grid ?? null, skipped: a.slide.skipped_fields ?? [] }));
   store.undo.set(a.id, st);
   store.redo.set(a.id, []);
 }
@@ -1003,9 +1034,86 @@ async function handle(req, res) {
       }
       return send(res, 200, refresh(a));
     }
+    if (sub === 'grid-selection' && m === 'PUT') {
+      if (a.status === 'finalized') throw new HttpError(409, 'analysis_finalized', 'Analysis is finalized; reopen it to edit.');
+      const fi = body.field_index;
+      const isF = (r) => r.kind === 'counting' && r.field_index != null;
+      const cur = a.regions.find((r) => isF(r) && r.field_index === fi);
+      const sk = (a.slide.skipped_fields || []).find((x) => x.field_index === fi);
+      if (body.counted ? cur : !cur && sk) return send(res, 200, refresh(a));
+      if (body.counted ? !sk : !cur) throw new HttpError(404, 'unknown_field', `field ${fi} is not part of the grid`);
+      snapshot(a);
+      if (body.counted) {
+        const r = { id: `reg-g${++store.seq}`, kind: 'counting', name: sk.name, field_index: fi, polygon: sk.polygon, approved: false, approved_at: null, approval_fingerprint: null, inspected: false };
+        a.regions = [...a.regions.filter(isF), r].sort((p, q) => p.field_index - q.field_index).concat(a.regions.filter((x) => !isF(x)));
+        a.slide.skipped_fields = a.slide.skipped_fields.filter((x) => x.field_index !== fi);
+      } else {
+        a.regions = a.regions.filter((r) => r.id !== cur.id);
+        a.slide.skipped_fields = [...(a.slide.skipped_fields || []).filter((x) => x.field_index !== fi), { field_index: fi, name: cur.name, polygon: cur.polygon }];
+      }
+      a.objects.forEach((o) => (o.region_id = regionOf(a, o.x, o.y)));
+      return send(res, 200, refresh(a));
+    }
+    if (sub === 'grid' && m === 'PUT') {
+      // mirrors PUT /analyses/{aid}/grid (src/polony_app/api/main.py) and fields/grid.py
+      if (a.status === 'finalized') throw new HttpError(409, 'analysis_finalized', 'Analysis is finalized; reopen it to edit.');
+      const isF = (r) => r.kind === 'counting' && r.field_index != null;
+      const fields = a.regions.filter(isF);
+      const others = a.regions.filter((r) => !isF(r));
+      const skipped = a.slide.skipped_fields || [];
+      if (!body.grid && !body.randomise) {
+        if (!a.slide.grid) return send(res, 200, refresh(a));
+        const own = new Set(gridCells(a.slide.grid).map((c) => c.fi));
+        const appr = fields.filter((r) => own.has(r.field_index) && r.approved).map((r) => r.field_index);
+        if (appr.length && !body.force) throw new HttpError(409, 'grid_fields_approved', `approved grid field(s) ${appr.join(', ')}: unapprove them first`);
+        snapshot(a);
+        a.regions = [...fields.filter((r) => !own.has(r.field_index)), ...others];
+        a.slide.skipped_fields = skipped.filter((x) => !own.has(x.field_index));
+        a.slide.grid = null;
+        a.objects.forEach((o) => (o.region_id = regionOf(a, o.x, o.y)));
+        return send(res, 200, refresh(a));
+      }
+      const spec = clone(body.grid || a.slide.grid);
+      if (!spec) throw new HttpError(422, 'no_grid', 'randomise needs a grid');
+      spec.seed = spec.seed ?? null;
+      spec.shift_dx = spec.shift_dx ?? 0;
+      spec.shift_dy = spec.shift_dy ?? 0;
+      if (!(spec.rows >= 1 && spec.cols >= 1 && spec.cell_w > 0 && spec.cell_h > 0 && spec.first_index >= 1)) throw new HttpError(422, 'invalid_grid', 'bad grid');
+      if (spec.first_index + spec.rows * spec.cols - 1 > 24) throw new HttpError(422, 'invalid_grid', 'field numbers exceed 24');
+      if (body.randomise) {
+        spec.seed = body.seed ?? Math.floor(Math.random() * 2 ** 31);
+        const rng = mulberry32(spec.seed);
+        const ux = rng(), uy = rng();
+        spec.shift_dx = axisShift(spec.origin_x, spec.cols, spec.cell_w, W, ux);
+        spec.shift_dy = axisShift(spec.origin_y, spec.rows, spec.cell_h, H, uy);
+      }
+      snapshot(a);
+      const cells = gridCells(spec);
+      const own = new Set(cells.map((c) => c.fi));
+      const byIdx = new Map();
+      for (const r of fields) if (!byIdx.has(r.field_index)) byIdx.set(r.field_index, r);
+      const skIdx = new Map(skipped.map((x) => [x.field_index, x]));
+      const made = [];
+      const off = [];
+      for (const c of cells) {
+        const cur = byIdx.get(c.fi);
+        if (cur) {
+          const moved = JSON.stringify(cur.polygon) !== JSON.stringify(c.polygon);
+          made.push(moved ? { ...cur, polygon: c.polygon, approved: false, approved_at: null, approval_fingerprint: null, inspected: false } : cur);
+        } else if (skIdx.has(c.fi)) off.push({ ...skIdx.get(c.fi), polygon: c.polygon });
+        else made.push({ id: `reg-g${++store.seq}`, kind: 'counting', name: `Field-${c.fi}`, field_index: c.fi, polygon: c.polygon, approved: false, approved_at: null, approval_fingerprint: null, inspected: false });
+      }
+      const kept = body.replace === false ? fields.filter((r) => !own.has(r.field_index)) : [];
+      const keptOff = body.replace === false ? skipped.filter((x) => !own.has(x.field_index)) : [];
+      a.regions = [...made, ...kept].sort((p, q) => p.field_index - q.field_index).concat(others);
+      a.slide.skipped_fields = [...keptOff, ...off].sort((p, q) => p.field_index - q.field_index);
+      a.slide.grid = spec;
+      a.objects.forEach((o) => (o.region_id = regionOf(a, o.x, o.y)));
+      return send(res, 200, refresh(a));
+    }
     if (sub === 'settings' && m === 'PUT') {
       if (body.reporting_mode) a.reporting_mode = body.reporting_mode;
-      if (body.slide) a.slide = { ...a.slide, ...body.slide, counting_area_px2: a.slide.counting_area_px2 };
+      if (body.slide) a.slide = { ...a.slide, ...body.slide, counting_area_px2: a.slide.counting_area_px2, grid: a.slide.grid ?? null };
       if (body.detection_request) {
         a.detection_request = body.detection_request;
         if (a.objects.length) a.provenance.stale_detection = true;
@@ -1116,12 +1224,16 @@ async function handle(req, res) {
       const to = store[sub === 'undo' ? 'redo' : 'undo'].get(a.id) || [];
       const s = from.pop();
       if (!s) throw new HttpError(409, 'nothing_to_undo', `Nothing to ${sub}.`);
-      to.push(clone({ objects: a.objects, regions: a.regions, stale: a.provenance.stale_detection }));
+      to.push(clone({ objects: a.objects, regions: a.regions, stale: a.provenance.stale_detection, grid: a.slide.grid ?? null, skipped: a.slide.skipped_fields ?? [] }));
       store[sub].set(a.id, from);
       store[sub === 'undo' ? 'redo' : 'undo'].set(a.id, to);
       a.objects = s.objects;
       a.regions = s.regions;
       a.provenance.stale_detection = s.stale;
+      if (s.grid !== undefined) {
+        a.slide.grid = s.grid;
+        a.slide.skipped_fields = s.skipped;
+      }
       return send(res, 200, refresh(a));
     }
     if (sub === 'finalize' && m === 'POST') {

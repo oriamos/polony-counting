@@ -14,8 +14,9 @@ import {
   type Poly,
 } from '../lib/geometry';
 import { ringRadiusImage } from '../lib/glyph';
+import { cellAt, coverageState, exclusionCoverage, fromApiGrid, storedGridCells } from '../lib/labgrid';
 import { liveObjects, useApp } from '../state/store';
-import { ChamberPreviewLayer, ReferenceGridPreviewLayer, ReferencePointsLayer, GridPreviewLayer, HaloText, ObjectsLayer, RawLayer, RejectedLayer, RegionLabelsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
+import { ChamberPreviewLayer, ReferenceGridPreviewLayer, ReferencePointsLayer, GridCellsLayer, GridPreviewLayer, HaloText, ObjectsLayer, RawLayer, RejectedLayer, RegionLabelsLayer, RegionsLayer, SuggestionsLayer, Glyph } from './Overlay';
 import { rawKey } from '../state/store';
 import { ScaleBar } from './ScaleBar';
 
@@ -269,6 +270,33 @@ export function Viewer() {
     st.getState().patch({ selectedRegionId: region.id, rightTab: 'regions', tool: 'select', selection: [] });
   }
 
+  /** grid-pick: switch the stored-grid cell under (x, y) on/off. Cells outside the image or fully inside an exclusion
+   * mask cannot be selected. */
+  function toggleGridAt(x: number, y: number) {
+    const S = st.getState();
+    const a = S.current;
+    const g = a?.slide.grid;
+    if (!a || !g) {
+      S.toast('error', 'No grid yet: generate and apply one in the Regions tab');
+      return;
+    }
+    const hit = inImage(x, y) ? cellAt(fromApiGrid(g), x, y) : null; // a cell wholly off the image cannot be hit
+    if (!hit) return;
+    const cell = storedGridCells(a).find((c) => c.index === hit.index)!;
+    if (cell.state === 'missing') {
+      S.toast('error', `Field ${cell.index} was deleted; apply the grid again to get it back`);
+      return;
+    }
+    if (cell.state === 'off') {
+      const excl = a.regions.filter((r) => r.kind === 'exclusion').map((r) => r.polygon as Poly);
+      if (coverageState(exclusionCoverage(cell.polygon, excl)) === 'full') {
+        S.toast('error', `Field ${cell.index} is fully inside an exclusion mask`);
+        return;
+      }
+    }
+    void S.setGridField(cell.index, cell.state === 'off');
+  }
+
   function commitPoly(pts: [number, number][]) {
     if (pts.length < 3) return;
     const kind = st.getState().tool === 'draw-excl-poly' ? 'exclusion' : 'counting';
@@ -331,6 +359,11 @@ export function Viewer() {
     const S = st.getState();
     const [x, y] = toImg(sx, sy);
     useCursor.getState().set(inImage(x, y) ? { x, y } : null);
+    if (S.tool === 'grid-pick') {
+      const g = S.current?.slide.grid;
+      const hv = g ? cellAt(fromApiGrid(g), x, y)?.index ?? null : null;
+      if (hv !== S.gridHover) S.patch({ gridHover: hv });
+    }
     if (S.tool.endsWith('poly') && poly.length) setPolyCursor([x, y]);
     const d = drag.current;
     if (!d) return;
@@ -447,6 +480,8 @@ export function Viewer() {
         S.patch({ splitPts: [], tool: 'select' });
         if (o) void S.act('split', { object_id: o.id, positions: pts, classes: [o.cls, o.cls] });
       }
+    } else if (S.tool === 'grid-pick') {
+      toggleGridAt(x, y);
     } else if (S.tool === 'draw-count-poly' || S.tool === 'draw-excl-poly') {
       if (poly.length >= 3) {
         const f = imageToScreen(S.view, poly[0][0], poly[0][1]);
@@ -479,7 +514,7 @@ export function Viewer() {
   };
 
   const cursorStyle =
-    tool === 'select' ? 'default' : tool === 'add' ? 'copy' : 'crosshair';
+    tool === 'select' ? 'default' : tool === 'add' ? 'copy' : tool === 'grid-pick' ? 'pointer' : 'crosshair';
 
   // ---------------------------------------------------------- culling
   const vr = visibleRect(view, st.getState().viewport.w, st.getState().viewport.h);
@@ -515,7 +550,10 @@ export function Viewer() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerLeave={() => useCursor.getState().set(null)}
+      onPointerLeave={() => {
+        useCursor.getState().set(null);
+        if (st.getState().gridHover != null) st.getState().patch({ gridHover: null });
+      }}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => e.preventDefault()}
     >
@@ -550,6 +588,7 @@ export function Viewer() {
         >
           {showSuggestions && a.image.embedded_rois.length > 0 && <SuggestionsLayer rois={a.image.embedded_rois} scale={scale} />}
           {showRegions && <RegionsLayer regions={regions} scale={scale} selectedId={selectedRegionId} draft={regionDraft} />}
+          {showRegions && <GridCellsLayer scale={scale} />}
           <GridPreviewLayer scale={scale} />
           <ReferenceGridPreviewLayer scale={scale} />
           <ChamberPreviewLayer scale={scale} />
@@ -697,6 +736,7 @@ function ToolHint({ tool, polyN }: { tool: string; polyN: number }) {
     'draw-count-poly': `Click vertices for a COUNTING polygon (${polyN} placed). Double-click / Enter / click first point to finish. Backspace undoes last vertex.`,
     'draw-excl-poly': `Click vertices for an EXCLUSION polygon (${polyN} placed). Double-click / Enter / click first point to finish.`,
     'preview-window': 'Drag a window to run a detection preview (temporary, not saved).',
+    'grid-pick': 'Click fields to count them; click again to skip. A all · N none · I invert · Esc to leave.',
   };
   return <div className="viewer-chip tool" style={{ bottom: 44, left: '50%', transform: 'translateX(-50%)' }}>{t[tool] ?? ''}</div>;
 }

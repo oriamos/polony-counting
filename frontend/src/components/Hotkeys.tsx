@@ -41,6 +41,12 @@ export function Hotkeys() {
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const locked = a.status === 'finalized';
+      // grid-pick tool: A / N / I switch every field of the applied grid (A otherwise = add mode)
+      if (S.tool === 'grid-pick' && !locked && (lower === 'a' || lower === 'n' || lower === 'i')) {
+        e.preventDefault();
+        void S.setGridFields(lower === 'a' ? 'all' : lower === 'n' ? 'none' : 'invert');
+        return;
+      }
       if (lower === 'h') {
         S.patch({ hideOverlays: !S.hideOverlays });
       } else if (lower === 'f') {

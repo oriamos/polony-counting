@@ -41,6 +41,26 @@ membership and area; areas are pixel-centre counts. The automatic threshold is c
 
 ![Regions](img/03-regions.png)
 
+### Grid: click to select, Randomise
+
+Regions tab, **Generate grid…**: rows, columns, cell size, origin, numbering order and start corner. **Preview on image**
+shows the grid before anything is stored (dashed cyan).
+
+* **Apply** stores the grid with the analysis (it survives a reload) and creates one counting region `Field-N` per cell.
+  The tool switches to **Pick fields**: click a field on the image to count it, click it again to skip it (skipped = blank
+  in the CSVs, counted with no polonies = 0). Counted fields have a solid outline and their number, skipped ones a dotted
+  grey outline; the field under the cursor is highlighted. Keys while picking: **A** all, **N** none, **I** invert, **Esc**
+  leaves the tool. A field fully inside an exclusion mask cannot be switched on.
+* **Randomise** keeps the rows, columns and cell size and moves the whole grid to a random position that stays inside the
+  image (whole pixels). The seed is recorded with the grid (shown under *Grid fields* and in `provenance.json`), so the
+  position can be reproduced. Ctrl+Z undoes it.
+* Applying again (or randomising) keeps each field's on/off choice by field number. A field that does not move keeps its
+  approval; a field that moves loses it, exactly as when a region is edited by hand. **Apply** always puts the grid at
+  the origin in the form (no random shift).
+* **Remove grid** deletes the grid and its field regions; it is refused while a grid field is approved.
+
+The rectangle and polygon tools stay available for exclusions and for slides without a grid.
+
 ## 4. Parameters and preview
 
 The **Detect** tab holds the parameters of [PARAMETERS.md](PARAMETERS.md) for red and green and the match tolerance. Use **Preview on selected window** (drag a window): temporary dotted amber rings show what would be found there with the
@@ -104,7 +124,7 @@ Edited automatic objects get `origin = edited`; added ones `origin = manual`.
      * `experiment_counts.csv` (one per folder): `Slide name, What counted, NofPol, NofGrids, Field1 ... Field24`. Saving the same slide + "what counted" again replaces its row; other slides are kept. An existing file with a different header is never overwritten.
    * Save does not require finalizing; uncertain objects are never counted, and the report lists unapproved fields.
 
-API: `GET /api/fs/list`, `POST /api/analyses/open-path`, `PUT /api/analyses/{id}/grid-selection`, `POST /api/analyses/{id}/save-slide`.
+API: `GET /api/fs/list`, `POST /api/analyses/open-path`, `PUT /api/analyses/{id}/grid`, `PUT /api/analyses/{id}/grid-selection`, `POST /api/analyses/{id}/save-slide`.
 
 ## 8. Keyboard shortcuts
 
@@ -124,6 +144,7 @@ API: `GET /api/fs/list`, `POST /api/analyses/open-path`, `PUT /api/analyses/{id}
 | Enter | confirm selected and advance in the queue |
 | J / K | next / previous queue item |
 | Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) | undo / redo |
+| A / N / I (Pick fields tool) | count all grid fields / none / invert |
 | Polygon tool | click vertices; double-click, Enter or click the first point to finish; Backspace removes the last vertex; Esc cancels |
 | Esc | cancel tool / clear selection |
 | ? | help |

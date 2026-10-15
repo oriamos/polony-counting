@@ -362,6 +362,37 @@ export interface SlideMeta {
   csv_color_mapping: Record<string, string> | null;
   /** grid fields switched off for counting (blank in the CSVs); geometry kept so they can be switched back on */
   skipped_fields?: SkippedField[];
+  /** the applied counting grid (set only through PUT /grid); null/absent = no grid */
+  grid?: GridSpec | null;
+}
+
+/** Counting grid as stored on the server (schemas.py GridSpec). Effective origin = origin + shift. */
+export interface GridSpec {
+  rows: number;
+  cols: number;
+  cell_w: number;
+  cell_h: number;
+  origin_x: number;
+  origin_y: number;
+  order: 'row-major' | 'col-major';
+  corner: 'tl' | 'tr' | 'bl' | 'br';
+  first_index: number;
+  /** seed of the random shift; null = not randomised */
+  seed: number | null;
+  shift_dx: number;
+  shift_dy: number;
+}
+
+/** PUT /analyses/{id}/grid. grid=null (without randomise) removes the grid. */
+export interface GridRequest {
+  grid: GridSpec | null;
+  /** server picks a random shift inside the image and records the seed */
+  randomise?: boolean;
+  seed?: number | null;
+  /** drop lab-field regions that are not part of the new grid (default true) */
+  replace?: boolean;
+  /** clearing: also remove approved grid fields */
+  force?: boolean;
 }
 
 export interface Provenance {
