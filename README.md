@@ -44,7 +44,7 @@ puts a **Polony Review** icon on your Desktop. The icon opens the app in its own
 | Install, update, uninstall, fix an install | [docs/app/INSTALL.md](docs/app/INSTALL.md) |
 | Use the app, step by step | [docs/app/USER_GUIDE.md](docs/app/USER_GUIDE.md) (experiments: section 12; shortcuts: section 17) |
 | Understand a parameter or a review flag | [docs/app/PARAMETERS.md](docs/app/PARAMETERS.md) |
-| Train / fine-tune a model | [docs/app/FINE_TUNING.md](docs/app/FINE_TUNING.md) (from reviewed corrections), [docs/app/LEGACY_FINETUNING.md](docs/app/LEGACY_FINETUNING.md) (from the historical ImageJ TIFFs) |
+| Train / fine-tune a model | **Start with [docs/app/TRAINING_GUIDE.md](docs/app/TRAINING_GUIDE.md)** (plain-language explanation and recorded results), then [docs/app/FINE_TUNING.md](docs/app/FINE_TUNING.md) (from reviewed corrections), [docs/app/LEGACY_FINETUNING.md](docs/app/LEGACY_FINETUNING.md) (from the historical ImageJ TIFFs) |
 | Evaluate a model | [docs/app/EVALUATION.md](docs/app/EVALUATION.md), results so far: [docs/app/ALL_SLIDES_EVAL.md](docs/app/ALL_SLIDES_EVAL.md) |
 | Call the API (experiments, batch runs) | [docs/app/EXPERIMENTS_API.md](docs/app/EXPERIMENTS_API.md), live docs at `/docs` while the app runs |
 | See what is still open | [docs/app/ROADMAP.md](docs/app/ROADMAP.md), [docs/app/SCIENTIFIC_OPEN_QUESTIONS.md](docs/app/SCIENTIFIC_OPEN_QUESTIONS.md) |
