@@ -1,7 +1,7 @@
 """SQLite + local-file persistence. Thread safe.
 
 Layout under data_dir:
-  app.sqlite                      analyses / actions / jobs / csv_imports
+  app.sqlite                      analyses / actions / jobs / csv_imports / experiments
   originals/<analysis_id>/        original image files (never modified)
   csv_imports/<id>/               verbatim uploaded CSV
   tmp/                            upload staging
@@ -25,6 +25,7 @@ from polony_app.schemas import (
     AnalysisStatus,
     CsvImport,
     EngineRunInfo,
+    Experiment,
     Job,
     JobStatus,
     RawDetection,
@@ -53,11 +54,63 @@ CREATE TABLE IF NOT EXISTS raw_detections (
   PRIMARY KEY (analysis_id, run_id, id));
 CREATE INDEX IF NOT EXISTS raw_det_aid_idx ON raw_detections (analysis_id, engine, page, valid);
 CREATE INDEX IF NOT EXISTS raw_det_run_idx ON raw_detections (analysis_id, run_id);
+CREATE TABLE IF NOT EXISTS experiments (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT, updated_at TEXT, notes TEXT,
+  default_grid TEXT, default_detection TEXT, status TEXT);
 """
+
+# Columns added after the first release (idempotent: added only when missing; old rows stay valid with NULL).
+COLUMN_MIGRATIONS = {
+    "analyses": [("experiment_id", "TEXT"), ("order_in_experiment", "INTEGER")],
+    "jobs": [("kind", "TEXT DEFAULT 'detect'"), ("parent_id", "TEXT"), ("experiment_id", "TEXT"), ("detail", "TEXT")],
+}
+POST_MIGRATION_INDEXES = """
+CREATE INDEX IF NOT EXISTS analyses_experiment_idx ON analyses (experiment_id);
+CREATE INDEX IF NOT EXISTS jobs_parent_idx ON jobs (parent_id);
+CREATE INDEX IF NOT EXISTS jobs_experiment_idx ON jobs (experiment_id, kind);
+"""
+BATCH_RESTART_ERROR = ("server restarted: the batch was interrupted; run it again with only_missing=true "
+                       "to finish the remaining slides")
+
+
+def migrate_columns(db: sqlite3.Connection) -> None:
+    for table, cols in COLUMN_MIGRATIONS.items():
+        have = {r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, decl in cols:
+            if name not in have:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    db.executescript(POST_MIGRATION_INDEXES)
 
 
 def new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def new_job(aid: str, kind: str, parent_id, experiment_id, detail, status: JobStatus, error) -> Job:
+    """Job object for a new row (both stores). A row created already finished carries its timestamps."""
+    ts = now() if status not in (JobStatus.queued, JobStatus.running) else None
+    return Job(id=new_id(), analysis_id=aid, status=status, kind=kind, parent_id=parent_id,
+               experiment_id=experiment_id, detail=detail, error=error,
+               message="failed" if status == JobStatus.failed else "", started_at=ts, finished_at=ts,
+               progress=1.0 if ts else 0.0)
+
+
+def experiment_args(e: Experiment) -> tuple:
+    return (e.id, e.name, e.created_at, e.updated_at, e.notes,
+            json.dumps(e.default_grid) if e.default_grid is not None else None,
+            e.default_detection.model_dump_json(), e.status.value)
+
+
+def experiment_from_row(r) -> Experiment:
+    """Row of the experiments table -> Experiment (JSON columns are text in SQLite, jsonb in Postgres)."""
+    def js(v):
+        return json.loads(v) if isinstance(v, (str, bytes)) else v
+
+    return Experiment(
+        id=r["id"], name=r["name"], created_at=r["created_at"], updated_at=r["updated_at"],
+        notes=r["notes"] or "", status=r["status"] or "open", default_grid=js(r["default_grid"]),
+        default_detection=js(r["default_detection"]) or {},
+    )
 
 
 class NotFound(ReviewError):
@@ -83,6 +136,7 @@ class Store:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
+            migrate_columns(self._db)
         self._cache: dict[str, AnalysisState] = {}
         self._saved_log_len: dict[str, int] = {}
         self._locks: dict[str, threading.RLock] = {}
@@ -122,14 +176,16 @@ class Store:
         analyses stuck in 'detecting' return to review/ready."""
         with self._dblock:
             rows = self._exec(
-                "SELECT id, analysis_id FROM jobs WHERE status IN ('queued','running')"
+                "SELECT id, analysis_id, kind FROM jobs WHERE status IN ('queued','running')"
             ).fetchall()
             ids = [r["id"] for r in rows]
             for r in rows:
                 self._exec(
                     "UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?",
-                    ("interrupted: the application was restarted while this job was running", now(), r["id"]),
+                    (BATCH_RESTART_ERROR if r["kind"] == "batch" else
+                     "interrupted: the application was restarted while this job was running", now(), r["id"]),
                 )
+            self._exec("UPDATE experiments SET status='open' WHERE status='running'")
             stuck = self._exec(
                 "SELECT id FROM analyses WHERE status='detecting' OR state LIKE '%\"job_active\": true%'"
             ).fetchall()
@@ -164,10 +220,10 @@ class Store:
     def _insert(self, st: AnalysisState) -> None:
         a = st.analysis
         self._exec(
-            "INSERT INTO analyses (id,name,status,created_at,updated_at,finalized_at,summary,state)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO analyses (id,name,status,created_at,updated_at,finalized_at,summary,state,"
+            "experiment_id,order_in_experiment) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (a.id, a.name, a.status.value, a.created_at, a.updated_at, a.finalized_at,
-             self._summary(st), json.dumps(st.to_json())),
+             self._summary(st), json.dumps(st.to_json()), a.experiment_id, a.order_in_experiment),
         )
 
     def _save(self, st: AnalysisState) -> None:
@@ -177,9 +233,10 @@ class Store:
             self._exec("BEGIN")
             try:
                 self._exec(
-                    "UPDATE analyses SET name=?,status=?,updated_at=?,finalized_at=?,summary=?,state=? WHERE id=?",
+                    "UPDATE analyses SET name=?,status=?,updated_at=?,finalized_at=?,summary=?,state=?,"
+                    "experiment_id=?,order_in_experiment=? WHERE id=?",
                     (a.name, a.status.value, a.updated_at, a.finalized_at, self._summary(st),
-                     json.dumps(st.to_json()), aid),
+                     json.dumps(st.to_json()), a.experiment_id, a.order_in_experiment, aid),
                 )
                 start = self._saved_log_len.get(aid, 0)
                 for act in st.log[start:]:
@@ -238,11 +295,13 @@ class Store:
     def list_analyses(self) -> list[dict]:
         with self._dblock:
             rows = self._exec(
-                "SELECT id,name,status,updated_at,finalized_at,summary FROM analyses ORDER BY updated_at DESC"
+                "SELECT id,name,status,updated_at,finalized_at,summary,experiment_id,order_in_experiment"
+                " FROM analyses ORDER BY updated_at DESC"
             ).fetchall()
         out = []
         for r in rows:
-            d = {k: r[k] for k in ("id", "name", "status", "updated_at", "finalized_at")}
+            d = {k: r[k] for k in ("id", "name", "status", "updated_at", "finalized_at", "experiment_id")}
+            d["order_in_experiment"] = r["order_in_experiment"] or 0
             s = r["summary"]
             d["counts"] = json.loads(s) if s and s != "null" else None
             out.append(d)
@@ -326,18 +385,35 @@ class Store:
             return int(self._exec(f"SELECT count(*) AS n FROM raw_detections WHERE {w}", tuple(args)).fetchone()["n"])
 
     # ----------------------------------------------------------- jobs
-    def create_job(self, aid: str) -> Job:
-        j = Job(id=new_id(), analysis_id=aid, status=JobStatus.queued)
+    def create_job(self, aid: str, kind: str = "detect", parent_id: str | None = None,
+                   experiment_id: str | None = None, detail: dict | None = None,
+                   status: JobStatus = JobStatus.queued, error: str | None = None) -> Job:
+        """A new job row. ``status=failed`` + ``error`` records a job that could not even start (a batch slide
+        refused before detection), so its failure is visible like any other job's."""
+        j = new_job(aid, kind, parent_id, experiment_id, detail, status, error)
         self._exec(
-            "INSERT INTO jobs (id,analysis_id,status,progress,message,created_at) VALUES (?,?,?,?,?,?)",
-            (j.id, aid, j.status.value, 0.0, "", now()),
+            "INSERT INTO jobs (id,analysis_id,status,progress,message,error,started_at,finished_at,created_at,"
+            "kind,parent_id,experiment_id,detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (j.id, aid, j.status.value, j.progress, j.message, error, j.started_at, j.finished_at, now(), kind,
+             parent_id, experiment_id, json.dumps(detail) if detail is not None else None),
         )
         return j
 
     def save_job(self, j: Job) -> None:
         self._exec(
-            "UPDATE jobs SET status=?,progress=?,message=?,error=?,started_at=?,finished_at=? WHERE id=?",
-            (j.status.value, j.progress, j.message, j.error, j.started_at, j.finished_at, j.id),
+            "UPDATE jobs SET status=?,progress=?,message=?,error=?,started_at=?,finished_at=?,detail=? WHERE id=?",
+            (j.status.value, j.progress, j.message, j.error, j.started_at, j.finished_at,
+             json.dumps(j.detail) if j.detail is not None else None, j.id),
+        )
+
+    @staticmethod
+    def _job_row(r) -> Job:
+        return Job(
+            id=r["id"], analysis_id=r["analysis_id"], status=JobStatus(r["status"]),
+            progress=r["progress"] or 0.0, message=r["message"] or "", error=r["error"],
+            started_at=r["started_at"], finished_at=r["finished_at"],
+            kind=r["kind"] or "detect", parent_id=r["parent_id"], experiment_id=r["experiment_id"],
+            detail=json.loads(r["detail"]) if r["detail"] else None,
         )
 
     def get_job(self, jid: str) -> Job:
@@ -345,11 +421,64 @@ class Store:
             r = self._exec("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
         if r is None:
             raise NotFound("job", jid)
-        return Job(
-            id=r["id"], analysis_id=r["analysis_id"], status=JobStatus(r["status"]),
-            progress=r["progress"] or 0.0, message=r["message"] or "", error=r["error"],
-            started_at=r["started_at"], finished_at=r["finished_at"],
-        )
+        return self._job_row(r)
+
+    def list_jobs(self, *, analysis_id: str | None = None, parent_id: str | None = None,
+                  experiment_id: str | None = None, kind: str | None = None, limit: int = 500) -> list[Job]:
+        """Matching jobs, newest first."""
+        where, args = [], []
+        for col, v in (("analysis_id", analysis_id), ("parent_id", parent_id), ("experiment_id", experiment_id)):
+            if v is not None:
+                where.append(f"{col}=?")
+                args.append(v)
+        if kind is not None:
+            where.append("coalesce(kind,'detect')=?")
+            args.append(kind)
+        sql = "SELECT * FROM jobs" + (" WHERE " + " AND ".join(where) if where else "")
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        with self._dblock:
+            rows = self._exec(sql, (*args, int(limit))).fetchall()
+        return [self._job_row(r) for r in rows]
+
+    def delete_jobs(self, *, experiment_id: str, kind: str) -> None:
+        self._exec("DELETE FROM jobs WHERE experiment_id=? AND kind=?", (experiment_id, kind))
+
+    # ----------------------------------------------------------- experiments
+    def create_experiment(self, e: Experiment) -> Experiment:
+        self._exec(
+            "INSERT INTO experiments (id,name,created_at,updated_at,notes,default_grid,default_detection,status)"
+            " VALUES (?,?,?,?,?,?,?,?)", experiment_args(e))
+        return e
+
+    def save_experiment(self, e: Experiment) -> None:
+        n = self._exec(
+            "UPDATE experiments SET name=?,created_at=?,updated_at=?,notes=?,default_grid=?,default_detection=?,"
+            "status=? WHERE id=?", experiment_args(e)[1:] + (e.id,)).rowcount
+        if not n:
+            raise NotFound("experiment", e.id)
+
+    def get_experiment(self, eid: str) -> Experiment:
+        with self._dblock:
+            r = self._exec("SELECT * FROM experiments WHERE id=?", (eid,)).fetchone()
+        if r is None:
+            raise NotFound("experiment", eid)
+        return experiment_from_row(r)
+
+    def list_experiments(self) -> list[Experiment]:
+        with self._dblock:
+            rows = self._exec("SELECT * FROM experiments ORDER BY updated_at DESC").fetchall()
+        return [experiment_from_row(r) for r in rows]
+
+    def delete_experiment(self, eid: str) -> None:
+        if not self._exec("DELETE FROM experiments WHERE id=?", (eid,)).rowcount:
+            raise NotFound("experiment", eid)
+
+    def experiment_slide_ids(self, eid: str) -> list[str]:
+        """Analyses of an experiment, in experiment order."""
+        with self._dblock:
+            rows = self._exec("SELECT id FROM analyses WHERE experiment_id=? "
+                              "ORDER BY coalesce(order_in_experiment,0), created_at, id", (eid,)).fetchall()
+        return [r["id"] for r in rows]
 
     # ----------------------------------------------------------- csv imports
     def csv_dir(self, cid: str) -> Path:

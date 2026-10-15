@@ -52,7 +52,7 @@ def sql(schema, q, args=()):
 def test_migrations_are_idempotent_and_versioned(tmp_path, pg_schema):
     a, b = mk(tmp_path, pg_schema), mk(tmp_path, pg_schema)
     rows = sql(pg_schema, "SELECT version FROM schema_version")
-    assert rows == [(1,), (2,)]
+    assert rows == [(1,), (2,), (3,)]
     assert {r[0] for r in sql(pg_schema, "SELECT table_name FROM information_schema.tables WHERE table_schema=%s",
                               (pg_schema,))} >= {"analyses", "actions", "jobs", "csv_imports", "machines", "schema_version"}
     assert len(sql(pg_schema, "SELECT 1 FROM machines")) == 2

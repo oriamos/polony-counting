@@ -349,19 +349,24 @@ class JobStatus(str, Enum):
     queued = "queued"
     running = "running"
     done = "done"
+    done_with_failures = "done_with_failures"   # batch only: finished, but at least one slide failed (see child jobs)
     failed = "failed"
     cancelled = "cancelled"
 
 
 class Job(BaseModel):
     id: str
-    analysis_id: str
+    analysis_id: str                # slide id; a batch uses "experiment:<eid>", model preparation "engine-spotiflow"
     status: JobStatus
     progress: float = 0.0           # 0..1
     message: str = ""
     error: Optional[str] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
+    kind: str = "detect"            # "detect" | "batch" | "prepare_model" (see JobKind)
+    parent_id: Optional[str] = None       # detect job started by a batch: the batch job id
+    experiment_id: Optional[str] = None
+    detail: Optional[dict] = None   # batch only: the run plan (slides, skips, overrides)
 
 
 class LabCountType(str, Enum):
@@ -437,6 +442,8 @@ class Analysis(BaseModel):
     redo_depth: int = 0
     alignment_dy: int = 0   # integer shift applied to green to match red (explicit user step)
     alignment_dx: int = 0
+    experiment_id: Optional[str] = None     # experiment the slide belongs to (None = loose analysis)
+    order_in_experiment: int = 0            # position of the slide in its experiment (1-based once attached)
 
 
 class Counts(BaseModel):
@@ -482,3 +489,39 @@ class ApiError(BaseModel):
     code: str
     message: str
     detail: Optional[dict] = None
+
+
+# ---------------------------------------------------------------- experiments (stage 3)
+class JobKind(str, Enum):
+    detect = "detect"
+    batch = "batch"                  # one unattended run over the slides of an experiment
+    prepare_model = "prepare_model"  # Spotiflow model download / load
+
+
+class ExperimentStatus(str, Enum):
+    open = "open"
+    running = "running"              # a batch run is active
+
+
+class Experiment(BaseModel):
+    id: str
+    name: str
+    created_at: str
+    updated_at: str
+    notes: str = ""
+    default_grid: Optional[dict] = None              # opaque grid spec (stage 1 GridSpec), applied by the grid tools
+    default_detection: DetectionRequest = DetectionRequest()   # settings of an unattended run
+    status: ExperimentStatus = ExperimentStatus.open
+
+
+class ExperimentSummary(BaseModel):
+    id: str
+    name: str
+    created_at: str
+    updated_at: str
+    notes: str = ""
+    status: ExperimentStatus = ExperimentStatus.open
+    n_slides: int = 0
+    n_detected: int = 0              # slides with a detection result (in review or finalized)
+    n_finalized: int = 0
+    last_batch: Optional[Job] = None
