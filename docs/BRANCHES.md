@@ -1,14 +1,14 @@
 # Branch history
 
 The repository is consolidated on **`main`**; every other branch is inactive (no further work happens there).
-The branches below still exist on GitHub and can be deleted safely once the notes in the last column are handled.
+The branches below still exist on GitHub and can all be deleted safely.
 
 | Branch | Content | State at archive time |
 |---|---|---|
 | `claude/polony-hitl-app` | Polony Review app (Big-FISH / Spotiflow, FastAPI + React), installers | fully merged into `main` |
 | `claude/legacy-import` | legacy dataset import and fine-tuning bridge | fully merged into `main` |
 | `docs/hackathon-brief-hitl` | Hebrew hackathon briefing PDF | PDF copied to `docs/app/HACKATHON_BRIEF_HE.pdf` on `main` |
-| `data/research-samples-2026-09-29` | eight research TIFFs (zipped) and two reference CSVs | **not merged** (large data); PR #1 still open; keep this branch until the data is archived elsewhere |
+| `data/research-samples-2026-09-29` | eight research TIFFs (zipped) and two reference CSVs | **not merged**, data not needed; PR #1 closed |
 
 ## Repository map
 
