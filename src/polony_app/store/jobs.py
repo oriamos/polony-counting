@@ -12,7 +12,8 @@ from polony_app.schemas import Job, JobStatus
 
 from .db import Store
 
-JobFn = Callable[[Callable[[float, str], None], Callable[[], bool]], str | None]
+# fn(progress, cancelled) -> None | message | (final JobStatus, message)
+JobFn = Callable[[Callable[[float, str], None], Callable[[], bool]], "str | tuple[JobStatus, str] | None"]
 
 
 class JobCancelled(Exception):
@@ -35,6 +36,7 @@ class JobRunner:
         self._flush_every = 1.0 if store.supports_heartbeat else 0.2   # fewer round trips to a remote DB
         self._hb_stop = threading.Event()
         self._hb_thread: threading.Thread | None = None
+        self._threads: list[threading.Thread] = []   # dedicated (batch) jobs, outside the worker pool
         self.heartbeat_interval = 5.0
 
     def active_job(self, analysis_id: str) -> str | None:
@@ -59,13 +61,20 @@ class JobRunner:
                 except Exception:  # noqa: BLE001  (database briefly unreachable: keep trying)
                     pass
 
-    def submit(self, analysis_id: str, fn: JobFn, on_finish: Callable[[Job], None] | None = None) -> Job:
-        """fn(progress, cancelled) -> optional final message. Raise JobCancelled
-        (or anything with name DetectionCancelled) to end as cancelled."""
+    def submit(self, analysis_id: str, fn: JobFn, on_finish: Callable[[Job], None] | None = None, *,
+               kind: str = "detect", parent_id: str | None = None, experiment_id: str | None = None,
+               detail: dict | None = None, dedicated: bool = False) -> Job:
+        """fn(progress, cancelled) -> optional final message, or (JobStatus, message) to choose the final
+        status (a batch reports done_with_failures / cancelled that way). Raise JobCancelled
+        (or anything with name DetectionCancelled) to end as cancelled.
+        ``dedicated=True`` runs fn on its own thread instead of the worker pool: a batch job only
+        sequences other jobs and waits for them, so it must never hold a pool worker they need."""
         with self._lock:
             if analysis_id in self._active_by_analysis:
                 raise RuntimeError("job_in_progress")
-            job = self.store.create_job(analysis_id)   # RuntimeError('job_in_progress') if another machine runs one
+            # RuntimeError('job_in_progress') if another machine runs one
+            job = self.store.create_job(analysis_id, kind=kind, parent_id=parent_id, experiment_id=experiment_id,
+                                        detail=detail)
             ev = threading.Event()
             self._cancel[job.id] = ev
             self._jobs[job.id] = job
@@ -73,7 +82,14 @@ class JobRunner:
         if self.store.supports_heartbeat and self._hb_thread is None:
             self._hb_thread = threading.Thread(target=self._heartbeat_loop, name="polony-heartbeat", daemon=True)
             self._hb_thread.start()
-        self._pool.submit(self._run, job.id, fn, ev, on_finish)
+        if dedicated:
+            t = threading.Thread(target=self._run, args=(job.id, fn, ev, on_finish), name=f"polony-{kind}-{job.id}",
+                                 daemon=True)
+            with self._lock:
+                self._threads = [x for x in self._threads if x.is_alive()] + [t]
+            t.start()
+        else:
+            self._pool.submit(self._run, job.id, fn, ev, on_finish)
         return job.model_copy()
 
     def _run(self, jid: str, fn: JobFn, ev: threading.Event, on_finish) -> None:
@@ -105,10 +121,13 @@ class JobRunner:
                     # The job's outcome is decided by what fn did, not by a cancel flag that
                     # may have been set after fn already committed: a result that was committed
                     # is never reported as cancelled, a cancel-return commits nothing.
-                    if msg == CANCELLED_MESSAGE:
-                        job.status = JobStatus.cancelled
-                    else:
-                        job.status = JobStatus.done
+                    final = None
+                    if isinstance(msg, tuple):
+                        final, msg = msg
+                    if final is None:
+                        final = JobStatus.cancelled if msg == CANCELLED_MESSAGE else JobStatus.done
+                    job.status = final
+                    if final in (JobStatus.done, JobStatus.done_with_failures):
                         job.progress = 1.0
                     if msg:
                         job.message = msg
@@ -165,4 +184,7 @@ class JobRunner:
         with self._lock:
             for ev in self._cancel.values():
                 ev.set()
+            threads = list(self._threads)
+        for t in threads:   # a cancelled batch stops after its current slide, whose job was cancelled too
+            t.join(timeout=30)
         self._pool.shutdown(wait=True, cancel_futures=True)

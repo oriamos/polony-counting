@@ -39,17 +39,18 @@ from polony_app.schemas import (
     AnalysisStatus,
     CsvImport,
     EngineRunInfo,
+    Experiment,
     Job,
     JobStatus,
     RawDetection,
     ReviewAction,
 )
 
-from .db import NotFound, new_id
+from .db import BATCH_RESTART_ERROR, NotFound, experiment_args, experiment_from_row, new_id, new_job
 
 JOB_STALE_SECONDS = 120.0       # a running job whose heartbeat is older than this is orphaned
 VIEW_TTL = 1.5                  # seconds a cached analysis may be served without a version check
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -91,6 +92,20 @@ MIGRATIONS: dict[int, list[str]] = {
              seq bigserial, data jsonb NOT NULL, PRIMARY KEY (analysis_id, run_id, id))""",
         "CREATE INDEX IF NOT EXISTS raw_det_aid_idx ON {s}.raw_detections (analysis_id, engine, page, valid)",
         "CREATE INDEX IF NOT EXISTS raw_det_run_idx ON {s}.raw_detections (analysis_id, run_id)",
+    ],
+    3: [   # experiments + batch runs (existing analyses / jobs stay valid: the new columns are NULL)
+        """CREATE TABLE IF NOT EXISTS {s}.experiments (
+             id text PRIMARY KEY, name text NOT NULL, created_at text, updated_at text, notes text,
+             default_grid jsonb, default_detection jsonb, status text)""",
+        "ALTER TABLE {s}.analyses ADD COLUMN IF NOT EXISTS experiment_id text",
+        "ALTER TABLE {s}.analyses ADD COLUMN IF NOT EXISTS order_in_experiment integer",
+        "CREATE INDEX IF NOT EXISTS analyses_experiment_idx ON {s}.analyses (experiment_id)",
+        "ALTER TABLE {s}.jobs ADD COLUMN IF NOT EXISTS kind text DEFAULT 'detect'",
+        "ALTER TABLE {s}.jobs ADD COLUMN IF NOT EXISTS parent_id text",
+        "ALTER TABLE {s}.jobs ADD COLUMN IF NOT EXISTS experiment_id text",
+        "ALTER TABLE {s}.jobs ADD COLUMN IF NOT EXISTS detail jsonb",
+        "CREATE INDEX IF NOT EXISTS jobs_parent_idx ON {s}.jobs (parent_id)",
+        "CREATE INDEX IF NOT EXISTS jobs_experiment_idx ON {s}.jobs (experiment_id, kind)",
     ],
 }
 
@@ -136,6 +151,7 @@ class PgStore:
             f'"{s}".analyses', f'"{s}".actions', f'"{s}".jobs', f'"{s}".csv_imports',
             f'"{s}".machines', f'"{s}".schema_version',
         )
+        self._E = f'"{s}".experiments'
         self._cache: dict[str, _Entry] = {}
         self._locks: dict[str, threading.RLock] = {}
         self._guard = threading.Lock()
@@ -276,11 +292,15 @@ class PgStore:
         crashed / lost network).  Jobs of other machines with a fresh heartbeat are untouched."""
         msg = "interrupted: the application was restarted while this job was running"
         rows = self._q(
-            f"UPDATE {self._J} SET status='failed', error=%s, finished_at=%s "
+            f"UPDATE {self._J} SET status='failed', error=CASE WHEN kind='batch' THEN %s ELSE %s END, finished_at=%s "
             "WHERE status IN ('queued','running') AND (owner_machine_id=%s OR "
             "heartbeat_at < now() - make_interval(secs => %s)) RETURNING id",
-            (msg, now(), self.machine_id, self.stale_seconds), fetch="all")
+            (BATCH_RESTART_ERROR, msg, now(), self.machine_id, self.stale_seconds), fetch="all")
         ids = [r["id"] for r in rows]
+        # an experiment marked running whose batch is no longer alive (on any machine) is open again
+        self._q(f"UPDATE {self._E} e SET status='open' WHERE status='running' AND NOT EXISTS ("
+                f"SELECT 1 FROM {self._J} j WHERE j.experiment_id=e.id AND j.kind='batch' "
+                "AND j.status IN ('queued','running'))")
         stuck = self._q(
             f"SELECT a.id FROM {self._A} a WHERE (a.status='detecting' OR a.state->>'job_active'='true') "
             f"AND NOT EXISTS (SELECT 1 FROM {self._J} j WHERE j.analysis_id=a.id "
@@ -304,9 +324,10 @@ class PgStore:
         with self._lock_for(aid):
             self._q(
                 f"INSERT INTO {self._A} (id,name,status,created_at,updated_at,finalized_at,summary,state,"
-                "version,updated_by) VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,1,%s)",
+                "version,updated_by,experiment_id,order_in_experiment) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,1,%s,%s,%s)",
                 (aid, a.name, a.status.value, a.created_at, a.updated_at, a.finalized_at,
-                 _summary(st), json.dumps(st.to_json()), self.machine_id))
+                 _summary(st), json.dumps(st.to_json()), self.machine_id, a.experiment_id, a.order_in_experiment))
             self._cache[aid] = _Entry(st, 1)
         return aid
 
@@ -429,9 +450,10 @@ class PgStore:
         with self._pipe(conn):
             cu = conn.execute(
                 f"UPDATE {self._A} SET name=%s,status=%s,updated_at=%s,finalized_at=%s,summary=%s::jsonb,"
-                "state=%s::jsonb,version=version+1,updated_by=%s,db_updated_at=now() WHERE id=%s AND version=%s",
+                "state=%s::jsonb,version=version+1,updated_by=%s,db_updated_at=now(),experiment_id=%s,"
+                "order_in_experiment=%s WHERE id=%s AND version=%s",
                 (a.name, a.status.value, a.updated_at, a.finalized_at, _summary(st),
-                 json.dumps(st.to_json()), self.machine_id, aid, ent.version))
+                 json.dumps(st.to_json()), self.machine_id, a.experiment_id, a.order_in_experiment, aid, ent.version))
             if rows:
                 conn.cursor().executemany(
                     f"INSERT INTO {self._X} (analysis_id,seq,ts,type,payload,machine_id,data) "
@@ -449,10 +471,11 @@ class PgStore:
         return self._q(f"SELECT 1 AS x FROM {self._A} WHERE id=%s", (aid,), fetch="one") is not None
 
     def list_analyses(self) -> list[dict]:
-        rows = self._q(f"SELECT id,name,status,updated_at,finalized_at,summary FROM {self._A} "
-                       "ORDER BY updated_at DESC", fetch="all")
+        rows = self._q(f"SELECT id,name,status,updated_at,finalized_at,summary,experiment_id,order_in_experiment "
+                       f"FROM {self._A} ORDER BY updated_at DESC", fetch="all")
         return [{"id": r["id"], "name": r["name"], "status": r["status"], "updated_at": r["updated_at"],
-                 "finalized_at": r["finalized_at"], "counts": r["summary"]} for r in rows]
+                 "finalized_at": r["finalized_at"], "experiment_id": r["experiment_id"],
+                 "order_in_experiment": r["order_in_experiment"] or 0, "counts": r["summary"]} for r in rows]
 
     def delete_analysis(self, aid: str) -> None:
         with self._lock_for(aid):
@@ -524,8 +547,10 @@ class PgStore:
         return int(r["n"])
 
     # ----------------------------------------------------------- jobs
-    def create_job(self, aid: str) -> Job:
-        j = Job(id=new_id(), analysis_id=aid, status=JobStatus.queued)
+    def create_job(self, aid: str, kind: str = "detect", parent_id: Optional[str] = None,
+                   experiment_id: Optional[str] = None, detail: Optional[dict] = None,
+                   status: JobStatus = JobStatus.queued, error: Optional[str] = None) -> Job:
+        j = new_job(aid, kind, parent_id, experiment_id, detail, status, error)
         try:
             with self._conn() as conn:
                 with conn.transaction():
@@ -535,9 +560,12 @@ class PgStore:
                         "AND heartbeat_at < now() - make_interval(secs => %s)",
                         (now(), aid, self.stale_seconds))
                     conn.execute(
-                        f"INSERT INTO {self._J} (id,analysis_id,status,progress,message,created_at,owner_machine_id)"
-                        " VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                        (j.id, aid, j.status.value, 0.0, "", now(), self.machine_id))
+                        f"INSERT INTO {self._J} (id,analysis_id,status,progress,message,error,started_at,finished_at,"
+                        "created_at,owner_machine_id,kind,parent_id,experiment_id,detail)"
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+                        (j.id, aid, j.status.value, j.progress, j.message, error, j.started_at, j.finished_at,
+                         now(), self.machine_id, kind, parent_id, experiment_id,
+                         json.dumps(detail) if detail is not None else None))
         except psycopg.errors.UniqueViolation:
             raise RuntimeError("job_in_progress") from None
         return j
@@ -546,8 +574,9 @@ class PgStore:
         """Persist progress + heartbeat. Returns True when a cancel was requested (by any machine)."""
         r = self._q(
             f"UPDATE {self._J} SET status=%s,progress=%s,message=%s,error=%s,started_at=%s,finished_at=%s,"
-            "heartbeat_at=now() WHERE id=%s RETURNING cancel_requested",
-            (j.status.value, j.progress, j.message, j.error, j.started_at, j.finished_at, j.id), fetch="all")
+            "detail=%s::jsonb,heartbeat_at=now() WHERE id=%s RETURNING cancel_requested",
+            (j.status.value, j.progress, j.message, j.error, j.started_at, j.finished_at,
+             json.dumps(j.detail) if j.detail is not None else None, j.id), fetch="all")
         return bool(r and r[0]["cancel_requested"])
 
     def touch_job(self, jid: str) -> bool:
@@ -570,6 +599,9 @@ class PgStore:
                     (jid,), fetch="one")
         if r is None:
             raise NotFound("job", jid)
+        return self._job_row(r)
+
+    def _job_row(self, r: dict) -> Job:
         status = JobStatus(r["status"])
         error = r["error"]
         if status in (JobStatus.queued, JobStatus.running):
@@ -578,7 +610,58 @@ class PgStore:
                 status, error = JobStatus.failed, "stale: owner stopped sending heartbeats"
         return Job(id=r["id"], analysis_id=r["analysis_id"], status=status, progress=r["progress"] or 0.0,
                    message=r["message"] or "", error=error, started_at=r["started_at"],
-                   finished_at=r["finished_at"])
+                   finished_at=r["finished_at"], kind=r.get("kind") or "detect", parent_id=r.get("parent_id"),
+                   experiment_id=r.get("experiment_id"), detail=r.get("detail"))
+
+    def list_jobs(self, *, analysis_id: Optional[str] = None, parent_id: Optional[str] = None,
+                  experiment_id: Optional[str] = None, kind: Optional[str] = None, limit: int = 500) -> list[Job]:
+        """Matching jobs, newest first."""
+        where, args = [], []
+        for col, v in (("analysis_id", analysis_id), ("parent_id", parent_id), ("experiment_id", experiment_id)):
+            if v is not None:
+                where.append(f"{col}=%s")
+                args.append(v)
+        if kind is not None:
+            where.append("coalesce(kind,'detect')=%s")
+            args.append(kind)
+        sql = f"SELECT *, extract(epoch from now() - heartbeat_at) AS age FROM {self._J}"
+        sql += (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created_at DESC, id DESC LIMIT %s"
+        return [self._job_row(r) for r in self._q(sql, (*args, int(limit)), fetch="all")]
+
+    def delete_jobs(self, *, experiment_id: str, kind: str) -> None:
+        self._q(f"DELETE FROM {self._J} WHERE experiment_id=%s AND kind=%s", (experiment_id, kind))
+
+    # ----------------------------------------------------------- experiments
+    def create_experiment(self, e: Experiment) -> Experiment:
+        self._q(f"INSERT INTO {self._E} (id,name,created_at,updated_at,notes,default_grid,default_detection,status)"
+                " VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s)", experiment_args(e))
+        return e
+
+    def save_experiment(self, e: Experiment) -> None:
+        n = self._q(f"UPDATE {self._E} SET name=%s,created_at=%s,updated_at=%s,notes=%s,default_grid=%s::jsonb,"
+                    "default_detection=%s::jsonb,status=%s WHERE id=%s", experiment_args(e)[1:] + (e.id,))
+        if not n:
+            raise NotFound("experiment", e.id)
+
+    def get_experiment(self, eid: str) -> Experiment:
+        r = self._q(f"SELECT * FROM {self._E} WHERE id=%s", (eid,), fetch="one")
+        if r is None:
+            raise NotFound("experiment", eid)
+        return experiment_from_row(r)
+
+    def list_experiments(self) -> list[Experiment]:
+        return [experiment_from_row(r) for r in self._q(f"SELECT * FROM {self._E} ORDER BY updated_at DESC",
+                                                        fetch="all")]
+
+    def delete_experiment(self, eid: str) -> None:
+        if not self._q(f"DELETE FROM {self._E} WHERE id=%s", (eid,)):
+            raise NotFound("experiment", eid)
+
+    def experiment_slide_ids(self, eid: str) -> list[str]:
+        """Analyses of an experiment, in experiment order."""
+        rows = self._q(f"SELECT id FROM {self._A} WHERE experiment_id=%s "
+                       "ORDER BY coalesce(order_in_experiment,0), created_at, id", (eid,), fetch="all")
+        return [r["id"] for r in rows]
 
     # ----------------------------------------------------------- csv imports
     def csv_dir(self, cid: str) -> Path:

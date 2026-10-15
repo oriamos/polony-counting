@@ -41,6 +41,7 @@ Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` 
 | [OPEN_ITEMS_AND_HACKATHON.md](OPEN_ITEMS_AND_HACKATHON.md) | everything still open + hackathon checklist |
 | [INSTALL.md](INSTALL.md), [SHARED_DATABASE.md](SHARED_DATABASE.md), [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md) | one-command install, optional shared Postgres, Vercel feasibility (paused) |
 | [LAB_EXPORT.md](LAB_EXPORT.md), [FIELDS.md](FIELDS.md) | lab-format export and field/reference handling |
+| [EXPERIMENTS_API.md](EXPERIMENTS_API.md) | experiments: import, unattended batch run, experiment CSV / provenance (API contract) |
 | [TWO_ENGINE.md](TWO_ENGINE.md), [TWO_ENGINE_CONTRACT.md](TWO_ENGINE_CONTRACT.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md) | Big-FISH + Spotiflow, consensus, contracts |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | plan for the lab's feedback: grid by clicking + randomise, Spotiflow on Mac, experiments with overnight runs and one CSV, desktop window |
 | [FINE_TUNING.md](FINE_TUNING.md), [LEGACY_FINETUNING.md](LEGACY_FINETUNING.md), [EVALUATION.md](EVALUATION.md), [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md) | dataset snapshots, controlled fine-tuning, fine-tuning on the historical ImageJ TIFFs, evaluation |

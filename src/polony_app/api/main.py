@@ -7,12 +7,13 @@ import json
 import os
 import re
 import shutil
+import threading
 import uuid
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ValidationError
@@ -120,7 +121,8 @@ class ActionBody(BaseModel):
 
 
 class LabExportBody(BaseModel):
-    analysis_ids: list[str]
+    analysis_ids: list[str] = []
+    experiment_id: Optional[str] = None     # instead of analysis_ids: every finalized slide of the experiment
     style: Literal["t7", "counts"] = "t7"
     series: Optional[str] = None
     format: Literal["xlsx", "csv", "zip"] = "xlsx"
@@ -151,6 +153,32 @@ class QcSampleBody(BaseModel):
 
 class CsvMapBody(BaseModel):
     color_mapping: Optional[Literal["red", "green", "yellow"]] = None
+
+
+# --- experiments (request models) ---
+class ExperimentBody(BaseModel):
+    name: str
+    notes: Optional[str] = None
+    default_detection: Optional[DetectionRequest] = None
+    default_grid: Optional[dict] = None       # opaque grid spec (stage 1), stored as given
+
+
+class ExperimentUpdateBody(BaseModel):
+    """Only the keys present in the request are changed."""
+    name: Optional[str] = None
+    notes: Optional[str] = None
+    default_detection: Optional[DetectionRequest] = None
+    default_grid: Optional[dict] = None
+
+
+class ExperimentSlidesBody(BaseModel):
+    analysis_ids: list[str]
+
+
+class ExperimentRunBody(BaseModel):
+    only_missing: bool = False                       # skip slides that already have a detection result
+    analysis_ids: Optional[list[str]] = None         # run only these slides (e.g. Retry of failed ones); None = all
+    overrides: dict[str, DetectionRequest] = {}      # per-slide settings instead of the experiment default
 
 
 # ------------------------------------------------------------------ helpers
@@ -298,19 +326,24 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
         return store.info()
 
     # ------------------------------------------------------------- analyses
-    @api.post("/analyses")
-    async def create_analysis(
-        request: Request,
-        files: list[UploadFile] = File(...),
-        name: Optional[str] = Form(None),
-        red_file: Optional[str] = Form(None),
-        green_file: Optional[str] = Form(None),
-    ):
-        if not 1 <= len(files) <= 2:
-            return err(422, "invalid_upload", "upload 1 or 2 TIFF files")
-        cl = request.headers.get("content-length")
-        if cl and cl.isdigit() and int(cl) > max_upload * 2 + 1_000_000:
-            return err(413, "too_large", f"upload exceeds the {max_upload // 2**20} MB per-file limit")
+    def _stage_upload(f: UploadFile, dst: Path, limit: Optional[int], label: str) -> tuple[int, str]:
+        """Copy one uploaded file to ``dst`` in 1 MB chunks; returns (size, sha256). 413 above ``limit`` bytes."""
+        h = hashlib.sha256()
+        size = 0
+        with open(dst, "wb") as out:
+            while chunk := f.file.read(1 << 20):
+                size += len(chunk)
+                if limit is not None and size > limit:
+                    raise ReviewError("too_large", f"'{label}' exceeds the {limit // 2**20} MB limit", 413)
+                h.update(chunk)
+                out.write(chunk)
+        return size, h.hexdigest()
+
+    def _ingest_upload(files: list[UploadFile], name: Optional[str], red_file: Optional[str] = None,
+                       green_file: Optional[str] = None, prepare=None) -> str:
+        """THE upload path (POST /analyses and POST /experiments/{eid}/import): stage the TIFF(s), create the
+        analysis, ingest, pairing hints, upload manifest. ``prepare(st)`` runs inside the final edit (experiment
+        membership, copied channel mapping). Returns the analysis JSON; raises ReviewError and leaves nothing behind."""
         tmp = store.data_dir / "tmp" / uuid.uuid4().hex
         tmp.mkdir(parents=True)
         aid = None
@@ -321,18 +354,11 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                 orig = f.filename or f"file{i}.tif"
                 sname = safe_filename(orig, f"file{i}.tif")
                 if not sname.lower().endswith((".tif", ".tiff")):
-                    return err(415, "unsupported_file", f"'{sname}': only .tif/.tiff files are accepted")
+                    raise ReviewError("unsupported_file", f"'{sname}': only .tif/.tiff files are accepted", 415)
                 dst = tmp / f"{i}_{sname}"
-                size = 0
-                with open(dst, "wb") as out:
-                    while chunk := await f.read(1 << 20):
-                        size += len(chunk)
-                        if size > max_upload:
-                            return err(413, "too_large",
-                                       f"'{sname}' exceeds the {max_upload // 2**20} MB limit")
-                        out.write(chunk)
+                size, _ = _stage_upload(f, dst, max_upload, sname)
                 if size == 0:
-                    return err(422, "empty_file", f"'{sname}' is empty")
+                    raise ReviewError("empty_file", f"'{sname}' is empty", 422)
                 staged.append((sname, dst))
                 orig_names_all.append(orig)
             default_name = Path(staged[0][0]).stem
@@ -342,11 +368,9 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             try:
                 meta = ingest_files(staged, store.originals_dir(aid))
             except IngestError as e:
-                store.delete_analysis(aid)
-                return err(422, "ingest_error", str(e))
+                raise ReviewError("ingest_error", str(e), 422)
             except Exception as e:  # noqa: BLE001  unreadable/corrupt TIFF
-                store.delete_analysis(aid)
-                return err(422, "unreadable_image", f"could not read image: {type(e).__name__}: {e}")
+                raise ReviewError("unreadable_image", f"could not read image: {type(e).__name__}: {e}", 422)
             # optional pairing hints: SUGGESTED roles only, never confirmed
             if len(staged) == 2 and (red_file or green_file):
                 names = [s[0] for s in staged]
@@ -374,9 +398,10 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                 pass
             with store.edit(aid) as st:
                 st.analysis.image = meta
+                if prepare is not None:
+                    prepare(st)
                 engine.refresh_status(st)
-                out_json = st.analysis.model_dump_json()
-            return Response(out_json, media_type="application/json", status_code=200)
+                return st.analysis.model_dump_json()
         except Exception:
             if aid:
                 try:
@@ -386,6 +411,22 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             raise
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    @api.post("/analyses")
+    async def create_analysis(
+        request: Request,
+        files: list[UploadFile] = File(...),
+        name: Optional[str] = Form(None),
+        red_file: Optional[str] = Form(None),
+        green_file: Optional[str] = Form(None),
+    ):
+        if not 1 <= len(files) <= 2:
+            return err(422, "invalid_upload", "upload 1 or 2 TIFF files")
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > max_upload * 2 + 1_000_000:
+            return err(413, "too_large", f"upload exceeds the {max_upload // 2**20} MB per-file limit")
+        out_json = _ingest_upload(files, name, red_file, green_file)
+        return Response(out_json, media_type="application/json", status_code=200)
 
     # ------------------------------------------------------------- open from disk / save next to the original
     @api.get("/fs/list")
@@ -683,12 +724,7 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             staged: dict[str, Path] = {}
             for i, f in enumerate(files):
                 p = tmp / f"{i}.part"
-                h = hashlib.sha256()
-                with open(p, "wb") as out:
-                    while chunk := f.file.read(1 << 20):
-                        h.update(chunk)
-                        out.write(chunk)
-                digest = h.hexdigest()
+                _, digest = _stage_upload(f, p, None, safe_filename(f.filename))
                 if digest not in by_hash:
                     return err(422, "sha256_mismatch",
                                f"'{safe_filename(f.filename)}' is not one of the original files of this analysis "
@@ -940,6 +976,14 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             return err(422, "unknown_fields", "unknown field(s): " + ", ".join(unk), {"fields": unk})
         if body.preview_window is not None:
             return err(422, "invalid_request", "preview_window is only valid for /detect/preview")
+        return _json(_start_detection(aid, body))
+
+    def _start_detection(aid: str, body: DetectionRequest, *, parent_id: Optional[str] = None,
+                         experiment_id: Optional[str] = None, require_counting: bool = False, then=None):
+        """THE detection start, for POST /detect and for every slide of a batch run. Returns the queued Job or
+        raises ReviewError (nothing started). ``then(job)`` is called once the job has finished, whatever its
+        outcome. ``require_counting``: refuse a slide without a counting region (an unattended run must not
+        silently count the whole image)."""
 
         def work(progress, cancelled):
             try:
@@ -991,6 +1035,8 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                     engine.refresh_status(st, job_running=False)
             except Exception:  # noqa: BLE001
                 pass
+            if job is not None and then is not None:
+                then(job)
 
         # The active-job check, the 'detecting' flag and runner.submit happen under ONE hold of the
         # analysis lock (the worker's own store access waits for it), so two concurrent requests
@@ -999,6 +1045,9 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
         with store.edit(aid) as st:
             engine.guard_editable(st)
             _detection_inputs(st)
+            if require_counting and not any(r.kind.value == "counting" for r in st.analysis.regions):
+                raise ReviewError("no_counting_region", "no counting region: set a grid or draw a counting region "
+                                  "on this slide before running detection", 409)
             if runner.active_job(aid):
                 raise ReviewError("job_in_progress", "a detection job is already running", 409)
             start_sig = _sig(st.analysis, st)
@@ -1013,11 +1062,12 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             except Exception:  # noqa: BLE001  (the job itself reports an import problem)
                 extra_kw = {}
             try:
-                job = runner.submit(aid, work, finish)
+                job = runner.submit(aid, work, finish, kind="detect", parent_id=parent_id,
+                                    experiment_id=experiment_id)
             except RuntimeError:
                 raise ReviewError("job_in_progress", "a detection job is already running", 409)
             engine.refresh_status(st, job_running=True)
-        return _json(job)
+        return job
 
     @api.post("/analyses/{aid}/detect/preview")
     def post_preview(aid: str, body: DetectionRequest):
@@ -1122,6 +1172,18 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
         out.append(sp)
         return out
 
+    def _prepare_model(name: str, progress) -> str:
+        """Download/load one Spotiflow model (no-op when cached). Used by POST /engines/spotiflow/prepare and
+        once before the first slide of a batch run that uses Spotiflow."""
+        ad, why = _spotiflow_adapter()
+        if ad is None or not hasattr(ad, "ensure_model"):
+            raise ReviewError("engine_unavailable", f"Spotiflow is not available in this installation ({why})", 409)
+        cache = ad.model_cache_dir() if hasattr(ad, "model_cache_dir") else _model_dir()
+        info = ad.ensure_model(name, cache, progress)
+        cached = getattr(info, "cached", None)
+        return (f"model '{name}' ready" + (" (already cached)" if cached else " (downloaded)")
+                + (f", sha256 {getattr(info, 'checksum_sha256', '')[:12]}" if getattr(info, "checksum_sha256", None) else ""))
+
     @api.post("/engines/spotiflow/prepare")
     def post_prepare_spotiflow(body: PrepareModelBody):
         """Download/load a Spotiflow model once (cached afterwards; never re-downloaded) as a Job."""
@@ -1133,14 +1195,10 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
             return err(422, "invalid_model_name", "model_name must be a non-empty name")
 
         def work(progress, cancelled):
-            cache = ad.model_cache_dir() if hasattr(ad, "model_cache_dir") else _model_dir()
-            info = ad.ensure_model(name, cache, progress)
-            cached = getattr(info, "cached", None)
-            return (f"model '{name}' ready" + (" (already cached)" if cached else " (downloaded)")
-                    + (f", sha256 {getattr(info, 'checksum_sha256', '')[:12]}" if getattr(info, "checksum_sha256", None) else ""))
+            return _prepare_model(name, progress)
 
         try:
-            job = runner.submit("engine-spotiflow", work)
+            job = runner.submit("engine-spotiflow", work, kind="prepare_model")
         except RuntimeError:
             raise ReviewError("job_in_progress", "a model preparation job is already running", 409)
         return _json(job)
@@ -1303,7 +1361,17 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
 
     @api.post("/lab-export")
     def post_lab_export(body: LabExportBody):
-        return _lab_response(body.analysis_ids, body.style, body.series, body.format)
+        ids = list(body.analysis_ids)
+        if body.experiment_id is not None:
+            if ids:
+                return err(422, "invalid_request", "give either analysis_ids or experiment_id, not both")
+            store.get_experiment(eid_ok(body.experiment_id))
+            ids = [i for i in store.experiment_slide_ids(body.experiment_id) if _finalized(i)]
+            if not ids:
+                return err(409, "no_finalized_slides", "this experiment has no finalized slide to export")
+        elif not ids:
+            return err(422, "invalid_request", "give analysis_ids or experiment_id")
+        return _lab_response(ids, body.style, body.series, body.format)
 
     # ------------------------------------------------------------- csv imports
     @api.post("/csv-imports")
@@ -1340,6 +1408,458 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
         imp.color_mapping = body.color_mapping
         store.save_csv_import(imp)
         return _json(imp)
+
+    # --- experiments -------------------------------------------------------------------------------
+    # An experiment groups slides (analyses with experiment_id) in a fixed order. A batch run is one job of
+    # kind 'batch' (analysis_id "experiment:<eid>", so the runner allows one active batch per experiment) that
+    # starts one ordinary detect job per slide, sequentially, each with parent_id = the batch id.
+    from polony_app.export import experiment as exp_export
+    from polony_app.schemas import EngineChoice, Experiment, ExperimentStatus, JobKind, RegionKind
+
+    def eid_ok(eid: str) -> str:
+        if not ID_RE.match(eid):
+            raise NotFound("experiment", eid)
+        return eid
+
+    def _batch_key(eid: str) -> str:
+        return f"experiment:{eid}"
+
+    def _active_batch(eid: str) -> Optional[str]:
+        return runner.active_job(_batch_key(eid))
+
+    def _finalized(aid: str) -> bool:
+        with store.view(aid) as st:
+            return st.analysis.finalized_at is not None
+
+    def _fresh_job(j):
+        """The runner's in-memory copy of a job this computer runs (fresher than the row), else the row."""
+        if j.status in (JobStatus.queued, JobStatus.running):
+            try:
+                return runner.get(j.id)
+            except NotFound:
+                pass
+        return j
+
+    def _job_dict(j) -> Optional[dict]:
+        return json.loads(j.model_dump_json()) if j is not None else None
+
+    def _exp_dict(e: Experiment) -> dict:
+        d = json.loads(e.model_dump_json())
+        d["status"] = ExperimentStatus.running.value if _active_batch(e.id) else ExperimentStatus.open.value
+        return d
+
+    def _last_batch(eid: str):
+        jobs = store.list_jobs(experiment_id=eid, kind=JobKind.batch.value, limit=1)
+        return _fresh_job(jobs[0]) if jobs else None
+
+    def _layout(im) -> Optional[tuple]:
+        """What must be identical for a channel mapping to be copied between slides."""
+        if im is None:
+            return None
+        return (im.kind.value, im.dtype, len(im.channels), len({c.source_file for c in im.channels}),
+                tuple(c.page for c in im.channels))
+
+    def _slide_row(aid: str) -> dict:
+        with store.view(aid) as st:
+            a = st.analysis
+            regs = [r for r in a.regions if r.kind == RegionKind.counting]
+            row = {
+                "id": a.id, "name": a.name, "order_in_experiment": a.order_in_experiment, "status": a.status.value,
+                "export_status": exp_export.slide_status(a), "updated_at": a.updated_at,
+                "finalized_at": a.finalized_at, "mapping_confirmed": engine.mapping_confirmed(a),
+                "image": ({"width": a.image.width, "height": a.image.height, "kind": a.image.kind.value,
+                           "dtype": a.image.dtype, "n_channels": len(a.image.channels)} if a.image else None),
+                "has_grid": getattr(a.slide, "grid", None) is not None,
+                "n_counting_regions": len(regs), "n_fields": sum(1 for r in regs if r.field_index is not None),
+                "n_approved": sum(1 for r in regs if r.approved),
+                "approved": bool(regs) and all(r.approved for r in regs),
+                "review_queue": len(review_queue(a)) if a.objects else 0,
+                "detection_ran_at": a.provenance.detection_ran_at, "engine": exp_export.slide_engine(a) or None,
+                "counts": compute_counts(a)["slide"].model_dump(mode="json"),
+            }
+        jobs = store.list_jobs(analysis_id=aid, limit=1)
+        row["last_job"] = _job_dict(_fresh_job(jobs[0])) if jobs else None
+        return row
+
+    def _experiment_view(eid: str) -> dict:
+        e = store.get_experiment(eid)
+        d = _exp_dict(e)
+        d["slides"] = [_slide_row(aid) for aid in store.experiment_slide_ids(eid)]
+        d["last_batch"] = _job_dict(_last_batch(eid))
+        return d
+
+    def _batch_view(eid: str) -> dict:
+        b = _last_batch(eid)
+        if b is None:
+            return {"batch": None, "slides": [], "summary": None}
+        latest: dict = {}
+        for c in reversed(store.list_jobs(parent_id=b.id)):   # oldest first: the newest child of a slide wins
+            latest[c.analysis_id] = _fresh_job(c)
+        active = b.status in (JobStatus.queued, JobStatus.running)
+        slides = []
+        for p in (b.detail or {}).get("slides", []):
+            c = latest.get(p["analysis_id"])
+            if p.get("skip"):
+                status = "skipped"
+            elif c is not None:
+                status = c.status.value
+            else:
+                status = "pending" if active else "not_run"
+            slides.append({"analysis_id": p["analysis_id"], "name": p.get("name"), "order": p.get("order"),
+                           "status": status, "skip_reason": p.get("skip"), "override": bool(p.get("override")),
+                           "job_id": c.id if c else None, "progress": c.progress if c else 0.0,
+                           "message": c.message if c else "", "error": c.error if c else None,
+                           "started_at": c.started_at if c else None, "finished_at": c.finished_at if c else None})
+        summary = {"total": sum(1 for s in slides if s["status"] != "skipped")}
+        for k in ("done", "failed", "cancelled", "running", "queued", "pending", "not_run", "skipped"):
+            summary[k] = sum(1 for s in slides if s["status"] == k)
+        return {"batch": _job_dict(b), "slides": slides, "summary": summary}
+
+    def _set_exp_status(eid: str, status: ExperimentStatus) -> None:
+        try:
+            e = store.get_experiment(eid)
+            e.status = status
+            store.save_experiment(e)
+        except Exception:  # noqa: BLE001  (deleted meanwhile / database briefly unreachable)
+            pass
+
+    def _check_detection(req: Optional[DetectionRequest], raw: Any, where: str) -> Optional[Response]:
+        if req is None:
+            return None
+        unk = unknown_keys(DetectionRequest, raw)
+        if unk:
+            return err(422, "unknown_fields", "unknown field(s): " + ", ".join(f"{where}.{u}" for u in unk),
+                       {"fields": unk})
+        if req.preview_window is not None:
+            return err(422, "invalid_request", f"{where}.preview_window is not a run setting")
+        return None
+
+    @api.post("/experiments")
+    def post_experiment(body: ExperimentBody, raw: Any = Depends(_raw_body)):
+        unk = unknown_keys(ExperimentBody, raw)
+        if unk:
+            return err(422, "unknown_fields", "unknown field(s): " + ", ".join(unk), {"fields": unk})
+        name = (body.name or "").strip()
+        if not name:
+            return err(422, "invalid_name", "the experiment needs a name")
+        bad = _check_detection(body.default_detection, (raw or {}).get("default_detection"), "default_detection")
+        if bad is not None:
+            return bad
+        ts = engine.now()
+        e = Experiment(id=new_id(), name=name[:120], created_at=ts, updated_at=ts, notes=body.notes or "",
+                       default_grid=body.default_grid,
+                       default_detection=body.default_detection or DetectionRequest())
+        store.create_experiment(e)
+        return _experiment_view(e.id)
+
+    @api.get("/experiments")
+    def list_experiments():
+        by_exp: dict[str, list[dict]] = {}
+        for s in store.list_analyses():
+            if s.get("experiment_id"):
+                by_exp.setdefault(s["experiment_id"], []).append(s)
+        out = []
+        for e in store.list_experiments():
+            sl = by_exp.get(e.id, [])
+            d = _exp_dict(e)
+            d.update(n_slides=len(sl), n_detected=sum(1 for s in sl if s["status"] in ("in_review", "finalized")),
+                     n_finalized=sum(1 for s in sl if s["status"] == "finalized"),
+                     last_batch=_job_dict(_last_batch(e.id)))
+            out.append(d)
+        return out
+
+    @api.get("/experiments/{eid}")
+    def get_experiment(eid: str):
+        return _experiment_view(eid_ok(eid))
+
+    @api.put("/experiments/{eid}")
+    def put_experiment(eid: str, body: ExperimentUpdateBody, raw: Any = Depends(_raw_body)):
+        unk = unknown_keys(ExperimentUpdateBody, raw)
+        if unk:
+            return err(422, "unknown_fields", "unknown field(s): " + ", ".join(unk), {"fields": unk})
+        e = store.get_experiment(eid_ok(eid))
+        given = set(raw or {}) if isinstance(raw, dict) else set()
+        if "name" in given:
+            name = (body.name or "").strip()
+            if not name:
+                return err(422, "invalid_name", "the experiment needs a name")
+            e.name = name[:120]
+        if "notes" in given:
+            e.notes = body.notes or ""
+        if "default_detection" in given:
+            bad = _check_detection(body.default_detection, raw.get("default_detection"), "default_detection")
+            if bad is not None:
+                return bad
+            e.default_detection = body.default_detection or DetectionRequest()
+        if "default_grid" in given:
+            e.default_grid = body.default_grid      # null clears it
+        e.updated_at = engine.now()
+        store.save_experiment(e)
+        return _experiment_view(eid)
+
+    @api.delete("/experiments/{eid}")
+    def delete_experiment(eid: str, delete_slides: bool = False):
+        e = store.get_experiment(eid_ok(eid))
+        if _active_batch(eid):
+            return err(409, "batch_in_progress", "a batch run of this experiment is active; cancel it first")
+        ids = store.experiment_slide_ids(eid)
+        if delete_slides:
+            busy = [a for a in ids if runner.active_job(a)]
+            if busy:
+                return err(409, "job_in_progress", "a detection job is running on a slide of this experiment",
+                           {"analysis_ids": busy})
+            fin = [a for a in ids if _finalized(a)]
+            if fin:
+                return err(409, "analysis_finalized", "finalized slides are not deleted; reopen them first, or "
+                           "delete the experiment without delete_slides (its slides are kept)", {"analysis_ids": fin})
+            for a in ids:
+                store.delete_analysis(a)
+                images.forget(a)
+        else:
+            for a in ids:
+                with store.edit(a) as st:
+                    st.analysis.experiment_id = None
+                    st.analysis.order_in_experiment = 0
+        store.delete_jobs(experiment_id=e.id, kind=JobKind.batch.value)
+        store.delete_experiment(e.id)
+        return {"ok": True, "deleted_slides": ids if delete_slides else [], "detached_slides": [] if delete_slides else ids}
+
+    def _next_order(eid: str) -> int:
+        orders = [s.get("order_in_experiment") or 0 for s in store.list_analyses() if s.get("experiment_id") == eid]
+        return max(orders, default=0) + 1
+
+    @api.post("/experiments/{eid}/slides")
+    def post_experiment_slides(eid: str, body: ExperimentSlidesBody):
+        store.get_experiment(eid_ok(eid))
+        ids = list(dict.fromkeys(body.analysis_ids))
+        for a in ids:
+            aid_ok(a)
+            if not store.exists(a):
+                raise NotFound("analysis", a)
+        other = []
+        for a in ids:
+            with store.view(a) as st:
+                if st.analysis.experiment_id not in (None, eid):
+                    other.append({"analysis_id": a, "experiment_id": st.analysis.experiment_id})
+        if other:
+            return err(409, "in_other_experiment", "these analyses belong to another experiment; remove them "
+                       "from it first", {"analyses": other})
+        order = _next_order(eid)
+        for a in ids:
+            with store.edit(a) as st:
+                if st.analysis.experiment_id == eid:
+                    continue
+                st.analysis.experiment_id = eid
+                st.analysis.order_in_experiment = order
+                order += 1
+        return _experiment_view(eid)
+
+    @api.delete("/experiments/{eid}/slides/{aid}")
+    def delete_experiment_slide(eid: str, aid: str):
+        """Detach one slide (the analysis itself is kept)."""
+        store.get_experiment(eid_ok(eid))
+        with store.edit(aid_ok(aid)) as st:
+            if st.analysis.experiment_id != eid:
+                raise ReviewError("not_in_experiment", "this analysis is not part of the experiment", 404)
+            st.analysis.experiment_id = None
+            st.analysis.order_in_experiment = 0
+        return _experiment_view(eid)
+
+    @api.put("/experiments/{eid}/order")
+    def put_experiment_order(eid: str, body: ExperimentSlidesBody):
+        """Reorder: ``analysis_ids`` must list every slide of the experiment exactly once."""
+        store.get_experiment(eid_ok(eid))
+        cur = store.experiment_slide_ids(eid)
+        if sorted(body.analysis_ids) != sorted(cur):
+            return err(422, "invalid_order", "analysis_ids must list every slide of the experiment exactly once",
+                       {"analysis_ids": cur})
+        for i, a in enumerate(body.analysis_ids, start=1):
+            with store.edit(a) as st:
+                st.analysis.order_in_experiment = i
+        return _experiment_view(eid)
+
+    @api.post("/experiments/{eid}/import")
+    def post_experiment_import(eid: str, files: list[UploadFile] = File(...)):
+        """Many TIFFs, one slide each, through the same upload path as POST /analyses. The confirmed channel
+        mapping of the first confirmed slide is copied to a new slide whose file layout is identical."""
+        store.get_experiment(eid_ok(eid))
+        template = None
+        for a in store.experiment_slide_ids(eid):
+            with store.view(a) as st:
+                if engine.mapping_confirmed(st.analysis):
+                    template = (a, _layout(st.analysis.image),
+                                [{"index": c.index, "role": c.role.value} for c in st.analysis.image.channels])
+                    break
+        order = _next_order(eid)
+        created, errors = [], []
+        for f in files:
+            info = {"mapping_copied_from": None}
+
+            def prepare(st, order=order, info=info):
+                st.analysis.experiment_id = eid
+                st.analysis.order_in_experiment = order
+                if template is not None and _layout(st.analysis.image) == template[1]:
+                    engine.set_channel_mapping(st, template[2])
+                    info["mapping_copied_from"] = template[0]
+
+            try:
+                a = json.loads(_ingest_upload([f], None, prepare=prepare))
+            except ReviewError as ex:
+                errors.append({"file": safe_filename(f.filename), "code": ex.code, "message": ex.message})
+                continue
+            order += 1
+            created.append({"id": a["id"], "name": a["name"], "order_in_experiment": a["order_in_experiment"],
+                            "status": a["status"], "mapping_copied_from": info["mapping_copied_from"]})
+        if not created:
+            return err(422, "import_failed", "no file could be imported", {"errors": errors})
+        return {"created": created, "errors": errors}
+
+    # ............................................................. unattended run
+    def _run_batch_slide(bid: str, eid: str, aid: str, req: DetectionRequest) -> JobStatus:
+        """One slide of a batch: start its detect job and wait for it. A slide that cannot start is recorded as a
+        failed child job carrying the reason, so it shows up like any other failure."""
+        finished = threading.Event()
+        try:
+            job = _start_detection(aid, req, parent_id=bid, experiment_id=eid, require_counting=True,
+                                   then=lambda _j: finished.set())
+        except Exception as ex:  # noqa: BLE001  ReviewError (mapping, region, finalized, busy) or anything else
+            msg = f"{ex.code}: {ex.message}" if isinstance(ex, ReviewError) else f"{type(ex).__name__}: {ex}"
+            try:
+                store.create_job(aid, kind=JobKind.detect.value, parent_id=bid, experiment_id=eid,
+                                 status=JobStatus.failed, error=msg)
+            except Exception:  # noqa: BLE001
+                pass
+            return JobStatus.failed
+        while not finished.wait(0.5):
+            if runner.get(job.id).status not in (JobStatus.queued, JobStatus.running):
+                break   # finished without the callback (should not happen; never wait forever)
+        return runner.get(job.id).status
+
+    def _batch_work(eid: str, plan: list[dict], reqs: dict[str, DetectionRequest], started: threading.Event,
+                    holder: dict):
+        def work(progress, cancelled):
+            started.wait(10)
+            bid = holder["id"]
+            notes: list[str] = []
+            models = sorted({r.spotiflow.model_name for r in reqs.values() if r.engine != EngineChoice.bigfish})
+            for m in models:   # once, before the first slide, so a download happens now and not in the night
+                if cancelled():
+                    break
+                progress(0.0, f"preparing Spotiflow model '{m}'")
+                try:
+                    notes.append(_prepare_model(m, lambda f, msg="", m=m: progress(0.0, f"model '{m}': {msg}")))
+                except Exception as ex:  # noqa: BLE001  each slide then reports the engine problem itself
+                    text = ex.message if isinstance(ex, ReviewError) else f"{type(ex).__name__}: {ex}"
+                    notes.append(f"WARNING: Spotiflow model '{m}' could not be prepared: {text}")
+            run = [p for p in plan if not p.get("skip")]
+            ok = failed = 0
+            tail = (" | " + " | ".join(notes)) if notes else ""
+            for i, p in enumerate(run):
+                if cancelled():
+                    return (JobStatus.cancelled,
+                            f"cancelled after {i} of {len(run)} slides ({ok} done, {failed} failed){tail}")
+                progress(i / len(run), f"slide {i + 1} / {len(run)}: {p['name']} ({ok} done, {failed} failed)")
+                if _run_batch_slide(bid, eid, p["analysis_id"], reqs[p["analysis_id"]]) == JobStatus.done:
+                    ok += 1
+                else:
+                    failed += 1
+                progress((i + 1) / len(run), f"{ok + failed} / {len(run)} slides ({ok} done, {failed} failed)")
+            n_skip = len(plan) - len(run)
+            msg = f"{ok} / {len(run)} done, {failed} failed" + (f", {n_skip} skipped" if n_skip else "") + tail
+            return (JobStatus.done_with_failures if failed else JobStatus.done, msg)
+
+        return work
+
+    @api.post("/experiments/{eid}/run")
+    def post_experiment_run(eid: str, body: ExperimentRunBody, raw: Any = Depends(_raw_body)):
+        unk = unknown_keys(ExperimentRunBody, raw)
+        if unk:
+            return err(422, "unknown_fields", "unknown field(s): " + ", ".join(unk), {"fields": unk})
+        e = store.get_experiment(eid_ok(eid))
+        if _active_batch(eid):
+            return err(409, "batch_in_progress", "a batch run of this experiment is already active")
+        ids = store.experiment_slide_ids(eid)
+        if body.analysis_ids is not None:
+            extra = [a for a in body.analysis_ids if a not in ids]
+            if extra:
+                return err(422, "not_in_experiment", "analysis_ids must be slides of this experiment",
+                           {"analysis_ids": extra})
+            want = set(body.analysis_ids)
+            ids = [a for a in ids if a in want]
+        extra = [a for a in body.overrides if a not in ids]
+        if extra:
+            return err(422, "not_in_experiment", "overrides must be keyed by slides of this run",
+                       {"analysis_ids": extra})
+        for a, req in body.overrides.items():
+            bad = _check_detection(req, ((raw or {}).get("overrides") or {}).get(a), f"overrides.{a}")
+            if bad is not None:
+                return bad
+        plan, reqs = [], {}
+        for a in ids:
+            with store.view(a) as st:
+                an = st.analysis
+                skip = None
+                if an.finalized_at is not None:
+                    skip = "finalized"
+                elif body.only_missing and an.provenance.detection_ran_at is not None:
+                    skip = "already_detected"
+                plan.append({"analysis_id": a, "name": an.name, "order": an.order_in_experiment, "skip": skip,
+                             "override": a in body.overrides})
+            if skip is None:
+                reqs[a] = body.overrides.get(a) or e.default_detection
+        if not reqs:
+            return err(422, "nothing_to_run", "no slide to run (all finalized" +
+                       (" or already detected)" if body.only_missing else ")"), {"slides": plan})
+        detail = {"slides": plan, "only_missing": body.only_missing,
+                  "default_detection": e.default_detection.model_dump(mode="json"),
+                  "overrides": {a: r.model_dump(mode="json") for a, r in body.overrides.items()}}
+        started, holder = threading.Event(), {}
+        _set_exp_status(eid, ExperimentStatus.running)
+        try:
+            job = runner.submit(_batch_key(eid), _batch_work(eid, plan, reqs, started, holder),
+                                lambda _j: _set_exp_status(eid, ExperimentStatus.open), kind=JobKind.batch.value,
+                                experiment_id=eid, detail=detail, dedicated=True)
+        except RuntimeError:
+            _set_exp_status(eid, ExperimentStatus.open)
+            return err(409, "batch_in_progress", "a batch run of this experiment is already active")
+        holder["id"] = job.id
+        started.set()
+        return _json(job)
+
+    @api.get("/experiments/{eid}/run")
+    def get_experiment_run(eid: str):
+        store.get_experiment(eid_ok(eid))
+        return _batch_view(eid)
+
+    # ............................................................. exports
+    def _experiment_slides(eid: str) -> list[Analysis]:
+        out = []
+        for a in store.experiment_slide_ids(eid):
+            with store.view(a) as st:
+                out.append(st.analysis.model_copy(deep=True))
+        return out
+
+    @api.get("/experiments/{eid}/export.csv")
+    def get_experiment_csv(eid: str, series: Optional[list[str]] = Query(None)):
+        e = store.get_experiment(eid_ok(eid))
+        sel = exp_export.parse_series(series)
+        text, included, skipped = exp_export.build_csv(e, _experiment_slides(eid), sel)
+        fn = f"{exporter.safe_stem(e.name)}_experiment.csv"
+        return Response(text.encode("utf-8-sig"), media_type="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="{fn}"', "X-Slides-Included": str(len(included)),
+            "X-Slides-Skipped": str(len(skipped))})
+
+    @api.get("/experiments/{eid}/provenance.json")
+    def get_experiment_provenance(eid: str, series: Optional[list[str]] = Query(None)):
+        e = store.get_experiment(eid_ok(eid))
+        sel = exp_export.parse_series(series)
+        slides = _experiment_slides(eid)
+        _, included, skipped = exp_export.build_csv(e, slides, sel)
+        prov = exp_export.provenance(e, [(a, store.get_engine_runs(a.id)) for a in slides], _batch_view(eid),
+                                     sel, included, skipped)
+        fn = f"{exporter.safe_stem(e.name)}_provenance.json"
+        return Response(json.dumps(prov, indent=2, default=str), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
     app.include_router(api)
 

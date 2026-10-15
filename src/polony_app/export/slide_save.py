@@ -58,6 +58,12 @@ def default_label(classes: Iterable[ObjectClass]) -> str:
     return f"{head} and yellow" if len(names) < 2 else f"{', '.join(names[:-1])}, {names[-1]} and yellow"
 
 
+def slide_name(a: Analysis) -> str:
+    """'Slide name' of the CSVs: the scan's file stem when opened from disk, else the analysis name."""
+    src = a.image.source_path if a.image else None
+    return Path(src).stem if src else a.name
+
+
 def slug(label: str) -> str:
     return (re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-") or "count").lower()[:40]
 
@@ -232,7 +238,7 @@ def save_slide(a: Analysis, red: np.ndarray, green: np.ndarray, selections: list
     if len(set(labels)) != len(labels):
         raise ReviewError("invalid_selection", "'what counted' labels must be different from each other", 422)
     src = a.image.source_path if a.image else None
-    stem = Path(src).stem if src else a.name
+    stem = slide_name(a)
     fname = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", stem).strip(" .") or "slide"
     slide_id = stem
     per_sel = [(lab, cls, count_fields(a, cls)) for lab, cls in selections]
