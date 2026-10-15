@@ -29,7 +29,8 @@ Existing `Field-*`/`Cell-*` regions: 409 `fields_exist` unless `replace=true`. G
 replaced regions lose approval/inspection, objects are re-assigned. Field regions are placed *before* other regions: when regions overlap
 the first listed counting region owns the object, so a 'Chamber' region must come after the fields (done here). 422 when the image has no grid.
 Response = the Analysis plus `field_import{created, warnings, ...}`.
-Shift: the stored overlay does not always describe what was counted (FS-B_D was counted on a grid ~(-158,-34) px away); marks are re-assigned
+Shift: the grid at the default origin (158, 158) does not describe every file. FS-B_D was counted on a grid shifted by about (-158,-34) px relative to the
+other slides, and the overlay stored in that file is itself that shifted grid. `shift` moves the grid; marks are re-assigned
 to cells of the shifted grid, so a wrong shift shows up as warnings ('marks lie in another cell').
 
 ## Comparison (`GET /api/analyses/{id}/fields/compare?plane=&count_type=`)

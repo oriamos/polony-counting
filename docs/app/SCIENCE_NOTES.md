@@ -1,13 +1,15 @@
 # Science notes (polony counting)
 
-Owner: science-notes agent. Scope: the Big-FISH API as installed, experiments on the
-one real image we have, recommended defaults, a review of the red/green/yellow logic,
+Scope: the Big-FISH API as installed, experiments on the first real image
+(`resources/dataset_files/test/test_img.tif`), recommended defaults, a review of the red/green/yellow logic,
 and open questions for the researcher. Experiments can be re-run with
-`scripts/experiments/*.py` (venv `/opt/venv-polony`, outputs to `$EXP_OUT`, default `./exp_out`).
+`scripts/experiments/*.py` (the project virtualenv, outputs to `$EXP_OUT`, default `./exp_out`).
 
-**Status:** all sections complete (2026-10-10). Validation is limited to ONE real image
-(`resources/dataset_files/test/test_img.tif`) scored against the researcher's own embedded manual marks; see
-"What is and is not validated" in §3.
+**Status:** all sections complete (2026-10-10). The experiments in §2-§5 were done on ONE real image
+(`test_img.tif`) scored against the researcher's own embedded manual marks; see
+"What is and is not validated" in §3 for that single-image state. Validation was later extended to 8 real
+slides, scored against the researcher's embedded marks: see [REAL_DATA_VALIDATION.md](REAL_DATA_VALIDATION.md)
+(file facts, channel identity, per-field agreement) and [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md) (engine comparison).
 
 ## Implementation deviations / status (after the scientific review, 2026-10-10)
 
@@ -20,8 +22,10 @@ What the app implements, where it deviates from the recommendations below, and w
    single-channel objects keep their class (flag only). Compact debris is still not removed or moved to a
    "rejected candidates" layer (deviation from §3 recommendation); the 0.3-scale recall/precision numbers of §2.4 are
    not reproduced by the app.
-2. **Concentration** uses the PROPOSED area-scaled formula (UNCONFIRMED, no CI) and needs
-   `sample_total_area_px2`; see REVIEW_POLICY. Never validated against the researcher's own numbers.
+2. **Concentration** uses the lab formula `abundance = mean(field counts) * (field_area / grid_area) / sample_volume_ul * 1000`
+   (no concentration factor, as in the T7 sheets; see [LAB_EXPORT.md](LAB_EXPORT.md)); `sample_total_area_px2` is no longer
+   used. `concentration_formula_confirmed` means "field geometry and series mapping confirmed". No CI; not validated against the
+   researcher's own numbers.
 3. **Saturated plateaus** are merged into ONE spot at the plateau centroid (all spots within the connected
    saturated component dilated by the spot radius); a plateau with equivalent diameter > 6 spot radii also gets
    `suspicious_shape`. Plateau size is a lower bound of the true spot; its centroid is not a sub-pixel estimate of
@@ -57,8 +61,8 @@ What the app implements, where it deviates from the recommendations below, and w
     Big-FISH's elbow search uses an absolute candidate grid, so the previous automatic threshold depended on image
     brightness (see "Measured performance and limits"). An elbow below 5 noise units is treated as the noise regime
     (fallback to 5, WARNING note), and a channel with > 50 % debris-like spots gets a WARNING note.
-13. **Still open / not validated:** accuracy on any other slide; green and yellow performance on real green
-    polonies (the only image has none); the default review thresholds (weak_snr 5, elongation 1.8, debris ratio 1.0)
+13. **Still open / not validated:** accuracy beyond the 8 slides of REAL_DATA_VALIDATION.md (one annotator, one scan session);
+    green and yellow performance on real green polonies (test_img has none; on the 8 slides the green page is nearly empty); the default review thresholds (weak_snr 5, elongation 1.8, debris ratio 1.0)
     are starting points; concentration formula and chamber geometry await the researcher; no confidence intervals.
 
 ### Measured performance and limits (test_img.tif, red channel only, 15 px match to the 77 embedded marks, 17 counted grid squares)
@@ -77,7 +81,7 @@ What the app implements, where it deviates from the recommendations below, and w
 
 ## 1. Verified Big-FISH API (big-fish 0.6.2, read from installed source + tested)
 
-Source read: `/opt/venv-polony/lib/python3.13/site-packages/bigfish/detection/{spot_detection,dense_decomposition,utils}.py`,
+Source read: `lib/python3.13/site-packages/bigfish/` of the project virtualenv, files `bigfish/detection/{spot_detection,dense_decomposition,utils}.py`,
 `bigfish/stack/{filter,preprocess}.py`. Mechanics checked by `scripts/experiments/00_bigfish_api_check.py`
 (that script uses a synthetic image **only to test the API mechanics**, never accuracy).
 
@@ -322,7 +326,7 @@ non-saturated, non-edge detections from a first pass (sigma 5), fit a 2-D Gaussi
 background-subtracted 41×41 patch) and use the median sigma (clamped 2–15 px). Alternatively let the user click
 3–5 typical polonies and fit those. Script 02 does exactly this.
 
-**Debris filter (strongly recommended, needs an orchestrator decision because it is not in the contract):**
+**Debris filter (strongly recommended; not part of the original contract):**
 compute per detection the scale ratio of §2.4. If ratio ≥ 1.0 (peak scale < ~3 px), the object is compact
 debris. Recommended behaviour: do not count it as red/green/yellow; keep it in a separate "rejected candidates"
 layer (or as `uncertain` with `suspicious_shape` only if the user opts in), so it is auditable and restorable.
@@ -336,6 +340,7 @@ Other measured review reasons that the engine can compute cheaply:
 * `suspicious_shape`: scale ratio ≥ 1.0 (compact) or elongation (moment eigenvalue ratio) > 3 (worm artefacts).
 
 ### What is and is not validated
+State after the single-image experiments of §2 (the 8-slide results are in [REAL_DATA_VALIDATION.md](REAL_DATA_VALIDATION.md) and [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md)).
 * Validated (one image, one annotator): polony sigma on this scanner/slide ≈ 5 px; masking is essential; background
   method is not critical inside the mask; dense decomposition is harmful; debris is the main false-positive source
   and is separable by scale; red→green bleed-through is negligible on this scan.
@@ -432,7 +437,7 @@ Points to get right:
 11. Should mean-per-square extrapolation be replaced by count/total-counted-area (identical when all squares are
     equal and fully inside the chamber; different for partial squares)?
 12. Which page is which channel when the file only says `635 [W1]` once? (Page 0 = 635 nm red here, page 1 had no
-    polonies, so the mapping could not be confirmed from the data.)
+    polonies, so the mapping could not be confirmed from this image; the 8-slide data give strong evidence, see REAL_DATA_VALIDATION.md stage 1.)
 
 ---
 

@@ -1,6 +1,6 @@
-# Importing historical annotations (`polony_app.legacy_import`)
+# Importing the lab's historical annotations (`polony_app.legacy_import`)
 
-Findings and rationale: [legacy-repo-audit.md](legacy-repo-audit.md). Requires `pip install -r requirements-app.txt` (incl. `imagecodecs`).
+File layouts and conventions: [DATA_FORMATS.md](DATA_FORMATS.md). Requires `pip install -r requirements-app.txt` (incl. `imagecodecs`).
 Run from the repository root with `PYTHONPATH=src`.
 
 ## 1. Preview (nothing is written)
@@ -22,7 +22,7 @@ Useful options: `--class-map 1=<label>` (explicit; default: no class), `--exclud
 PYTHONPATH=src python -m polony_app.legacy_import import /path/to/folder --out data/historical/2026-09-29 --commit
 ```
 Refuses to overwrite an existing dataset, and refuses to commit when files failed (unless `--allow-errors`). Output = canonical dataset
-(schema `polony-historical-dataset` v1; see audit §D). Images are referenced by path + sha256, **not copied**.
+(schema `polony-historical-dataset` v1; see [DATA_FORMATS.md §7](DATA_FORMATS.md#7-canonical-historical-dataset-import-output)). Images are referenced by path + sha256, **not copied**.
 
 ## 3. Splits (leakage-safe)
 
@@ -42,11 +42,11 @@ from polony_app.legacy_import.exports import score_detections, export_spotiflow,
 * Big-FISH evaluation: `score_detections(ds, image_id, page, detections_xy, tolerance_px)` - scores only inside counted fields.
 * Spotiflow fine-tuning data: `python -m polony_app.legacy_import export-spotiflow DS --splits-file DS/splits/default.json --pages 0 --out OUT`
   (explicit planes; `y,x` CSV + counted-field polygons; `test` is not exported unless requested).
-* Old-model benchmark: `legacy_squares(ds, image_id, page=0)`.
+* Fixed-size grid squares: `legacy_squares(ds, image_id, page=0)`.
 * Review sessions: `to_review_seed(ds, image_id, page)` -> regions + unclassified manual objects.
 
 Train only inside the counted fields; the rest of the image is unlabelled, not background.
 
 ## 5. Training on the historical annotations
 
-For Spotiflow fine-tuning use `python -m polony_app.ml import-legacy` (it reads the TIFFs directly, keeps only fields the researcher examined per page, and builds a snapshot for the ML lifecycle): [app/LEGACY_FINETUNING.md](app/LEGACY_FINETUNING.md). `export-spotiflow` above is the older, lower-level export and does not provide snapshots, the locked test set or the examined-field evidence.
+For Spotiflow fine-tuning use `python -m polony_app.ml import-legacy` (it reads the TIFFs directly, keeps only fields the researcher examined per page, and builds a snapshot for the ML lifecycle): [LEGACY_FINETUNING.md](LEGACY_FINETUNING.md). `export-spotiflow` above does not provide snapshots, the locked test set or the examined-field evidence.

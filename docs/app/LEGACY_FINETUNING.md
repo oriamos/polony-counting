@@ -31,14 +31,14 @@ A crop is exported only when there is **explicit evidence that the researcher ex
 
 ## 2. What the real files showed (differences from the working assumptions)
 
-Measured on the 8 research files (7 two-page stacks + 1 RGB composite) and `test_img.tif`; reproduce with `import-legacy --dry-run`.
+Measured on the 8 files of the extracted research set used for this dry-run (7 two-page stacks + 1 RGB composite) and `test_img.tif`; reproduce with `import-legacy --dry-run`. This set is not identical to the 8 raw two-page slides of [REAL_DATA_VALIDATION.md](REAL_DATA_VALIDATION.md), which also has 7 RGB composites alongside the raw slides.
 
 * **Confirmed:** two-page `uint16` ImageJ stacks (ZYX), 2438x1460 (`test_img` 2450x1438); ROI = one POINT blob with counters and positions; the counter is a **field**, not a class; ImageJ position 1/2 = page 0/1 (no position out of range); grid overlay = 28 cells of ~316.23 px.
 * **Differs / new:**
-  * the "eighth" file is an 8-bit RGB **composite** (LZW) whose blue plane is a saturation mask, not a colour; the importer rejects it (`unsupported_layout`). No `AI-A` stack exists in the extracted set (the earlier docs mention one).
-  * **`FS-B_D` is consistent with its own stored grid** (origin (3, 123)); on the (158, 158) grid its counters would span 3-4 cells. Other files: origin (158, 158). The bridge always uses the file's own overlay.
+  * the "eighth" file is an 8-bit RGB **composite** (LZW) whose blue plane is a saturation mask, not a colour; the importer rejects it (`unsupported_layout`). No `AI-A` raw stack is present in this extracted set (the other documents use an AI-A raw stack from the 8 raw slides; it is not part of this extraction).
+  * **`FS-B_D` was counted on a shifted grid, and the overlay stored in that file is itself that grid** (origin (3, 123), about (-158, -34) from the (158, 158) grid of the other files); on the (158, 158) grid its counters would span 3-4 cells. Other files: origin (158, 158). The bridge always uses the file's own overlay.
   * `AI-B`: three counters have one point one cell over, one point lies 1.5 px outside the grid, and counter 12 is a second out-of-order counter. `AS-B`: counter 11 out of order. `AM-B`: counters 3 and 19 absent (the lab CSV numbers fields without gaps, so "field = counter + 1" **fails after counter 19**). `AS-A`: counter 7 absent.
-  * Page 1 carries marks in only **4 of 7** stacks (13 field/pages in total); under the rule above page 1 is therefore almost entirely `unknown`.
+  * Page 1 carries marks in only **4 of the 7 stacks** (13 field/pages in total; the same four slides AI-B, AM-B, AS-B and FS-B_D that carry slice-2 points in REAL_DATA_VALIDATION.md; the first three reproduce the 'Clade A' sheet); under the rule above page 1 is therefore almost entirely `unknown`.
   * File names say 29-09-2026, scanner metadata says 2026/09/30; AI/AM/AS were scanned with PMT 550 / laser 1.97, FS with PMT 500 / 3.30. No scan-session id exists; `scan_session` stays empty unless you supply it.
 * Under `marked-only` with page 0 trained: **196 field/pages, 108 examined (all positive_marked), 88 excluded as unproven** (87 "no marks", 1 "only straddling points"); 1,098 ImageJ points -> 1,078 labels, 20 dropped.
 
@@ -95,7 +95,7 @@ Everything below is explicit: nothing trains, locks or promotes by itself, and n
    `python -m polony_app.ml --data-dir DATA import-legacy --input $D --channel-map $W/channels.json --identity-map $W/identities.json --downscale 4 --workers 4`
    then `python -m polony_app.ml --data-dir DATA verify <version>`. Re-importing identical input prints `already imported as <version>` (exit 0, nothing rewritten, no leftover staging; the plan key is stored in `import_summary.plan_key`). The plan key includes a hash of the import code: after a code update the same input builds a new snapshot. Symlinks that resolve outside `--input` are never followed (listed as skipped).
 6. **Inspect and lock the test split:** `python -m polony_app.ml --data-dir DATA split --snapshot <version>` (group -> split table; with too few independent groups a split stays empty rather than being filled from the same specimen), then `... split --snapshot <version> --lock-test`. The lock is permanent and refuses a snapshot built with an `--acknowledge-*` assumption (no ImageJ counters, field = counter+1, lab-CSV numbering) unless you pass `--allow-acknowledged-assumptions-in-test-lock` (recorded in the lock); locked identities are matched case-insensitively on specimen and slide id **without the assay**, and `train` also refuses train/val data that shares such an identity. later builds carry the locked test crops over unchanged and `train` refuses locked material.
-7. **ROCm GPU smoke test** (AMD Ryzen AI Max+ 395 / Radeon 8060S; PyTorch ROCm exposes the GPU through `torch.cuda`, so `cuda`, `rocm` (an alias) and `auto` all mean "the Radeon GPU"):
+7. **ROCm GPU smoke test** (an AMD ROCm GPU; PyTorch ROCm exposes the GPU through `torch.cuda`, so `cuda`, `rocm` (an alias) and `auto` all mean "the ROCm GPU"):
    `python -m polony_app.ml gpu-smoke --device rocm` (prints torch / HIP versions, device, memory; runs a matmul + backward and a conv2d forward/backward, compares the gradients with the CPU). Equivalent one-liner:
    ```
    python - <<'PY'
@@ -139,7 +139,7 @@ prepared in-memory size (float32 network inputs): 1.6 MiB; load mode: eager
 ## 6. Disk, RAM and time - how to size the real run
 * **Disk:** native crops are stored uncompressed at the original dtype: about `h x w x 2` bytes per crop (316x316 uint16 = ~200 KB) -> 54,000 crops ~ 10.8 GB (the dry-run prints the exact estimate; the build refuses early when free space is clearly insufficient, with a 10 % margin).
 * **RAM:** the network inputs are float32 after the downscale `d`: ~ `(316/d)^2 x 4` bytes per crop (d = 4: ~25 KB; d = 1: ~400 KB). 54,000 crops: ~1.3 GB at d = 4 but ~21 GB at d = 1; above 8 GiB (or 25 % of free RAM) `train` switches to bounded lazy loading (`--load-mode`), identical to eager (tested bit-for-bit), or refuses an explicit `eager` that does not fit unless `--allow-large-memory`.
-* **Time:** not measured on the Radeon GPU. CPU smoke benchmarks only (`scripts/benchmarks/ml/`): eager vs lazy overhead ~0-12 %, `eval-model` ~0.15-0.44 s per crop on a 4-core CPU (8,000 test crops ~20-60 min on CPU); predictor batching was measured and **not adopted** (identical predictions but no consistent speed-up). Use the 1-epoch benchmark to learn the real seconds/epoch.
+* **Time:** CPU smoke benchmarks only (`scripts/benchmarks/ml/`): eager vs lazy overhead ~0-12 %, `eval-model` ~0.15-0.44 s per crop on a 4-core CPU (8,000 test crops ~20-60 min on CPU); predictor batching was measured and **not adopted** (identical predictions but no consistent speed-up). Use the 1-epoch benchmark to learn the real seconds/epoch.
 * **Validation cost:** Spotiflow validates with batch size 1 and `--val-batch-size` cannot be offered without changing validation metrics; `--max-val-crops N` (a deterministic, recorded subset ordered by `sha256(crop_id)`) limits it if a pass becomes too slow.
 * `--num-workers N` is forwarded to the train and validation loaders; runs with different worker counts are not bit-identical (the count is recorded in the registry entry).
 

@@ -3,12 +3,12 @@
 Nothing here writes anywhere: :func:`build_dataset` only reads the source tree (dry-run
 by construction); :func:`polony_app.legacy_import.schema.write_dataset` commits.
 
-Hard rules (see docs/legacy-repo-audit.md):
+Hard rules (see docs/app/DATA_FORMATS.md):
 
 * pixel data is only read, never rescaled, down-converted or resampled;
 * no channel/colour/class is ever inferred: ``class_label`` stays ``None`` unless the
   caller passes an explicit ``class_map``; planes keep their raw hints;
-* out-of-bounds points are flagged, never clamped (the legacy code clamped silently);
+* out-of-bounds points are flagged, never clamped;
 * the CSV is compared with the ROI counts as *evidence only*.
 """
 from __future__ import annotations

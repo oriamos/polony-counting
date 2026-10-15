@@ -1,7 +1,8 @@
 # Real-data validation (researcher TIFFs, T7 AB assay, slides 29-09-2026)
 
-Status: in progress, written stage by stage so partial results survive. Inputs are the researcher's 8 raw
-slides (`resources/research_tiffs/`, git-excluded, never committed) + 7 RGB composites, and
+Status: complete (stages 1-5, 2026-10-10). Inputs are the researcher's 8 raw two-page slides
+(`resources/research_tiffs/`, git-excluded, never committed) plus 7 RGB composites (GenePix exports of 7 of
+these slides), and
 `Counts_30-09-2026.xlsx` / `T7A_15-09-2026.csv` / `T7B_15-09-2026.csv`. All scripts are in
 `scripts/validation/` and are run as `python -I <script> <paths...>` (inputs are untrusted).
 Caveat for every number below: 8 slides, one annotator, one scan session; mappings are inferences from
@@ -34,13 +35,13 @@ Scripts: `stage1_facts.py <tiff_dir> <Counts.xlsx> <out>` (facts, ROI vs sheet, 
 * `ROI` = one ImageJ multi-point ROI per file (counter/“type” per point + `counter_positions` = slice).
 * `Overlays` = one composite ROI of 13 lines = the counting grid: verticals at x = 158 + k·316.23
   (k = 0..4), horizontals at y = 158 + k·316.23 (k = 0..7) → **4 columns x 7 rows = 28 cells, 316.23 px**,
-  origin (158, 158), identical in all 8 files.
+  origin (158, 158) in 7 files; the overlay stored in FS-B_D is itself a shifted grid (origin about (0, 124), see stage 4).
 * **Points on slice 1 (page 0) reproduce the 'Clade B' sheet / T7B CSV exactly**, one ImageJ counter
   per field: AI-A (332 pts), AI-B (402), AM-A (100), AS-A (82), AS-B (60) are exact matches of the
   per-field series. AM-B: 103 pts vs sheet 101 — fields 1–19 identical, the tail differs
   (ROI counters 20..23 = 3,3,1,1 vs sheet fields 20..21 = 3,3; the file was probably saved after edits).
 * **Points on slice 2 (page 1) reproduce the 'Clade A' sheet / T7A CSV**: AI-B (14 pts, exact per field),
-  AM-B (2 pts, fields 1 and 12, exact), AS-B (1 pt, field 11, exact). AI-A / AM-A / AS-A carry no slice-2
+  AM-B (2 pts, fields 1 and 12, exact), AS-B (1 pt, field 11, exact). These are the 3 slides whose page-1 points match the Clade A sheet; FS-B_D carries one more page-1 point (field 5, stage 4), so 4 of the 8 slides have any page-1 marks. AI-A / AM-A / AS-A carry no slice-2
   points although the sheet has Clade A counts 4 / 4 / 3 (those annotations were not saved in the file).
 * Counter index → field: counter k = field k+1 in all slides **except AI-A**, where counter 3 is unused
   and counters 4..18 = fields 4..18 (ordinal, not index). Fields with 0 count have no counter (AS-A field 8).
@@ -57,8 +58,9 @@ Scripts: `stage1_facts.py <tiff_dir> <Counts.xlsx> <out>` (facts, ROI vs sheet, 
 * **FS-A / FS-B_D do not match the 'Controls' sheet.** The Controls rows (header dated 13-05-2026) are
   FS A = [0], FS B = [1], NTC A = [0] (one field each). The FS TIFFs were scanned 2026-09-30 with other
   scanner settings and carry 182 pts / 7 fields (FS-A: 24,34,24,18,26,28,28) and 151 + 1 pts / 6 fields
-  (FS-B_D) — no row of any sheet or CSV matches them. FS-B_D's counters each straddle 2–4 overlay cells,
-  i.e. FS-B_D was counted on a grid that is **not** the stored overlay (see stage 4).
+  (FS-B_D) — no row of any sheet or CSV matches them. FS-B_D's counters each straddle 2–4 cells of the
+  (158, 158) grid of the other slides: FS-B_D was counted on a shifted grid, and the overlay stored in that
+  file is itself that shifted grid (see stage 4).
 
 ### 1.3 Channel identity from the RGB composites (evidence, not filenames)
 
@@ -218,9 +220,9 @@ Same setup as stage 2 (rim 50 px; r4, r5, r5 with threshold x0.5).
 | FS-B_D | r5 | 11.3 | 466 | 427 | 13 | 1 | 25 | 282 | 151/151 | 0.86 / (n/a) |
 | FS-B_D | r5 thr x0.5 | 12.4 | 582 | 514 | 29 | 1 | 38 | 371 | 151/151 | 0.91 / (n/a) |
 
-FS recall is against all red-positive detections (the FS fields are not the stored grid cells, so the
-cell-restricted precision of stages 2–3 is not meaningful; `analyze.py`'s cell-restricted numbers for
-FS-B_D, 0.52 / 0.71, are an artefact of that).
+FS recall is against all red-positive detections: cell-restricted precision (stages 2–3) is not given for FS,
+and for FS-B_D `analyze.py`'s cell-restricted numbers, 0.52 / 0.71, are an artefact of using the (158, 158)
+grid, which is not the grid FS-B_D was counted on.
 
 Per-field (embedded mapping, Clade B): AS-A red_positive r5 r = 0.83, k = 0.73, MAE 1.3 (82 → 62);
 thr x0.5 r = 0.88, k = 0.90, MAE 1.0 (82 → 76). AS-B r5 r = 0.77, k = 0.67, MAE 1.2 (60 → 39);
@@ -235,10 +237,11 @@ FS slides:
   ~26 researcher points per field (FS-A 7 fields = 182; FS-B_D 6 fields = 151 + 1 slice-2 point in field 5).
   They match no sheet/CSV row; their counts are only in the TIFFs. Whatever FS is, it is strongly
   positive in the 635 channel, not a negative control on this date.
-* **FS-B_D was counted on a different grid**: the counters are 100 % single-cell for a 316.23-px grid at
+* **FS-B_D was counted on a shifted grid**: the counters are 100 % single-cell for a 316.23-px grid at
   offset ≈ (0, 124) px (x lines ≈ 316/632/948/1264, y lines ≈ 440/756/1072/1388/1704), i.e. shifted by
-  ≈ (−158, −34) from the stored overlay; each field's points span ≈ 260–308 px. The saved Overlays
-  therefore do not always describe the fields that were counted.
+  ≈ (−158, −34) from the (158, 158) grid of the other seven slides; each field's points span ≈ 260–308 px.
+  The overlay stored in the FS-B_D file is itself this shifted grid (origin (3, 123) when read from the file,
+  see [LEGACY_FINETUNING.md](LEGACY_FINETUNING.md)); it is the (158, 158) grid that does not describe FS-B_D's fields.
 * **Saturation / density**: FS were scanned brighter (PMT 500, laser 3.30 vs 550 / 1.97); page-0 median
   in the counting region 1.6k vs 0.5k; page 0 is clipped over 64–67 % of the outside (vs 6–7 %), and the
   rim carries a band of saturated debris (stage 1). Inside the counting region saturation is still small
@@ -253,11 +256,17 @@ FS slides:
 
 ## Stage 5 (2026-10-10): conclusions
 
-### What the app must change for these images (ordered by importance)
+### What these images required of the app (ordered by importance)
 
-1. **Read the embedded researcher annotations as fields.** The ImageJ multi-point ROI is the lab's
+Status: items 1, 2, 3, 5 and 6 are implemented: embedded reference marks and field mapping, field import with a user-settable shift,
+lab-layout field export, the red/green channel suggestion, the `*_excl_debris` counts and the automatic chamber. Behaviour and endpoints
+are documented in [FIELDS.md](FIELDS.md) (export layout: [LAB_EXPORT.md](LAB_EXPORT.md)). Items 4 and 7 remain recommendations (the
+per-channel sensitivity preset, and a separate review queue and larger radii for bright scans, are not implemented). The text of each
+item is the requirement as derived from the data.
+
+1. **Read the embedded researcher annotations as fields** (implemented, FIELDS.md). The ImageJ multi-point ROI is the lab's
    ground truth: one counter per field, `counter_positions` = slice (1 = page 0 = Clade B, 2 = page 1 =
-   Clade A), points inside one grid cell. The app currently only lists embedded ROIs as metadata.
+   Clade A), points inside one grid cell. At the time of this analysis the app only listed embedded ROIs as metadata.
    Import them as (a) reference points for an agreement view and (b) the field → cell mapping (counter k →
    Field-(k+1); warn when the ordinal and index readings disagree, as in AI-A; infer zero-count fields by
    elimination and ask). No fixed field ordering works (best 2/18 … 19/21 correct).
@@ -306,5 +315,5 @@ compare against). Clade A has 0–14 events per slide, too few for any per-field
 field mappings are inferences from correlations and point identity (strong, but not stated by the lab).
 The 15-px matching and the "counted cells" restriction are analysis choices. Only radii 3/4/5 and
 threshold_scale 0.5 were tested (CPU budget); r ≥ 6 and other background settings are untested.
-Stage-1 summary numbers were obtained with `stage1_facts.py`; all detection results are cached
-in the scratchpad (`val/det/*.json`), not in the repository.
+Stage-1 summary numbers were obtained with `stage1_facts.py`; the detection results of stages 2-4 are cached
+JSON files outside the repository and can be regenerated with `run_app.py`.

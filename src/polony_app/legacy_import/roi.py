@@ -1,7 +1,7 @@
 """ImageJ ROI reading for the historical annotations (read-only, no interpretation of colour).
 
 What the lab's files contain (verified on 7 research slides + ``test_img.tif``, see
-docs/legacy-repo-audit.md section C):
+docs/app/DATA_FORMATS.md section 3):
 
 * ``ROI`` blob  = one multi-point ROI (``POINT``, sub-pixel flag set) whose points carry
   an ImageJ *counter* (0..255) and a *position* (1-based plane the point was placed on).

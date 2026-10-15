@@ -43,6 +43,7 @@ Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` 
 | [EXPERIMENTS_API.md](EXPERIMENTS_API.md) | experiments: import, unattended batch run, experiment CSV / provenance (API contract) |
 | [TWO_ENGINE.md](TWO_ENGINE.md), [TWO_ENGINE_CONTRACT.md](TWO_ENGINE_CONTRACT.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md) | Big-FISH + Spotiflow, consensus, contracts |
 | [FINE_TUNING.md](FINE_TUNING.md), [LEGACY_FINETUNING.md](LEGACY_FINETUNING.md), [EVALUATION.md](EVALUATION.md), [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md) | dataset snapshots, controlled fine-tuning, fine-tuning on the historical ImageJ TIFFs, evaluation |
+| [DATA_FORMATS.md](DATA_FORMATS.md), [HISTORICAL_IMPORT.md](HISTORICAL_IMPORT.md) | the lab's TIFF / ROI / workbook conventions; importing historical annotations |
 | [REVIEW_POLICY.md](REVIEW_POLICY.md), [RERUN_POLICY.md](RERUN_POLICY.md), [CONTRACTS.md](CONTRACTS.md) | approval/finalize rules, re-detection merge rules, API contracts |
 
 ## Principles

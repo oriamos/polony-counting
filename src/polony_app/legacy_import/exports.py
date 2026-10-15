@@ -90,8 +90,8 @@ def legacy_squares(ds: Dataset, image_id: str, page: Optional[int] = None) -> li
 
     ``n_points`` counts usable human points on ``page`` (all planes when None).
     Cells with no points are included with n_points = 0 but flagged ``counted=False``
-    because the ROI cannot tell "not counted" from "counted, zero".  The legacy code's
-    additional skip rules (e.g. squares with exactly one point) are NOT applied here.
+    because the ROI cannot tell "not counted" from "counted, zero".  No extra skip rules
+    (e.g. squares with exactly one point) are applied here.
     """
     out = []
     for f in ds.fields_of(image_id):

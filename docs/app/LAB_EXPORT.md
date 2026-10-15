@@ -1,6 +1,6 @@
-# Lab-format export & lab formulas (orchestrator-owned contract)
+# Lab-format export & lab formulas
 
-Source of truth: the researcher's workbooks `T7A_15-09-2026.xlsx`, `T7B_15-09-2026.xlsx`
+Derived from the lab's template workbooks (`tests/test_data/lab_templates`): `T7A_15-09-2026.xlsx`, `T7B_15-09-2026.xlsx`
 (+ CSVs) and `Counts_30-09-2026.xlsx` (formulas read with openpyxl `data_only=False`).
 
 ## T7-style table (one sheet / CSV per count series)
@@ -30,6 +30,6 @@ Per sample pair (replicates A,B; paired by `slide_id` = `<sample>_<A|B>`), 2 row
 - Needs: `lab_series` (user-chosen count type per series: never inferred from T7A/T7B or colours), counting regions with `field_index`, sample_volume_ul, field_area, grid_area, concentration_factor, slide_id, sampling_date, polony_date, qc. Missing ⇒ 422 listing missing items.
 - A field region partially covered by exclusions is flagged in a Notes sheet / README (count is over the remaining area).
 - Fields > 24 refused (template columns end at field 24) with a clear message.
-- Replaces the earlier area-scaled concentration formula in slide.csv: `abundance = mean(field counts) * (field_area/grid_area) / sample_volume_ul * 1000` (lab formula, no concentration factor, as in T7 sheets); `concentration_formula_confirmed` now means "field geometry and series mapping confirmed". `sample_total_area_px2` is no longer used.
+- Concentration in slide.csv: `abundance = mean(field counts) * (field_area/grid_area) / sample_volume_ul * 1000` (the lab formula, no concentration factor, as in the T7 sheets); `concentration_formula_confirmed` means "field geometry and series mapping confirmed". `sample_total_area_px2` is not used.
 - Endpoints: `GET /api/analyses/{id}/lab-export?series=<name>&format=xlsx|csv` (single slide), `POST /api/lab-export` body `{analysis_ids:[...], style:"t7"|"counts", series:"T7A"|null, format:"xlsx|csv"}` → file or zip.
 - UI: grid-field generator (rows × cols, origin, cell size, numbering order), field index editing per region, lab metadata form, series mapping, Lab export panel (multi-select finalized analyses).
