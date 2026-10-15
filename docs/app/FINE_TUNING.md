@@ -1,15 +1,17 @@
 # Fine-tuning Spotiflow from reviewed corrections
 
+**Start here:** [TRAINING_GUIDE.md](TRAINING_GUIDE.md) explains fields, splits, training loss and the larger run recorded on 15 October 2026. This page is the technical guide for app-reviewed corrections.
+
 Everything is **explicit**. The app never trains, evaluates or switches a model by itself. Code: `src/polony_app/ml/`,
 CLI: `python -m polony_app.ml <command>` (`--data-dir` defaults to the app's data directory / `POLONY_DATA_DIR`).
 Neither engine is ground truth; the *human-reviewed final points* are the only labels used, and they carry the reviewer's biases (see Limitations).
 
-> **Status of the evidence — read this first.** An independent leave-specimen-out sanity experiment (÷4, 10 epochs, starting from `general`)
+> **Earlier small-data experiment (not the larger saved run).** An independent leave-specimen-out sanity experiment (÷4, 10 epochs, starting from `general`)
 > showed **no evidence that fine-tuning beat the pretrained model at the same threshold** (F1 within −0.03 … +0.02). Training on 2–3 slides was
 > **unstable** (validation loss diverged after epoch 1 in one fold). The pipeline that produced those models also **trained at the wrong scale
 > (native instead of the downscale used at inference) and with a different normalisation** (per-crop percentiles instead of page-level ones); the
 > normalisation difference alone moved recall by 0.2–0.4, far more than fine-tuning did. Both defects are fixed below, but **any claim that a
-> fine-tuned model is better needs a leave-one-slide-out evaluation with the corrected pipeline** (every slide held out once, same threshold, same
+> fine-tuned model generalises robustly benefits from a leave-one-slide-out evaluation with the corrected pipeline** (every slide held out once, same threshold, same
 > configuration). Until then a candidate is a hypothesis, `train` refuses very small training sets, and promotion refuses configuration mismatches.
 
 ```
@@ -95,8 +97,10 @@ python -m polony_app.ml train --snapshot <v> --base general|<registry id>|<model
 ```
 * **Trained at the snapshot's configuration.** Images are normalised with the page lo/hi and downsampled by the snapshot's `downscale`; Spotiflow's own
   per-image normalisation is switched off (`normalizer=None`). The registry entry records `inference_config` = `{downscale, normaliser}`, the lo/hi policy and the
-  per-page lo/hi. **Run the model in the app with the same downscale and normaliser** (`valid_unsaturated`); `resolve_model()` returns this configuration
-  (`ModelRef.inference_config`, `.trained_downscale`, `.config_warning(downscale, normaliser)`) so the engine/app can warn when they differ.
+  per-page lo/hi. **Run the model with the same downscale and normaliser** (`valid_unsaturated`). `resolve_model()` returns this configuration
+  (`ModelRef.inference_config`, `.trained_downscale`, `.config_warning(downscale, normaliser)`) and the training/evaluation/promotion CLI checks it.
+  The current React/app detection path is not yet wired to this registry resolver; see [TRAINING_GUIDE.md](TRAINING_GUIDE.md#714-promote-only-after-accepting-the-evidence)
+  for the exact-ID/API workaround and do not assume that promotion changes the app's default `general` model.
 * **Small-data safeguard.** `train` **refuses** (unless `--allow-small`, which is recorded as a warning in the entry) when the training split has fewer than 4
   independent groups or fewer than 20 crops.
 * **Best epoch is registered, last epoch is reported.** The weights are Spotiflow's `best.pt` (lowest validation loss). The entry's `metrics.training`
@@ -119,8 +123,10 @@ candidate **and** the model it would replace (the active one, else `general`). `
 current configuration), and refuses a candidate with lower F1 (at 10 px). It also refuses when the candidate's configuration (downscale, normaliser) differs from the **app's current inference
 configuration** (`--app-downscale`, `--app-normaliser`; default: the app's default Spotiflow settings) unless `--acknowledge-config` — then the analyses must be run at the model's downscale.
 `--force --reason "..."` overrides everything and is recorded.
-`rollback` restores the previously active model (or the app default). The app resolves `SpotiflowParams.model_name` through `polony_app.ml.registry.resolve_model(name, data_dir)`:
-a registry id → its weights folder (sha256 re-checked), `"active"` → the promoted model, anything else → an official pretrained name.
+`rollback` restores the previously active registry entry (or no promoted registry entry). The CLI resolves model names through
+`polony_app.ml.registry.resolve_model(name, data_dir)`: a registry id → its weights folder (sha256 re-checked), `"active"` → the promoted model,
+anything else → an official pretrained name. **Current limitation:** app detection itself does not call this resolver, so promotion alone does not
+route the React/app detection flow to the candidate. See [TRAINING_GUIDE.md](TRAINING_GUIDE.md#714-promote-only-after-accepting-the-evidence).
 
 ## Hardware
 CPU is the default and enough for small corrections sets (the opt-in test fine-tunes a tiny model for 2 epochs in about a second). Real pretrained-size models on many crops are slower on CPU; `--device auto` uses CUDA/MPS when present.

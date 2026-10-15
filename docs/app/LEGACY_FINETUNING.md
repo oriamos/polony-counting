@@ -1,5 +1,7 @@
 # Fine-tuning Spotiflow on the historical ImageJ-annotated TIFFs
 
+**New to training?** Read [TRAINING_GUIDE.md](TRAINING_GUIDE.md) first for the plain-language workflow and results of the larger saved run. Counts in section 2 below describe the earlier eight-file dry-run, not that full dataset.
+
 Operator guide for `python -m polony_app.ml import-legacy`: how ~1,500 historical two-page TIFFs with embedded ImageJ marks enter the
 **same** snapshot -> split -> lock-test -> train -> eval-model -> compare -> promote lifecycle as newly reviewed analyses
 ([FINE_TUNING.md](FINE_TUNING.md)). Same page-level `valid_unsaturated` normalisation, same block-mean downscale and exact coordinate mapping, same
@@ -120,7 +122,7 @@ Everything below is explicit: nothing trains, locks or promotes by itself, and n
 10. **Evaluate the candidate and `general` on the same locked test set:**
     `python -m polony_app.ml --data-dir DATA eval-model --model <candidate-id> --device rocm` and `... eval-model --model general --downscale 4 --device rocm`
 11. **Compare:** `python -m polony_app.ml --data-dir DATA compare --models <candidate-id> general` (precision / recall / F1 at 5, 10, 15 px, vs *this annotator's marks*).
-12. **Promote only if the evidence supports it:** `python -m polony_app.ml --data-dir DATA promote <candidate-id> --reason "..."` (refuses a lower F1 or a configuration mismatch; `rollback` restores the previous model). Never promote on a thin or `preliminary` test set.
+12. **Promote only if the evidence supports it:** `python -m polony_app.ml --data-dir DATA promote <candidate-id> --app-downscale 4 --app-normaliser valid_unsaturated --reason "..."` (refuses a lower F1 or a configuration mismatch; `rollback` restores the previous model). Never promote on a thin or `preliminary` test set.
 
 ### What `--dry-run` of `train` prints (real numbers from your snapshot)
 sources with crops, eligible crops and the train/val/test split, epochs, batch size, `num_train_samples`, steps per epoch, **estimated optimiser steps**, validation batches per pass and in total (Spotiflow validates with batch size 1; there are also 2 sanity-check batches and a final threshold optimisation over the validation set), prepared in-memory size vs available RAM, the load mode, the native snapshot size, then `Training will not start because --dry-run was supplied.` and recommendations (1-epoch benchmark first, then ~10 epochs with early stopping). Sample for the 8 research files at downscale 4:
