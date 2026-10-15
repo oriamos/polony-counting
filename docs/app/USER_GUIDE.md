@@ -1,27 +1,37 @@
 # Polony Review App: user guide
 
-The app proposes polony positions with a classical spot detector (Big-FISH LoG), and **you decide**. Nothing is counted as final until every counting region has
-been inspected and approved by a person and the analysis has been finalized. It is a human-in-the-loop tool, not an autonomous counter.
+Polony Review proposes polony positions with two independent detectors (Big-FISH, a classical spot detector; Spotiflow, an AI
+model, when the AI extra is installed) and **you decide**. Nothing is counted as final until every counting field has been
+inspected and approved by a person. It is a human-in-the-loop tool, not an autonomous counter.
 
-> **Validation status.** The detector has been checked on one real red-only image (`resources/dataset_files/test/test_img.tif`, 2450 x 1438, 2 pages uint16, scored against one annotator's marks) and on synthetic images
-> for software behaviour. The research TIFFs named in the task (`29-09-2026_T7_AB_*.tif` etc., described as 1460 x 2438) were **not available** in the workspace, so
-> no accuracy on them is claimed. Green and yellow polony performance is untested on real data. See [SCIENTIFIC_OPEN_QUESTIONS.md](SCIENTIFIC_OPEN_QUESTIONS.md).
+> **Validation status.** Checked end to end on 8 real two-channel slides against the researcher's own marks
+> ([ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md)); accuracy is partial and varies by slide, and the default parameters are working
+> values, not final. Open scientific points: [SCIENTIFIC_OPEN_QUESTIONS.md](SCIENTIFIC_OPEN_QUESTIONS.md).
 
-Start: `make app`, then open http://127.0.0.1:8000 (see [README.md](README.md)).
-Installed version: the Desktop icon opens Polony Review in its own window; closing it stops the app unless a detection is running, in which case it asks (see "Window mode" in [INSTALL.md](INSTALL.md)).
+**Start.** Installed version: double-click the **Polony Review** icon; the app opens in its own window. Closing the window stops
+the app, unless a detection is running, in which case it asks ([INSTALL.md](INSTALL.md), "Window mode"). Developers:
+`make app`, then open http://127.0.0.1:8000 ([README.md](README.md)).
 
-Screenshots in `img/` come from an earlier acceptance run on test_img.tif; the numbers visible in them predate later fixes (e.g. debris handling), so use them only to find your way around the UI.
+**The two ways of working**
+
+* **One slide at a time** (sections 1-11): open the scan, confirm the channels, make the grid and click the fields to count, run
+  detection, review, approve, save the labelled scan and CSV next to the original.
+* **A whole experiment** (section 12): import all slides of a run, apply one grid to all, start detection on everything and go
+  home; next morning review slide by slide and download one CSV for the experiment. The per-slide steps are the same.
+
+Screenshots in `img/` come from an earlier acceptance run; the numbers in them predate later fixes, so use them only to find your way around the UI.
 
 ## Layout
 
-* **Left rail**: experiments (section 14b), list of analyses (status chip, counts, experiment), TIFF upload (drag and drop), CSV import.
+* **Left rail**: experiments (section 12), list of analyses (status chip, counts, experiment), **Open from disk**, TIFF upload (drag and drop), CSV import.
 * **Centre**: viewer (wheel zoom about the cursor, drag to pan, Fit / 1:1, five views, contrast sliders that affect display only, coordinate readout, scale bar) and toolbar.
 * **Right panel**: inspector for the selection and tabs **Review**, **Regions**, **Detect**, **Totals**, **Finish**.
 * `?` opens the shortcut list.
 
-## 1. Upload
+## 1. Open a scan
 
-Drop one multi-page TIFF (two channels), two single-channel TIFFs, or an RGB composite. Originals are copied (never modified) and hashed (sha256). Embedded ImageJ ROIs/overlays are parsed and
+Prefer **Open from disk** (left rail; in window mode **Browse...** opens the system file dialog): the app then knows the folder of the
+scan and the Save step writes the results next to it. Alternatively drop one multi-page TIFF (two channels), two single-channel TIFFs, or an RGB composite. Originals are copied (never modified) and hashed (sha256). Embedded ImageJ ROIs/overlays are parsed and
 shown only as **suggestions**; the TIFF resolution tag is shown as information only. **Pixel size is never assumed.** An RGB composite-only upload has no raw channels, so per-channel detection is only an approximation
 and the UI says so.
 
@@ -35,7 +45,7 @@ and evidence (see [RERUN_POLICY.md](RERUN_POLICY.md)). A residual channel offset
 
 ## 3. Regions and exclusions
 
-Draw at least one **counting region** (rectangle or polygon tool; vertices can be dragged, double-click an edge adds one, Alt+click removes one). Draw **exclusion masks** over rim glare, the
+The usual counting regions are the **grid fields** (next subsection). You can also draw a **counting region** by hand (rectangle or polygon tool; vertices can be dragged, double-click an edge adds one, Alt+click removes one). Draw **exclusion masks** over rim glare, the
 saturated area outside the chamber, debris or artefacts. Only objects inside a counting region and outside every exclusion are counted. Approval is per counting region. A single geometry rule (pixel centres, half-open edges) is used for detection,
 membership and area; areas are pixel-centre counts. The automatic threshold is computed only from the masked area, so a sensible region improves detection itself, not only the counts.
 
@@ -70,6 +80,10 @@ current parameters; nothing is saved. Tune the spot radius to the visible blob s
 
 ## 5. Detection
 
+**Detection engine** (top of the Detect tab): *Big-FISH* (always available), *Spotiflow* (AI; needs the `--with-ai` install and a
+model, fetched once) or *Hybrid* (both, with their agreement / disagreement shown as layers; see [TWO_ENGINE.md](TWO_ENGINE.md)).
+On a Mac the panel also shows which device Spotiflow uses (GPU via MPS, or CPU).
+
 **Run detection** starts a background job (progress, cancel). The result is a set of objects of four classes:
 
 | Class | Meaning |
@@ -86,7 +100,7 @@ current parameters; nothing is saved. Tune the spot radius to the visible blob s
 ## 6. Review queue
 
 The **Review** tab lists objects with a measured concern, most urgent first (`uncertain`/`ambiguous_match`, `saturated`, `weak_signal`/`near_threshold`, `debris_like`, `dense_cluster`, `suspicious_shape`, `near_edge`), then by position.
-**J / K** go to the next/previous item, **Enter** marks the selected object reviewed and advances. Objects without any reason are not queued, but they are still your responsibility: use the region inspection step below.
+**J / K** go to the next/previous item, **Enter** marks the selected object reviewed and advances. Objects without any reason are not queued, but they are still your responsibility: use the region inspection step (section 8).
 
 What the reasons mean (cut-offs in [PARAMETERS.md](PARAMETERS.md); they are unvalidated starting points):
 
@@ -111,10 +125,32 @@ Edited automatic objects get `origin = edited`; added ones `origin = manual`.
 
 ![Inspector](img/06-edit-inspector.png)
 
-## Save: labelled scan and CSV next to the original
+## 8. Region inspection (checking for omissions)
+
+The detector can miss real spots, and a review queue cannot show what was not detected. For each counting region:
+
+1. Press **H** to hide all overlays and look at the raw/processed channels for real spots without a marker; switch views (1-5) and zoom. Add what you find with the Add tool.
+2. Tick **"I inspected this region for omissions"**.
+3. Optionally **Accept all proposals**: marks all non-deleted, non-uncertain objects of the region reviewed (refused until the region is marked inspected). This is a bulk confirmation of what you have seen; use it deliberately.
+4. Resolve every `uncertain` object (reclassify or delete).
+
+## 9. Approval
+
+**Approve region** requires: region inspected, zero unresolved `uncertain`, detection not stale and detection having run (or objects existing). Approval is bound to a fingerprint of the region polygon, overlapping exclusions, the ids/positions/classes of its objects,
+the channel roles and the alignment. **Any later change inside the region (add, move, delete, reclassify, merge, split, re-detection, region/exclusion edit, mapping or alignment change) clears that region's approval.** Un-approve is always possible. Undo that
+restores an identical state restores a valid approval.
+
+## 10. Finalize and reopen
+
+The **Finish** tab shows a checklist; **Finalize analysis** is enabled only when: at least one counting region exists, every counting region is approved, the channel mapping is confirmed, and the detection is not stale. After finalizing, all mutating actions return an error
+(`analysis_finalized`) and exports are labelled FINAL. **Reopen** returns to review: approvals are kept but each is cleared by the first edit inside its region; the undo history is not restored. Finalize and reopen are logged.
+
+![Finalized](img/09-finalized.png)
+
+## 11. Save: labelled scan and CSV next to the original
 
 1. **Open from disk** (left rail) opens a TIFF in place, so the app knows its folder. (A dragged-in upload has no folder: the Save tab then asks for an output folder.) Confirm the channel mapping as usual.
-2. Create the grid (Regions tab, same size as in ImageJ), run detection and review the labels.
+2. Create the grid (section 3: Generate grid, click the fields to count), run detection, review and approve.
 3. **Save tab**
    * *What to count*: tick red only / green only / yellow (red + green). The text written in the CSV is generated (`red, not yellow`, `yellow`, `red and yellow`, ...) and can be edited. **+ Count something else too** adds another row; every row becomes its own row in the experiment CSV.
    * *Grid fields to count*: click a field to switch it off (bad area) or back on. Off = blank in the CSV; counted with no polonies = 0. Numbers above 24 are not allowed (the lab template ends at Field24).
@@ -126,97 +162,7 @@ Edited automatic objects get `origin = edited`; added ones `origin = manual`.
 
 API: `GET /api/fs/list`, `POST /api/analyses/open-path`, `PUT /api/analyses/{id}/grid`, `PUT /api/analyses/{id}/grid-selection`, `POST /api/analyses/{id}/save-slide`.
 
-## 8. Keyboard shortcuts
-
-| Key | Action |
-|---|---|
-| Wheel | zoom about the cursor |
-| Drag on empty space / Space+drag / middle-drag | pan |
-| F | fit image |
-| 1 / 2 / 3 / 4 / 5 | raw red / raw green / composite / processed red / processed green |
-| H | hide or show all overlays |
-| V | select tool (click; Shift+click multi-select; Shift+drag box select) |
-| A | add mode (toggle); R/G/Y/U switch the class of new spots |
-| R / G / Y / U | set class of selected spot(s): red-only / green-only / yellow / uncertain |
-| Del | delete selected |
-| M | merge selected (two or more) |
-| S | split the selected spot, then click two positions |
-| Enter | confirm selected and advance in the queue |
-| J / K | next / previous queue item |
-| Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) | undo / redo |
-| A / N / I (Pick fields tool) | count all grid fields / none / invert |
-| Polygon tool | click vertices; double-click, Enter or click the first point to finish; Backspace removes the last vertex; Esc cancels |
-| ] | experiment: open the next slide that is not fully approved (on the experiment page or from one of its slides) |
-| Esc | cancel tool / clear selection |
-| ? | help |
-
-Editing keys are disabled when the analysis is finalized.
-
-## 9. Region inspection (checking for omissions)
-
-The detector can miss real spots, and a review queue cannot show what was not detected. For each counting region:
-
-1. Press **H** to hide all overlays and look at the raw/processed channels for real spots without a marker; switch views (1-5) and zoom. Add what you find with the Add tool.
-2. Tick **"I inspected this region for omissions"**.
-3. Optionally **Accept all proposals**: marks all non-deleted, non-uncertain objects of the region reviewed (refused until the region is marked inspected). This is a bulk confirmation of what you have seen; use it deliberately.
-4. Resolve every `uncertain` object (reclassify or delete).
-
-## 10. Approval
-
-**Approve region** requires: region inspected, zero unresolved `uncertain`, detection not stale and detection having run (or objects existing). Approval is bound to a fingerprint of the region polygon, overlapping exclusions, the ids/positions/classes of its objects,
-the channel roles and the alignment. **Any later change inside the region (add, move, delete, reclassify, merge, split, re-detection, region/exclusion edit, mapping or alignment change) clears that region's approval.** Un-approve is always possible. Undo that
-restores an identical state restores a valid approval.
-
-## 11. Finalize and reopen
-
-The **Finish** tab shows a checklist; **Finalize analysis** is enabled only when: at least one counting region exists, every counting region is approved, the channel mapping is confirmed, and the detection is not stale. After finalizing, all mutating actions return an error
-(`analysis_finalized`) and exports are labelled FINAL. **Reopen** returns to review: approvals are kept but each is cleared by the first edit inside its region; the undo history is not restored. Finalize and reopen are logged.
-
-![Finalized](img/09-finalized.png)
-
-## 12. Exports
-
-The Finish tab offers (API: `GET /api/analyses/{id}/export?kind=...`):
-
-| File | Content |
-|---|---|
-| `objects*.csv` | one row per non-deleted object: id, x, y (pixels; x = column, y = row; pixel (0,0) centre = 0.0), class, origin, region_id, `counted` (inside a counting region and outside exclusions), per-channel evidence (`red_/green_` detected, x, y, peak, local_background, snr, saturated), `association_distance_px`, `review_reasons` (`|`-separated), `ambiguous_with`, `reviewed`, `status` |
-| `regions*.csv` | per region: area_px2, red_only, green_only, yellow, uncertain, red_positive_incl_yellow, green_positive_incl_yellow, yellow_overlap, total_objects_exclusive, reporting_mode, inspected, approval_status, approved_at, status. Exclusions appear with empty counts |
-| `slide*.csv` | slide totals (same count columns), n_counting_regions, n_regions_approved, counting_area_px2, pixel_size_um, sample inputs, field_area, grid_area, `lab_series`, `n_fields_<series>`, `abundance_per_ml_<series>`, `concentration_status`, `concentration_formula`, channel_mapping_confirmed, stale_detection, finalized_at, status |
-| `provenance.json` | parameters requested and used, package versions at detection and export, recorded detection inputs, image hash/shape/bit depth, TIFF info text, original upload names, channel mapping, alignment, regions, slide metadata, counts, action summary, complete event list |
-| `actions.jsonl` | complete review-action log (the undo/redo snapshots are omitted) |
-| `objects_history.csv` | per-object history trail including deleted objects |
-| `*.zip` bundle | all of the above plus `README.txt` (conventions, lab formula) |
-
-**Draft vs final.** Until finalized, file names end in `_DRAFT`, every CSV row has `status = DRAFT`, and the bundle README starts with "DRAFT - NOT FINAL". After finalizing: `FINAL`. Do not use DRAFT numbers as results.
-
-## 13. The two counting conventions (always both exported)
-
-Selected on the **Totals** tab (`reporting_mode`); both sets of columns are always written with unambiguous names.
-
-* **Exclusive** (default): `red_only`, `green_only`, `yellow` are disjoint; `total_objects_exclusive = red_only + green_only + yellow`.
-* **Channel-inclusive**: `red_positive_incl_yellow = red_only + yellow`; `green_positive_incl_yellow = green_only + yellow`; `yellow_overlap = yellow`.
-
-`uncertain` is in neither. Which convention the laboratory reports for each assay is **not confirmed**; see the open questions. In particular, if the quantity reported per clade is the dual-positive (yellow) count, the choice is decisive.
-
-## 14. Concentration (lab formula)
-
-The estimate columns use the laboratory's own T7 formula:
-
-`abundance_per_ml = mean(field counts) * (field_area / grid_area) / sample_volume_ul * 1000`
-
-Fields are counting regions that carry a **field number** (1-24); a missing field is blank and not averaged, a field with zero objects counts as 0. Each series (e.g. `T7A`, `T7B`) counts one **count type** that you choose (red-only, green-only, yellow, red-positive, green-positive); the app never guesses it from the name. The CONCENTRATION FACTOR is not part of this formula (as in your T7 sheets); the Counts-style workbook multiplies by it (column AK). Estimates are written only if `concentration_formula_confirmed` (tick it once field geometry and series mapping are right), volume, field area, grid area, a series, at least one field and a confirmed mapping are set; otherwise `concentration_status` lists what is missing. No confidence interval is produced. Raw counts are always exported.
-
-### Lab export (T7 / Counts files)
-
-For finalized slides, **Lab export** (or `GET /api/analyses/{id}/lab-export?series=T7B&format=xlsx|csv`, `POST /api/lab-export`) writes your workbook layouts:
-
-* **T7-style**: `T7B_15-09-2026.xlsx|csv` (series name + sampling date), one row per slide, same headers as your template, real Excel formula in column I (the xlsx also carries the calculated values), dates `dd/mm/yyyy` in the CSV (UTF-8 BOM, CRLF line ends, abundance with 10 significant digits as in your CSVs).
-* **Counts-style**: `Counts_<polony date>.xlsx`, one sheet per series, replicates paired by slide ID `<sample>_A` / `<sample>_B`; NTC columns are filled only if a slide ID starting with `NTC` is part of the export (never `#REF!`).
-* A **Notes** sheet (and `lab_export_notes.txt` in zips) lists the series mapping, analysis ids, SHA-256 of the original images, the field-to-region table and warnings (fields partly covered by an exclusion are counted over the remaining area only; uncertain objects; regions without a field number).
-* Refused with a clear message: unfinalized analyses, field number > 24 or duplicated, missing metadata (the exact list is returned).
-
-## 14b. Experiments (many slides, one run overnight, one CSV)
+## 12. Experiments (many slides, one run overnight, one CSV)
 
 An **experiment** holds all slides of one run. You import them together, give them one grid, start detection on all of
 them and go home; the next morning you review slide by slide and download one CSV. (This replaces the old *Batch
@@ -263,15 +209,83 @@ Slides can be reordered (drag a row, or ▲▼), opened, or detached (the analys
 removes the experiment and either keeps its slides as loose analyses or deletes them too (refused while a run is active,
 or for finalized slides).
 
-## 15. CSV import
+## 13. Exports
+
+The Finish tab offers (API: `GET /api/analyses/{id}/export?kind=...`):
+
+| File | Content |
+|---|---|
+| `objects*.csv` | one row per non-deleted object: id, x, y (pixels; x = column, y = row; pixel (0,0) centre = 0.0), class, origin, region_id, `counted` (inside a counting region and outside exclusions), per-channel evidence (`red_/green_` detected, x, y, peak, local_background, snr, saturated), `association_distance_px`, `review_reasons` (`|`-separated), `ambiguous_with`, `reviewed`, `status` |
+| `regions*.csv` | per region: area_px2, red_only, green_only, yellow, uncertain, red_positive_incl_yellow, green_positive_incl_yellow, yellow_overlap, total_objects_exclusive, reporting_mode, inspected, approval_status, approved_at, status. Exclusions appear with empty counts |
+| `slide*.csv` | slide totals (same count columns), n_counting_regions, n_regions_approved, counting_area_px2, pixel_size_um, sample inputs, field_area, grid_area, `lab_series`, `n_fields_<series>`, `abundance_per_ml_<series>`, `concentration_status`, `concentration_formula`, channel_mapping_confirmed, stale_detection, finalized_at, status |
+| `provenance.json` | parameters requested and used, package versions at detection and export, recorded detection inputs, image hash/shape/bit depth, TIFF info text, original upload names, channel mapping, alignment, regions, slide metadata, counts, action summary, complete event list |
+| `actions.jsonl` | complete review-action log (the undo/redo snapshots are omitted) |
+| `objects_history.csv` | per-object history trail including deleted objects |
+| `*.zip` bundle | all of the above plus `README.txt` (conventions, lab formula) |
+
+**Draft vs final.** Until finalized, file names end in `_DRAFT`, every CSV row has `status = DRAFT`, and the bundle README starts with "DRAFT - NOT FINAL". After finalizing: `FINAL`. Do not use DRAFT numbers as results.
+
+## 14. The two counting conventions (always both exported)
+
+Selected on the **Totals** tab (`reporting_mode`); both sets of columns are always written with unambiguous names.
+
+* **Exclusive** (default): `red_only`, `green_only`, `yellow` are disjoint; `total_objects_exclusive = red_only + green_only + yellow`.
+* **Channel-inclusive**: `red_positive_incl_yellow = red_only + yellow`; `green_positive_incl_yellow = green_only + yellow`; `yellow_overlap = yellow`.
+
+`uncertain` is in neither. Which convention the laboratory reports for each assay is **not confirmed**; see the open questions. In particular, if the quantity reported per clade is the dual-positive (yellow) count, the choice is decisive.
+
+## 15. Concentration (lab formula)
+
+The estimate columns use the laboratory's own T7 formula:
+
+`abundance_per_ml = mean(field counts) * (field_area / grid_area) / sample_volume_ul * 1000`
+
+Fields are counting regions that carry a **field number** (1-24); a missing field is blank and not averaged, a field with zero objects counts as 0. Each series (e.g. `T7A`, `T7B`) counts one **count type** that you choose (red-only, green-only, yellow, red-positive, green-positive); the app never guesses it from the name. The CONCENTRATION FACTOR is not part of this formula (as in your T7 sheets); the Counts-style workbook multiplies by it (column AK). Estimates are written only if `concentration_formula_confirmed` (tick it once field geometry and series mapping are right), volume, field area, grid area, a series, at least one field and a confirmed mapping are set; otherwise `concentration_status` lists what is missing. No confidence interval is produced. Raw counts are always exported.
+
+### Lab export (T7 / Counts files)
+
+For finalized slides, **Lab export** (or `GET /api/analyses/{id}/lab-export?series=T7B&format=xlsx|csv`, `POST /api/lab-export`) writes your workbook layouts:
+
+* **T7-style**: `T7B_15-09-2026.xlsx|csv` (series name + sampling date), one row per slide, same headers as your template, real Excel formula in column I (the xlsx also carries the calculated values), dates `dd/mm/yyyy` in the CSV (UTF-8 BOM, CRLF line ends, abundance with 10 significant digits as in your CSVs).
+* **Counts-style**: `Counts_<polony date>.xlsx`, one sheet per series, replicates paired by slide ID `<sample>_A` / `<sample>_B`; NTC columns are filled only if a slide ID starting with `NTC` is part of the export (never `#REF!`).
+* A **Notes** sheet (and `lab_export_notes.txt` in zips) lists the series mapping, analysis ids, SHA-256 of the original images, the field-to-region table and warnings (fields partly covered by an exclusion are counted over the remaining area only; uncertain objects; regions without a field number).
+* Refused with a clear message: unfinalized analyses, field number > 24 or duplicated, missing metadata (the exact list is returned).
+
+## 16. CSV import
 
 The left rail can import a researcher CSV (e.g. `T7A_15-09-2026.csv`) for viewing: blank cells are shown distinct from 0, the colour mapping of a CSV (which column set is red/green/yellow) must be chosen explicitly and is never inferred from names such as T7A/T7B.
+
+## 17. Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| Wheel | zoom about the cursor |
+| Drag on empty space / Space+drag / middle-drag | pan |
+| F | fit image |
+| 1 / 2 / 3 / 4 / 5 | raw red / raw green / composite / processed red / processed green |
+| H | hide or show all overlays |
+| V | select tool (click; Shift+click multi-select; Shift+drag box select) |
+| A | add mode (toggle); R/G/Y/U switch the class of new spots |
+| R / G / Y / U | set class of selected spot(s): red-only / green-only / yellow / uncertain |
+| Del | delete selected |
+| M | merge selected (two or more) |
+| S | split the selected spot, then click two positions |
+| Enter | confirm selected and advance in the queue |
+| J / K | next / previous queue item |
+| Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) | undo / redo |
+| A / N / I (Pick fields tool) | count all grid fields / none / invert |
+| Polygon tool | click vertices; double-click, Enter or click the first point to finish; Backspace removes the last vertex; Esc cancels |
+| ] | experiment: open the next slide that is not fully approved (on the experiment page or from one of its slides) |
+| Esc | cancel tool / clear selection |
+| ? | help |
+
+Editing keys are disabled when the analysis is finalized.
 
 ## Known limitations
 
 * Each re-detection stores a before-snapshot of every replaced automatic object so it can be undone; with 10 000+ objects a re-run (and the saved state) gets slow and large. Split very dense slides into separate analyses/regions.
 * Export names: downloads are `<name>_<kind>_<DRAFT|FINAL>.<ext>`; the three CSVs inside the bundle are `objects|regions|slide_<DRAFT|FINAL>.csv`; `provenance.json`, `actions.jsonl` and `objects_history.csv` keep fixed names inside the bundle and carry `status` in their content (objects_history.csv column, actions.jsonl field, provenance `status`).
-* Counts are not validated for accuracy (one red-only test image; see SCIENCE_NOTES, "Measured performance and limits"). Touching saturated polonies stay merged into one object flagged `suspicious_shape`: check those by eye.
+* Accuracy is partial and slide-dependent ([ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md)); review every field. Touching saturated polonies stay merged into one object flagged `suspicious_shape`: check those by eye.
 * Unknown fields in `PUT /settings` and `POST /detect` bodies are refused (422) instead of being ignored.
 
 ## What the app will not do

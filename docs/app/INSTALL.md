@@ -51,9 +51,9 @@ Nothing is written outside these folders. The installation takes a few minutes (
 ### First start
 
 Double-click the icon. The **first start can take up to a minute** (heavy libraries are loaded); later starts take a few seconds.
-Your browser opens `http://127.0.0.1:8765/` (the launcher picks another free port automatically if 8765 is taken and
-remembers it). The server keeps running in the background after you close the browser tab, so you can reopen the page by
-clicking the icon again. It is never shut down automatically (a running detection must not be interrupted).
+Polony Review opens in its own window (see *Window mode* below; the server behind it listens on `http://127.0.0.1:8765/`, or
+another free port, which the launcher remembers). Closing the window stops the app when nothing is running; a running
+detection is never interrupted without asking you.
 
 ## Window mode
 

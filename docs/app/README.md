@@ -1,6 +1,6 @@
 # Polony Review App
 
-A local, human-in-the-loop web app for reviewing and counting red / green / yellow polonies on two-channel TIFF scans. A classical spot detector (Big-FISH, Laplacian of Gaussian)
+A local, human-in-the-loop app (own desktop window, or a browser tab) for reviewing and counting red / green / yellow polonies on two-channel TIFF scans. A classical spot detector (Big-FISH, Laplacian of Gaussian)
 proposes positions, you inspect, correct and approve them per region, and the app exports counts together with full provenance. Code: `src/polony_app` (FastAPI + SQLite) and `frontend/` (React + TypeScript).
 The base install does **not** need torch; the optional Spotiflow engine does (`--with-ai`). The app does not use the legacy neural-network code in `src/polony` (see [LEGACY_AUDIT.md](LEGACY_AUDIT.md)).
 
@@ -27,13 +27,13 @@ Equivalent without make: `pip install -r requirements-app.txt`, then `PYTHONPATH
 Data (originals, SQLite database) live in `./data` (git-ignored; override with `POLONY_DATA_DIR`). Uploads are limited to 512 MB per file (`POLONY_MAX_UPLOAD_MB`).
 Frontend development: see `frontend/README.md` (`npm run dev`, mock API, vitest, e2e).
 
-Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` (no torch), `PYTHONPATH=src pytest tests/app` = all passed at that time (latest full run: 552 passed / 85 skipped), `make app` serves `/api/health` and `/`.
+Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` (no torch), `PYTHONPATH=src pytest tests/app` (latest full run: 1237 passed / 140 skipped; 10 tests need torch/spotiflow or a GPU), `make app` serves `/api/health` and `/`.
 
 ## Documents
 
 | Document | Content |
 |---|---|
-| [USER_GUIDE.md](USER_GUIDE.md) | the whole workflow, shortcuts, exports, draft vs final, counting conventions |
+| [USER_GUIDE.md](USER_GUIDE.md) | the whole workflow: one slide (grid by clicking, Randomise, review, Save) and experiments (overnight run, one CSV), shortcuts, exports, counting conventions |
 | [PARAMETERS.md](PARAMETERS.md) | every detection parameter and review cut-off, exactly |
 | [SCIENTIFIC_OPEN_QUESTIONS.md](SCIENTIFIC_OPEN_QUESTIONS.md) | what the researcher must still decide or confirm |
 | [LEGACY_AUDIT.md](LEGACY_AUDIT.md) | verified problems of the legacy pipeline and what the app does instead |
