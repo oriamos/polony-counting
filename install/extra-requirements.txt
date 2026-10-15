@@ -1,0 +1,6 @@
+# Safety net used by the installers in addition to requirements-app.txt.
+# openpyxl is imported by polony_app/export/lab.py (Excel export) but was missing from requirements-app.txt
+# when the installer was written. It is harmless to keep once requirements-app.txt lists it.
+openpyxl>=3.1
+psycopg[binary]>=3.2
+psycopg_pool>=3.2

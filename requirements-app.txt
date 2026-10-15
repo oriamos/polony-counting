@@ -1,0 +1,23 @@
+# Dependencies of the polony counting app (src/polony_app). Python >= 3.10.
+# Legacy `polony` package dependencies (torch, wandb, ...) are NOT needed.
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+pydantic>=2.5
+numpy>=1.26
+scipy>=1.11
+scikit-image>=0.22
+tifffile>=2023.8.12
+imagecodecs>=2023.1.23   # LZW-compressed RGB composites exported by the scanner software
+roifile>=2023.5.12
+Pillow>=10.1
+big-fish>=0.6.2
+# optional shared database (Neon / PostgreSQL); the app runs on local SQLite without a database URL
+psycopg[binary]>=3.2
+psycopg_pool>=3.2
+# native window for the desktop launcher (pure Python; optional at run time: the launcher falls back to the browser)
+pywebview>=5
+# tests
+httpx>=0.27
+pytest>=7.4
+openpyxl>=3.1

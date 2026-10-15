@@ -1,0 +1,35 @@
+[project]
+name = "polony-review"
+version = "1.0.0"
+description = "Human-in-the-loop polony counting: two detectors, researcher review per grid field, lab-format exports with provenance."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[project.urls]
+repository = "https://github.com/oriamos/polony-counting"
+
+# Runtime and test dependencies are pinned in requirements-app.txt (used by `make app-install` and the installers).
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["polony_app"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements-app.txt"] }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 120
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests/app"]
+pythonpath = ["src"]
+addopts = "-p no:cacheprovider"

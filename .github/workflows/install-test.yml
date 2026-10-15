@@ -1,0 +1,125 @@
+name: install-test
+
+# Tests the one-command installers (install/install.sh, install/install.ps1) on real Windows / macOS / Linux
+# runners, using the checked-out branch as the source (POLONY_SOURCE) instead of downloading from GitHub.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "install/**"
+      - "src/polony_app/**"
+      - "requirements-app.txt"
+      - ".github/workflows/install-test.yml"
+  pull_request:
+    paths:
+      - "install/**"
+      - "src/polony_app/**"
+      - "requirements-app.txt"
+      - ".github/workflows/install-test.yml"
+  workflow_dispatch:
+    inputs:
+      with_ai:
+        description: "Also install + verify the optional AI detector (Spotiflow + PyTorch, large download)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  POLONY_CI: "1"                              # installer/launcher: never open a browser or show dialogs
+  POLONY_SOURCE: ${{ github.workspace }}      # use this checkout instead of GitHub
+  PYTHONUTF8: "1"
+  POLONY_WITH_AI: ${{ inputs.with_ai && '1' || '' }}   # optional AI detector (manual runs only)
+
+jobs:
+  unix:
+    name: ${{ matrix.os }} / ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: [system, uv]          # system = use a Python found on the machine; uv = force the download path
+    env:
+      POLONY_FORCE_UV: ${{ matrix.python == 'uv' && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static checks of the scripts
+        run: |
+          bash -n install/install.sh install/uninstall.sh install/ci/check_unix.sh
+          bash install/install.sh --dry-run
+      - name: Install (first time)
+        run: bash install/install.sh
+      - name: Shortcut / bundle / self-test
+        run: bash install/ci/check_unix.sh shortcuts
+      - name: Launch, health, UI, stop
+        run: bash install/ci/check_unix.sh run
+      - name: AI detector (only when with_ai is ticked)
+        if: ${{ inputs.with_ai }}
+        run: bash install/ci/check_unix.sh ai
+      - name: Install again (idempotent update)
+        run: bash install/install.sh
+      - name: Launch, health, UI, stop (after update)
+        run: bash install/ci/check_unix.sh run
+      - name: macOS - LaunchServices opens the .app bundle
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: bash install/ci/check_unix.sh open-bundle
+      - name: Uninstall (keeps data)
+        run: bash install/ci/check_unix.sh uninstall
+      - name: Logs
+        if: always()
+        run: |
+          for f in "$HOME"/PolonyReview/logs/*.log; do [ -f "$f" ] && { echo "== $f"; tail -n 80 "$f"; }; done || true
+
+  windows:
+    name: windows-latest / ${{ matrix.python }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [system, uv]
+    env:
+      POLONY_FORCE_UV: ${{ matrix.python == 'uv' && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse-check the PowerShell scripts and dry-run
+        shell: powershell
+        run: |
+          foreach ($f in 'install\install.ps1','install\uninstall.ps1','install\ci\check_windows.ps1') {
+            $e = $null; $t = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$t, [ref]$e)
+            if ($e.Count) { $e | ForEach-Object { $_.Message }; exit 1 }
+          }
+          powershell -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -DryRun
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Install (first time) with Windows PowerShell 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install\install.ps1
+      - name: Shortcut / self-test
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install\ci\check_windows.ps1 -Mode shortcuts
+      - name: Launch via the Desktop shortcut target, health, UI, stop
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install\ci\check_windows.ps1 -Mode run
+      - name: AI detector (only when with_ai is ticked)
+        if: ${{ inputs.with_ai }}
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install\ci\check_windows.ps1 -Mode ai
+      - name: Install again with PowerShell 7 (idempotent update)
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File install\install.ps1
+      - name: Launch again (after update)
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File install\ci\check_windows.ps1 -Mode run
+      - name: Uninstall (keeps data)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install\ci\check_windows.ps1 -Mode uninstall
+      - name: Logs
+        if: always()
+        shell: powershell
+        run: |
+          Get-ChildItem "$env:LOCALAPPDATA\PolonyReview\logs\*.log" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.FullName)"; Get-Content $_ -Tail 80 }

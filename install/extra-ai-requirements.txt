@@ -1,0 +1,4 @@
+# Optional "AI detector" extra (installed only on request, after torch/torchvision, see install/ai_extra.py).
+# torch + torchvision are installed first as a MATCHING pair (torch 2.14.1 <-> torchvision 0.29.1; a mismatched
+# torchvision breaks spotiflow with 'torchvision::nms does not exist').
+spotiflow==0.6.5
