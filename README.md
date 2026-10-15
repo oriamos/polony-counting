@@ -4,7 +4,7 @@
 [![Testing](https://github.com/oriamos/polony-counting/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/test.yml)
 [![Documentation](https://github.com/oriamos/polony-counting/actions/workflows/pages.yml/badge.svg)](https://github.com/oriamos/polony-counting/actions/workflows/pages.yml)
 
-> **Hackathon winner.** This project won the hackathon. The final state lives on `main`: the Polony Review app, the fine-tuned Spotiflow model (`artifacts/ft-7e4c89cb-8edc09e3`), the locked test-set manifest and the comparison scripts (`scripts/compare_to_researcher.py`, `scripts/calibration/`). Hebrew briefing: [docs/app/HACKATHON_BRIEF_HE.pdf](docs/app/HACKATHON_BRIEF_HE.pdf). Repository layout and branch history: [docs/BRANCHES.md](docs/BRANCHES.md).
+> **Hackathon winner.** This project won the hackathon. The final state lives on `main`: the Polony Review app, the fine-tuned Spotiflow model (`artifacts/ft-7e4c89cb-8edc09e3`), the locked test-set manifest and the comparison scripts (`scripts/compare_to_researcher.py`, `scripts/calibration/`). Hebrew briefing: [docs/app/HACKATHON_BRIEF_HE.pdf](docs/app/HACKATHON_BRIEF_HE.pdf). Repository layout and branch status: [docs/BRANCHES.md](docs/BRANCHES.md).
 
 ## Install Polony Review (one command, no admin rights)
 
