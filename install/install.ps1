@@ -1,6 +1,6 @@
 # Polony Review installer for Windows (PowerShell 5.1 and 7+). No administrator rights needed.
 #
-#   irm https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/oriamos/polony-counting/main/install/install.ps1 | iex
 #
 # Re-running it updates the installation. Options when run from a saved file:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-DryRun] [-NoLaunch] [-WithAi|-WithoutAi] [-Ref NAME] [-Python PATH]
@@ -22,7 +22,7 @@ function Install-PolonyReview {
 
     # ---- options ---------------------------------------------------------------------------------
     $repo = if ($env:POLONY_REPO) { $env:POLONY_REPO } else { 'oriamos/polony-counting' }
-    $ref = if ($env:POLONY_REF) { $env:POLONY_REF } else { 'claude/polony-hitl-app' }
+    $ref = if ($env:POLONY_REF) { $env:POLONY_REF } else { 'main' }
     $dry = ($env:POLONY_DRYRUN -and $env:POLONY_DRYRUN -ne '0')
     $ci = ($env:POLONY_CI -and $env:POLONY_CI -ne '0')
     $noLaunch = $false

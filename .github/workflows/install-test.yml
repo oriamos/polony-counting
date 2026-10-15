@@ -4,7 +4,7 @@ name: install-test
 # runners, using the checked-out branch as the source (POLONY_SOURCE) instead of downloading from GitHub.
 on:
   push:
-    branches: [claude/polony-hitl-app]
+    branches: [main]
     paths:
       - "install/**"
       - "src/polony_app/**"

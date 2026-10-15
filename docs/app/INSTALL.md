@@ -8,16 +8,16 @@ Nothing is uploaded anywhere. The installer puts a **Polony Review** icon on you
 **Windows** (open *PowerShell*: Start menu, type `powershell`, Enter):
 
 ```powershell
-irm https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/oriamos/polony-counting/main/install/install.ps1 | iex
 ```
 
 **macOS** (open *Terminal*: Cmd+Space, type `terminal`, Enter) **and Linux**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/main/install/install.sh | bash
 ```
 
-Alternative if you cloned the repository (`git clone https://github.com/oriamos/polony-counting`, `git checkout claude/polony-hitl-app`):
+Alternative if you cloned the repository (`git clone https://github.com/oriamos/polony-counting`, `git checkout main`):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File install\install.ps1       # Windows

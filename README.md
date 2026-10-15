@@ -1,18 +1,20 @@
-[![codecov](https://codecov.io/gh/kirill-push/polony-counting/graph/badge.svg?token=3XYNQ0GYTB)](https://codecov.io/gh/kirill-push/polony-counting)
-![GitHub release (with filter)](https://img.shields.io/github/v/release/kirill-push/polony-counting?sort=semver&color=brightgreen)
-[![Linting](https://github.com/kirill-push/polony-counting/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/kirill-push/polony-counting/actions/workflows/lint.yml)
-[![Testing](https://github.com/kirill-push/polony-counting/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/kirill-push/polony-counting/actions/workflows/test.yml)
-[![Documentation](https://github.com/kirill-push/polony-counting/actions/workflows/pages.yml/badge.svg)](https://github.com/kirill-push/polony-counting/actions/workflows/pages.yml)
+[![codecov](https://codecov.io/gh/oriamos/polony-counting/graph/badge.svg?token=3XYNQ0GYTB)](https://codecov.io/gh/oriamos/polony-counting)
+![GitHub release (with filter)](https://img.shields.io/github/v/release/oriamos/polony-counting?sort=semver&color=brightgreen)
+[![Linting](https://github.com/oriamos/polony-counting/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/lint.yml)
+[![Testing](https://github.com/oriamos/polony-counting/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/test.yml)
+[![Documentation](https://github.com/oriamos/polony-counting/actions/workflows/pages.yml/badge.svg)](https://github.com/oriamos/polony-counting/actions/workflows/pages.yml)
+
+> **Hackathon winner.** This project won the hackathon. The final state lives on `main`: the Polony Review app, the fine-tuned Spotiflow model (`artifacts/ft-7e4c89cb-8edc09e3`), the locked test-set manifest and the comparison scripts (`scripts/compare_to_researcher.py`, `scripts/calibration/`). Hebrew briefing: [docs/app/HACKATHON_BRIEF_HE.pdf](docs/app/HACKATHON_BRIEF_HE.pdf). Repository layout and branch history: [docs/BRANCHES.md](docs/BRANCHES.md).
 
 ## Install Polony Review (one command, no admin rights)
 
 **Windows** (PowerShell):
 ```powershell
-irm https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/oriamos/polony-counting/main/install/install.ps1 | iex
 ```
 **macOS / Linux** (Terminal):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/main/install/install.sh | bash
 ```
 This installs the app into your user folder (about 650 MB, downloads Python 3.12 via `uv` only if no Python 3.10-3.13 is present)
 and puts a **Polony Review** icon on your Desktop. Re-run the command to update. Optional AI detector (Spotiflow + PyTorch, +0.8-2.5 GB): add `--with-ai` (`-WithAi` on Windows). The app has no login and listens on `127.0.0.1` only.

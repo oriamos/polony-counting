@@ -1,7 +1,7 @@
 # Open items and hackathon task list
 
 State at the time of writing: development paused until the hackathon. Everything below is **what is not done or not decided**; nothing here is a claim of completion.
-Branch: `claude/polony-hitl-app` (fork `oriamos/polony-counting`). Last full test run: backend 552 passed / 85 skipped, vitest 32/32, mock e2e 203/203, real-model tests pass with `POLONY_SPOTIFLOW_E2E=1`.
+Branch: `main` (`oriamos/polony-counting`; the former working branch `claude/polony-hitl-app` was merged and archived, see [../BRANCHES.md](../BRANCHES.md)). Last full test run: backend 552 passed / 85 skipped, vitest 32/32, mock e2e 203/203, real-model tests pass with `POLONY_SPOTIFLOW_E2E=1`.
 
 ## 1. What works (verified)
 

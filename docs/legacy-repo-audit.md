@@ -9,9 +9,9 @@ re-derived by running `tifffile`/`roifile` on the real files; nothing was traine
 
 * **The "old" and the "current" repositories share one `main`.** `oriamos/polony-counting@main` is byte-identical
   to `kirill-push/polony-counting@main` (`65cb245`, v0.6.5, 2024-01-31; `diff -rq` empty, 263 commits). The "current system"
-  (Big-FISH engine, review app) lives on the branch `claude/polony-hitl-app` (`src/polony_app`). No Spotiflow engine exists
+  (Big-FISH engine, review app) was developed on the branch `claude/polony-hitl-app` (`src/polony_app`; now merged into `main`, see [BRANCHES.md](BRANCHES.md)). No Spotiflow engine exists
   in either (`grep -ri spotiflow` is empty): the Spotiflow work here is the *dataset export* only. This work is
-  built on `claude/polony-hitl-app` (branch `claude/legacy-import`); `main` was not touched.
+  built on `claude/polony-hitl-app` (branch `claude/legacy-import`; both now merged into `main`).
 * The legacy datasets (four Google-Drive zips, ids in `config.yaml`) and the W&B runs are **not available**; only
   `resources/dataset_files/test/test_img.tif`, the two checkpoints and the 2026 research samples are.
 * **Research samples** exist on the branch `data/research-samples-2026-09-29` (8 zipped TIFFs + 2 CSVs, committed

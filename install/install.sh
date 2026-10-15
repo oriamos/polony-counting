@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Polony Review installer for macOS and Linux. No admin rights, never uses sudo.
 #
-#   curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/claude/polony-hitl-app/install/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/oriamos/polony-counting/main/install/install.sh | bash
 #
 # Re-running it updates the installation. Options (after `bash -s --` when piped):
 #   --dry-run        print what would be done, change nothing
 #   --no-launch      do not start the app at the end
 #   --with-ai        also install the optional AI detector (Spotiflow + PyTorch, 0.8-2.5 GB); --without-ai never asks
-#   --ref NAME       git branch/tag to install (default: claude/polony-hitl-app)
+#   --ref NAME       git branch/tag to install (default: main)
 #   --python PATH    use this Python (3.10-3.13) instead of searching / downloading one
 # Environment: POLONY_HOME (default ~/PolonyReview), POLONY_DATA_DIR (default ~/PolonyReviewData),
 #   POLONY_SOURCE (local checkout to copy instead of downloading from GitHub), POLONY_REPO, POLONY_REF,
@@ -22,7 +22,7 @@ set -euo pipefail
 
 main() {
   REPO="${POLONY_REPO:-oriamos/polony-counting}"
-  REF="${POLONY_REF:-claude/polony-hitl-app}"
+  REF="${POLONY_REF:-main}"
   PH="${POLONY_HOME:-$HOME/PolonyReview}"
   DATA="${POLONY_DATA_DIR:-$HOME/PolonyReviewData}"
   DRY=0; NO_LAUNCH=0; PY_ARG=""; SHORTCUTS_ONLY=0; WITH_AI=""
