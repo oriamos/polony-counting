@@ -1,6 +1,6 @@
 # Two-engine detection: Big-FISH + Spotiflow
 
-Status of the design: see `TWO_ENGINE_CONTRACT.md` (orchestrator-owned). This file documents the engine and
+Status of the design: see [TWO_ENGINE_CONTRACT.md](TWO_ENGINE_CONTRACT.md). This file documents the engine and
 matching layers (`src/polony_app/engines/`, `consensus/`, `detection/pipeline.py`, `detection/two_engine.py`).
 Other layers (review queue, export, dataset / fine-tuning) are described by their owners further down this file
 or in their own documents.

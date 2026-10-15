@@ -1,139 +1,35 @@
-[tool.poetry]
-name = "polony"
-version = "0.6.5"
-description = ""
-authors = ["Kirill Pushkarev <kirillpush@gmail.com>"]
+[project]
+name = "polony-review"
+version = "1.0.0"
+description = "Human-in-the-loop polony counting: two detectors, researcher review per grid field, lab-format exports with provenance."
 readme = "README.md"
-packages = [{include = "polony", from = "src" }, {include = "polony_app", from = "src" }]
-license = "MIT"
-homepage = "https://kirill-push.github.io/polony-counting/"
-repository = "https://github.com/kirill-push/polony-counting"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
 
+[project.urls]
+repository = "https://github.com/oriamos/polony-counting"
 
-[tool.poetry.dependencies]
-python = "^3.9"
-torch = {version = "2.0.0+cu118", source="torch"}
-gdown = "^4.7.1"
-roifile = "^2023.5.12"
-wandb = "^0.16.0"
-opencv-python-headless = "^4.8.0"
-torchvision = "^0.15.0"
-Pillow = "^10.1.0"
-matplotlib = "^3.7.0"
-h5py = "^3.9.0"
-pyyaml = "^6.0.1"
-tifffile = "^2023.8.12"
-types-pyyaml = "^6.0.12.12"
-scikit-learn = "^1.2.2"
-pandas = "^2.1.4"
+# Runtime and test dependencies are pinned in requirements-app.txt (used by `make app-install` and the installers).
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["polony_app"]
 
-# Human-in-the-loop counting app (src/polony_app). Optional: legacy deps above are
-# untouched. Install with `poetry install --with app` or `pip install -r requirements-app.txt`
-# (`make app-install`).
-[tool.poetry.group.app]
-optional = true
-
-[tool.poetry.group.app.dependencies]
-# (the app needs Python >= 3.10; torch is NOT required)
-fastapi = ">=0.110"
-uvicorn = ">=0.29"
-python-multipart = ">=0.0.9"
-pydantic = ">=2.5"
-numpy = ">=1.26"
-scipy = ">=1.11"
-scikit-image = ">=0.22"
-tifffile = ">=2023.8.12"
-imagecodecs = ">=2023.1.23"
-roifile = ">=2023.5.12"
-Pillow = ">=10.1"
-big-fish = ">=0.6.2"
-httpx = ">=0.27"
-pytest = ">=7.4"
-
-[tool.poetry.group.dev.dependencies]
-isort = "^5.12.0"
-black = "^23.7.0"
-mypy = "^1.5.1"
-flake8 = "^6.1.0"
-ipykernel = "^6.27.1"
-
-[tool.poetry.group.test.dependencies]
-pytest = "^7.4.2"
-hypothesis = "^6.87.3"
-pytest-cov = "^4.1.0"
-pytest-sugar = "^0.9.7"
-
-[tool.poetry.group.docs.dependencies]
-mkdocs = "^1.5.3"
-mkdocs-material = "^9.4.8"
-
-[tool.poetry.group.semver.dependencies]
-python-semantic-release = "^7.32"
-
-[[tool.poetry.source]]
-name = "PyPi"
-priority = "default"
-
-[[tool.poetry.source]]
-name = "torch"
-url = "https://download.pytorch.org/whl/cu118"
-priority = "supplemental"
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements-app.txt"] }
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
 [tool.black]
-line-length = 88
+line-length = 120
 
 [tool.isort]
 profile = "black"
-
-[tool.mypy]
-ignore_missing_imports = true
-exclude = ['docs']
-# dynamic typing
-disallow_any_unimported = true
-disallow_any_expr = false
-disallow_any_decorated = false
-disallow_any_explicit = true
-disallow_any_generics = false
-disallow_subclassing_any = true
-# platform
-python_version = "3.10"
-# untyped
-disallow_untyped_calls = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_decorators = true
-# None and Optional
-no_implicit_optional = true
-# Warnings
-warn_return_any = false
-warn_unreachable = true
-# Misc
-pretty = true
+line_length = 120
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-p no:cacheprovider" # deactivating pytest caching.
-
-[tool.coverage.report]
-exclude_lines = [
-    'if __name__ == "__main__":',
-    '__version__'
-]
-
-[tool.semantic_release]
-branch = "main"
-version_variable = "src/polony/__init__.py:__version__"
-version_toml = "pyproject.toml:tool.poetry.version"
-version_source = "tag"
-commit_version_number = true
-tag_commit = true
-upload_to_pypi = true
-repository = "pypi"
-upload_to_release = false
-hvcs = "github"
-commit_message = "{version} [skip ci]"
-build_command = "pip install poetry && poetry build"
+testpaths = ["tests/app"]
+pythonpath = ["src"]
+addopts = "-p no:cacheprovider"

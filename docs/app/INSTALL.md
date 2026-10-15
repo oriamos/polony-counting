@@ -192,10 +192,11 @@ who can use your computer account can open it and see your data. Do not expose t
 * Installer test hooks: `POLONY_SOURCE=<checkout>` (copy a local checkout instead of downloading), `POLONY_FORCE_UV=1` (force the download-Python path), `POLONY_FORCE_OS=mac|linux`, `--shortcuts-only`.
 * Tests: `tests/app/test_installer_*.py` (unit + script checks; `POLONY_E2E_INSTALL=1` also runs a full install in a temp HOME) and `.github/workflows/install-test.yml` (Windows / macOS / Linux runners).
 
-## What has been tested
+## Testing status
 
-* **Linux (this repository's development machine):** the AI extra was installed end to end (CPU wheels), `status` and `prepare-model` (real 88 MB download) ran, and a hybrid detection ran through the installed app; full install into a temporary HOME from a local checkout (system Python 3.12, and the
-  `uv` path), launcher start, `/api/health`, UI at `/`, stop, re-run (idempotent), uninstall keeping data; shellcheck clean; PowerShell scripts parse-checked with PowerShell 7.4 on Linux.
-* **macOS:** the `.app` bundle structure is generated and checked on Linux (Info.plist, executable bit, icns); running it on macOS is verified only by the CI workflow.
-* **Windows:** the PowerShell scripts are parse-checked only; actual installation, `.lnk` creation and launching are verified only by the CI workflow
-  (`install-test`, Windows PowerShell 5.1 and PowerShell 7). The AI extra on Windows/macOS can be CI-verified later by running the workflow manually with `with_ai` ticked. Until that workflow is green on the branch, treat Windows and macOS as untested on real machines.
+* **Linux:** full install into a temporary HOME from a local checkout (system Python and the `uv` download path), launcher start,
+  `/api/health`, UI, stop, idempotent re-run, uninstall keeping data; the AI extra installed end to end (CPU wheels) with a real
+  model download and a hybrid detection through the installed app; shellcheck clean; PowerShell scripts parse-checked with PowerShell 7.
+* **macOS / Windows:** the `.app` bundle and the `.lnk` shortcuts are generated and checked by the unit tests; real installs run in the
+  `install-test` GitHub workflow (Windows / macOS / Linux runners; tick `with_ai` for the AI extra). Treat a platform as verified only
+  when that workflow is green for it.

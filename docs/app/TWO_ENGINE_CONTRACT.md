@@ -1,4 +1,4 @@
-# Two-engine architecture contract (orchestrator-owned; agents must not edit)
+# Two-engine architecture contract
 
 Big-FISH = classical baseline / high-recall candidate generator. Spotiflow = independent learned detector.
 Neither is ground truth. Agreement is NOT truth. Humans resolve disagreements. Raw output is kept forever.
@@ -27,7 +27,7 @@ Raw score wording everywhere (UI, CSV, docs): **"model score"** (Spotiflow) / **
 
 ## Python interfaces
 ```python
-# engines/base.py   (owner: ENGINES agent)
+# engines/base.py
 @dataclass class EngineResult: run: EngineRunInfo; detections: list[RawDetection]
 class EngineError(RuntimeError); class EngineUnavailable(EngineError)
 class DetectionEngine(Protocol):
@@ -49,7 +49,7 @@ def match_engines(bigfish: list[RawDetection], spotiflow: list[RawDetection], to
 # store (both SQLite & Postgres): save_engine_results(aid, runs, detections) (replace per run_id; append-only per rerun),
 #   get_engine_runs(aid) -> list[EngineRunInfo], get_raw_detections(aid, engine=None, page=None, run_id=None, valid=None) -> list[RawDetection]
 ```
-## REST additions (api/main.py, owner: BACKEND agent)
+## REST additions (api/main.py)
 - `GET /api/engines` → `[{name, available, reason, version, device:{cuda,mps,cpu}, models:[{name,cached,version,checksum}]}]`
 - `POST /api/engines/spotiflow/prepare` `{model_name}` → Job (download/load with progress; cached; never re-downloads)
 - `GET /api/analyses/{id}/engine-runs` → `EngineRunInfo[]`; `GET /api/analyses/{id}/raw-detections?engine=&page=&run_id=&valid=&limit=` → `RawDetection[]`
@@ -59,7 +59,7 @@ def match_engines(bigfish: list[RawDetection], spotiflow: list[RawDetection], to
 - Review mapping: reject candidate = existing `delete` (tombstone ⇒ derived status human_rejected), approve = existing `confirm`, add = existing `add` (consensus_status human_added on its channel evidence).
 - Review queue: engine disagreements (`bigfish_only`,`spotiflow_only`) rank above agreement; unflagged agreements not queued unless `qc_sample`.
 - Exports: objects.csv per channel `<red|green>_consensus_status, _bigfish_x,_bigfish_y,_bigfish_loG_noise_units, _spotiflow_x,_spotiflow_y,_spotiflow_model_score, _engine_match_distance_px`; bundle adds `raw_detections.csv` + `engine_runs.json`; provenance lists model name/version/checksum, params, preprocessing, device.
-## Dataset / ML (owner: ML agent) — package `src/polony_app/ml/`, CLI `python -m polony_app.ml ...`
+## Dataset / ML — package `src/polony_app/ml/`, CLI `python -m polony_app.ml ...`
 `dataset build|split|train|evaluate|compare|promote|rollback|list`. Snapshot = immutable content-addressed dir with `manifest.json`
 (version, created, app/engine versions, source analyses + sha256, reviewer identity, coordinate convention, channel mapping used
 (only when confirmed, else null), valid/excluded regions, label counts, warnings) and `spotiflow/{train,val,test}/<id>.tif + <id>.csv` (columns `y,x`; original dtype, single page, no 8-bit conversion). Positives = human-confirmed;

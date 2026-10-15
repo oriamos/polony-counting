@@ -2,9 +2,9 @@
 
 A local, human-in-the-loop app (own desktop window, or a browser tab) for reviewing and counting red / green / yellow polonies on two-channel TIFF scans. A classical spot detector (Big-FISH, Laplacian of Gaussian)
 proposes positions, you inspect, correct and approve them per region, and the app exports counts together with full provenance. Code: `src/polony_app` (FastAPI + SQLite) and `frontend/` (React + TypeScript).
-The base install does **not** need torch; the optional Spotiflow engine does (`--with-ai`). The app does not use the legacy neural-network code in `src/polony` (see [LEGACY_AUDIT.md](LEGACY_AUDIT.md)).
+The base install does **not** need torch; the optional Spotiflow engine does (`--with-ai`).
 
-> **Status / honesty note.** Validated end-to-end on 8 real two-channel slides against the researcher's marks ([ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md), [REAL_DATA_VALIDATION.md](REAL_DATA_VALIDATION.md)). Accuracy is partial and varies by slide; defaults and review cut-offs are working values, not final. Everything still open: [OPEN_ITEMS_AND_HACKATHON.md](OPEN_ITEMS_AND_HACKATHON.md).
+> **Status / honesty note.** Validated end-to-end on 8 real two-channel slides against the researcher's marks ([ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md), [REAL_DATA_VALIDATION.md](REAL_DATA_VALIDATION.md)). Accuracy is partial and varies by slide; defaults and review cut-offs are working values, not final. Everything still open: [ROADMAP.md](ROADMAP.md).
 
 ## Quick start (one command)
 
@@ -23,7 +23,7 @@ Options: `PORT=8001 make app`, `APP_DATA_DIR=/path make app`, or `make app APP_P
 | `make app-test` | run `tests/app` (backend suite) |
 | `make app` | install + run |
 
-Equivalent without make: `pip install -r requirements-app.txt`, then `PYTHONPATH=src python -m polony_app --data-dir ./data --port 8000`. Poetry users: `poetry install --with app` (group `app`).
+Equivalent without make: `pip install -r requirements-app.txt`, then `PYTHONPATH=src python -m polony_app --data-dir ./data --port 8000`.
 Data (originals, SQLite database) live in `./data` (git-ignored; override with `POLONY_DATA_DIR`). Uploads are limited to 512 MB per file (`POLONY_MAX_UPLOAD_MB`).
 Frontend development: see `frontend/README.md` (`npm run dev`, mock API, vitest, e2e).
 
@@ -36,14 +36,12 @@ Verified from a fresh venv (Python 3.13): `pip install -r requirements-app.txt` 
 | [USER_GUIDE.md](USER_GUIDE.md) | the whole workflow: one slide (grid by clicking, Randomise, review, Save) and experiments (overnight run, one CSV), shortcuts, exports, counting conventions |
 | [PARAMETERS.md](PARAMETERS.md) | every detection parameter and review cut-off, exactly |
 | [SCIENTIFIC_OPEN_QUESTIONS.md](SCIENTIFIC_OPEN_QUESTIONS.md) | what the researcher must still decide or confirm |
-| [LEGACY_AUDIT.md](LEGACY_AUDIT.md) | verified problems of the legacy pipeline and what the app does instead |
 | [SCIENCE_NOTES.md](SCIENCE_NOTES.md) | experiments, Big-FISH facts, failure modes |
-| [OPEN_ITEMS_AND_HACKATHON.md](OPEN_ITEMS_AND_HACKATHON.md) | everything still open + hackathon checklist |
-| [INSTALL.md](INSTALL.md), [SHARED_DATABASE.md](SHARED_DATABASE.md), [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md) | one-command install, optional shared Postgres, Vercel feasibility (paused) |
+| [ROADMAP.md](ROADMAP.md) | what is done, known gaps, open scientific points |
+| [INSTALL.md](INSTALL.md), [SHARED_DATABASE.md](SHARED_DATABASE.md) | one-command install, optional shared Postgres database |
 | [LAB_EXPORT.md](LAB_EXPORT.md), [FIELDS.md](FIELDS.md) | lab-format export and field/reference handling |
 | [EXPERIMENTS_API.md](EXPERIMENTS_API.md) | experiments: import, unattended batch run, experiment CSV / provenance (API contract) |
 | [TWO_ENGINE.md](TWO_ENGINE.md), [TWO_ENGINE_CONTRACT.md](TWO_ENGINE_CONTRACT.md), [SPOTIFLOW_EXPLORATION.md](SPOTIFLOW_EXPLORATION.md) | Big-FISH + Spotiflow, consensus, contracts |
-| [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | plan for the lab's feedback: grid by clicking + randomise, Spotiflow on Mac, experiments with overnight runs and one CSV, desktop window |
 | [FINE_TUNING.md](FINE_TUNING.md), [LEGACY_FINETUNING.md](LEGACY_FINETUNING.md), [EVALUATION.md](EVALUATION.md), [ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md) | dataset snapshots, controlled fine-tuning, fine-tuning on the historical ImageJ TIFFs, evaluation |
 | [REVIEW_POLICY.md](REVIEW_POLICY.md), [RERUN_POLICY.md](RERUN_POLICY.md), [CONTRACTS.md](CONTRACTS.md) | approval/finalize rules, re-detection merge rules, API contracts |
 

@@ -1,16 +1,11 @@
-# Shared contracts (orchestrator-owned; do not edit)
+# Core contracts (v1)
 
-Types: `src/polony_app/schemas.py` (pydantic). Python venv: `/opt/venv-polony`
-(big-fish 0.6.2, fastapi, tifffile, roifile, pytest, httpx). Data dir: env
+The original module and REST contracts of the app. Later additions (two engines, lab fields, experiments) are in
+[TWO_ENGINE_CONTRACT.md](TWO_ENGINE_CONTRACT.md), [FIELDS.md](FIELDS.md) and [EXPERIMENTS_API.md](EXPERIMENTS_API.md); the OpenAPI
+page at `/docs` of a running app is authoritative.
+
+Types: `src/polony_app/schemas.py` (pydantic). Data dir: env
 `POLONY_DATA_DIR` (default `./data`): `originals/<analysis_id>/`, `app.sqlite`.
-
-## File ownership
-| Owner | Files |
-|---|---|
-| Core (imaging+detection) | `src/polony_app/imaging/**`, `src/polony_app/detection/**`, `tests/app/test_imaging_*.py`, `tests/app/test_detection_*.py`, `tests/app/synthetic.py` |
-| App (API/store/review/export) | `src/polony_app/store/**`, `review/**`, `export/**`, `api/**`, `tests/app/test_api_*.py`, `test_review_*.py`, `test_export_*.py`, `test_csv_*.py`, `pyproject.toml` (app deps only), `Makefile` (app targets), `scripts/` |
-| Frontend | `frontend/**` |
-| Science notes | `docs/app/SCIENCE_NOTES.md`, `scripts/experiments/**` |
 
 ## Python interfaces (Core implements, App consumes)
 ```python

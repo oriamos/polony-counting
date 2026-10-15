@@ -1,6 +1,6 @@
-# Experiments API (stage 3 backend)
+# Experiments API
 
-Contract for the experiment UI (`IMPLEMENTATION_PLAN.md` stage 3). All paths are under `/api`. Errors use the usual
+Contract between the experiment page and the backend. All paths are under `/api`. Errors use the usual
 body `{"code": "...", "message": "...", "detail": {...} | null}`. Ids are 12 lowercase hex characters; a malformed or
 unknown experiment id gives `404 experiment_not_found`. `DetectionRequest` is the same object as
 `POST /analyses/{aid}/detect` takes (`engine`, `red`, `green`, `spotiflow`, ...); it is abbreviated `{DetectionRequest}`
@@ -218,5 +218,4 @@ experiment order. `422 invalid_request` if both or neither are given, `409 no_fi
 Statuses: `queued`, `running`, `done`, `failed`, `cancelled`, and new **`done_with_failures`** (batch only: finished,
 at least one slide failed). A batch is never `failed` because of a slide; `failed` for a batch means the run itself
 was interrupted (server restart, stale heartbeat on the shared database). Terminal states for polling:
-`done`, `done_with_failures`, `failed`, `cancelled` (the frontend `JobStatus` type and any `status === 'done'` checks
-must include the new value).
+`done`, `done_with_failures`, `failed`, `cancelled`.

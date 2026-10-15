@@ -1,8 +1,6 @@
-[![codecov](https://codecov.io/gh/oriamos/polony-counting/graph/badge.svg?token=3XYNQ0GYTB)](https://codecov.io/gh/oriamos/polony-counting)
-![GitHub release (with filter)](https://img.shields.io/github/v/release/oriamos/polony-counting?sort=semver&color=brightgreen)
-[![Linting](https://github.com/oriamos/polony-counting/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/lint.yml)
-[![Testing](https://github.com/oriamos/polony-counting/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/test.yml)
-[![Documentation](https://github.com/oriamos/polony-counting/actions/workflows/pages.yml/badge.svg)](https://github.com/oriamos/polony-counting/actions/workflows/pages.yml)
+[![CI](https://github.com/oriamos/polony-counting/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/ci.yml)
+[![Installers](https://github.com/oriamos/polony-counting/actions/workflows/install-test.yml/badge.svg?branch=main)](https://github.com/oriamos/polony-counting/actions/workflows/install-test.yml)
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 
 # Polony Review
 
@@ -11,7 +9,7 @@ Two independent detectors propose spots (Big-FISH, classical; Spotiflow, AI, opt
 field, and the app writes the counts in the lab's own CSV / Excel layouts with full provenance. Everything runs on your own
 computer; nothing is uploaded.
 
-> **Hackathon winner.** The final state lives on `main`: the app, the fine-tuned Spotiflow model (`artifacts/ft-7e4c89cb-8edc09e3`), the locked test-set manifest and the comparison scripts (`scripts/compare_to_researcher.py`, `scripts/calibration/`). Hebrew briefing: [docs/app/HACKATHON_BRIEF_HE.pdf](docs/app/HACKATHON_BRIEF_HE.pdf). Branch history: [docs/BRANCHES.md](docs/BRANCHES.md).
+> **Hackathon winner.** Built with a marine-virology lab for its daily polony counts. The repository holds the app, the fine-tuned Spotiflow model (`artifacts/ft-7e4c89cb-8edc09e3`) with its locked test-set manifest, and the scripts that compare detections with the researcher's own marks (`scripts/compare_to_researcher.py`, `scripts/calibration/`).
 
 ## Install (one command, no admin rights)
 
@@ -51,7 +49,7 @@ puts a **Polony Review** icon on your Desktop. The icon opens the app in its own
 | Train / fine-tune a model | [docs/app/FINE_TUNING.md](docs/app/FINE_TUNING.md) (from reviewed corrections), [docs/app/LEGACY_FINETUNING.md](docs/app/LEGACY_FINETUNING.md) (from the historical ImageJ TIFFs) |
 | Evaluate a model | [docs/app/EVALUATION.md](docs/app/EVALUATION.md), results so far: [docs/app/ALL_SLIDES_EVAL.md](docs/app/ALL_SLIDES_EVAL.md) |
 | Call the API (experiments, batch runs) | [docs/app/EXPERIMENTS_API.md](docs/app/EXPERIMENTS_API.md), live docs at `/docs` while the app runs |
-| See what is still open | [docs/app/OPEN_ITEMS_AND_HACKATHON.md](docs/app/OPEN_ITEMS_AND_HACKATHON.md), [docs/app/SCIENTIFIC_OPEN_QUESTIONS.md](docs/app/SCIENTIFIC_OPEN_QUESTIONS.md) |
+| See what is still open | [docs/app/ROADMAP.md](docs/app/ROADMAP.md), [docs/app/SCIENTIFIC_OPEN_QUESTIONS.md](docs/app/SCIENTIFIC_OPEN_QUESTIONS.md) |
 | All documents | [docs/app/README.md](docs/app/README.md) |
 
 ## For developers

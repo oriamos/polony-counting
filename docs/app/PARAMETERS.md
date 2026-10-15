@@ -7,10 +7,9 @@ because the pixel size is unknown (see [SCIENTIFIC_OPEN_QUESTIONS.md](SCIENTIFIC
 Red and green have separate parameter sets (`request.red`, `request.green`); the Detect tab has
 "Copy red -> green" buttons.
 
-> **None of these defaults is a validated setting.** They were chosen on ONE real red-only image
-> (`resources/dataset_files/test/test_img.tif`, one annotator). The research TIFFs of the task were not
-> available when this documentation was written. Always check the result with Preview and a full
-> manual review. The count depends strongly on spot radius (the UI shows a real example: radius 5 ->
+> **None of these defaults is a validated setting.** They were chosen on one real red-only image
+> (`resources/dataset_files/test/test_img.tif`, one annotator) and later checked, not tuned, on 8 research slides
+> ([ALL_SLIDES_EVAL.md](ALL_SLIDES_EVAL.md)). Always check the result with Preview and a full manual review. The count depends strongly on spot radius (the UI shows a real example: radius 5 ->
 > 108 objects, 3 -> 207, 2 -> 331).
 
 ## Per-channel parameters (`DetectionParams`)
@@ -107,8 +106,7 @@ of either member (distance d2). The pair is ambiguous if `d2 - d1 < 1.5 px` or `
 ## Review-reason cut-offs (`ReviewConfig`)
 
 Reasons are computed from measured quantities only; there is no confidence score. They only decide **what is queued for review and flagged**; they never delete
-an object. **These cut-offs are unvalidated starting points** (the module docstring says the same); they have not been tuned or tested on green/yellow polonies,
-because the only real image has none.
+an object. **These cut-offs are unvalidated starting points** (the module docstring says the same); they have not been tuned on green/yellow polonies.
 
 | Reason | Rule (defaults) |
 |---|---|
@@ -125,8 +123,7 @@ Special rule: a matched red+green pair that is debris-like in **both** channels 
 to 0 yellow / 21 uncertain; those pairs were compact, bright in both channels, and none was a marked polony, i.e. probably broadband-fluorescent debris. With debris in one channel only the object stays
 yellow and is queued. Single-channel objects keep their class (flag only). Compact debris is **not** removed or hidden.
 
-Review-queue order (lower first): `uncertain` and `ambiguous_match` 0; `saturated` 1; `weak_signal`, `near_threshold` 2; `debris_like` 3; `dense_cluster` 4; `suspicious_shape` 5; `near_edge` 6.
-Within the same priority: by y, then x.
+Review-queue order: see [REVIEW_POLICY.md](REVIEW_POLICY.md) (the single definition); within the same priority objects are ordered by y, then x.
 
 ## Spotiflow `downscale` and `prob_thresh`
 

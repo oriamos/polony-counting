@@ -41,28 +41,20 @@ There is deliberately no `--database-url` flag (secrets on a command line show u
 The installer/launcher should prompt for the URL once and write it with `save_config_file`
 (`polony_app.config`, writes atomically with mode 600).
 
-## Owner: how to obtain and distribute the connection string
+## Administrator: handing out the connection string
 
-Neon project `polony-review` (`mute-butterfly-26581442`, AWS eu-central-1, PostgreSQL 17).
-The restricted application role is **`polony_app`**; the app only touches schema `polony`.
-
-1. Neon console -> project *polony-review* -> **Connect** -> branch `main`, database `neondb`,
-   role `polony_app` -> copy the connection string (use the **pooled** host, `...-pooler...`).
-   (Alternatively an assistant with the Neon MCP can call `get_connection_string` with
-   `role_name=polony_app`; treat the output as a secret.)
-2. Send it to each researcher through a password manager / one-to-one secure channel, not by
-   e-mail/chat that is archived, never into git, tickets or screenshots.
-3. **Never hand out the owner role (`neondb_owner`)**: it can drop everything.
-4. The first start creates tables inside schema `polony` (idempotent migrations, versioned in
-   `polony.schema_version`).  The role was granted `USAGE, CREATE` on that schema only; it has no
-   rights on `public` or on other schemas.
+The lab administrator creates a restricted application role (the app only touches its own schema, `polony`) and
+hands the pooled connection string to each researcher through a password manager or another one-to-one secure
+channel: never by archived e-mail or chat, never into git, tickets or screenshots. Never hand out the owner role.
+The first start creates the tables inside schema `polony` (idempotent, versioned migrations in `polony.schema_version`);
+the role needs `USAGE, CREATE` on that schema only.
 
 ### Recommended hardening
 
-* **IP allow-list** (Neon console -> Settings -> IP Allow): list the lab/institute egress IPs (and
+* **IP allow-list** (in the provider's console): list the lab/institute egress IPs (and
   VPN).  Remember to update it when a laptop moves networks.
 * **Rotate the password** when a person leaves or a laptop is lost, and at least once a year:
-  console -> Roles -> `polony_app` -> *Reset password* (or MCP `reset_postgres_role_password`),
+  reset the role's password in the provider's console,
   then distribute the new string and update `config.json` on every computer.
 * Keep `config.json` mode 600; the app never logs the URL (errors show `postgresql://user:***@host/db`).
 * Use `sslmode=require` (Neon enforces TLS anyway).
