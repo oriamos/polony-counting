@@ -135,7 +135,7 @@ You can also add it later by re-running the installer with the flag.
 |---|---|---|
 | Windows, Linux (x86-64), no NVIDIA GPU | PyTorch **CPU** wheels from `download.pytorch.org/whl/cpu` | measured on Linux: venv 646 MB -> 1.8 GB |
 | Windows, Linux with an NVIDIA GPU (`nvidia-smi` found) | asks whether to use the **CUDA 12.6** build (`POLONY_AI_CUDA=1` for unattended) | about 2.5 GB or more |
-| macOS Apple Silicon | default PyPI wheels, uses the Apple GPU (MPS) when available | about 0.8 GB |
+| macOS Apple Silicon | default PyPI wheels, uses the Apple GPU (MPS) when available; falls back to CPU automatically when an MPS op is missing | about 0.8 GB |
 | Intel Macs, Windows on ARM | not available (no current PyTorch wheels); Big-FISH keeps working | none |
 
 `torch` and `torchvision` are installed **together as a matching, pinned pair** (torch 2.14.1 / torchvision 0.29.1; a mismatched torchvision breaks
@@ -147,6 +147,14 @@ or on a computer that will later be offline: `~/PolonyReview/bin/polony-review p
 `...\venv\Scripts\python.exe -m polony_app.launcher prepare-model`); it prints the model's sha256. For a computer without internet copy the model
 folder (`general/` with `config.yaml` and the weights) into that directory, or set `POLONY_MODEL_DIR`.
 `polony-review status` shows `AI detector: installed (spotiflow x, torch y, device cpu|cuda|mps)` or `not installed`.
+
+**Spotiflow on Mac: troubleshooting**
+* `polony-review status` must say `AI detector: installed (... device mps)`. `device cpu` on an M1 means macOS older than 12.3 or an Intel build
+  of Python; the detector still works, only slower.
+* If an MPS operation is missing or fails, the run is repeated once on the CPU automatically; the run's notes and the Detection engine panel say
+  so (`device_fallback`), and later slides go straight to the CPU. Results are the same, only slower.
+* Log: `~/PolonyReview/logs/server.log` (also `launcher.log`). Look for `Spotiflow inference failed` or `retried on cpu`.
+* Re-install the AI part: run the install command again with `--with-ai`; it clears the macOS quarantine flag on the libraries and prints the check line.
 
 **Why opt-in and not bundled:** PyTorch makes the installation about 3x larger here (and several GB with CUDA) and the install much slower, while most
 reviews only need Big-FISH. Uninstalling removes the AI packages together with the program, but **keeps the downloaded models** (`~/PolonyReview/models`)

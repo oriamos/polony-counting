@@ -164,7 +164,7 @@ export function EngineSection({ req, set, disabled }: { req: DetectionRequest; s
         </label>
       )}
       <ul className="engine-notes small muted" data-testid="engine-notes">
-        <li>Spotiflow on CPU takes about 30 s per page on a typical laptop CPU (measured ≈ 8.6 s per 1000 × 1000 px); a GPU is used automatically when available{gpu ? ` (detected: ${gpu})` : ''}.</li>
+        <li>Spotiflow on CPU takes about 30 s per page on a typical laptop CPU (measured ≈ 8.6 s per 1000 × 1000 px); a GPU is used automatically when available{gpu ? ` (detected: ${gpu})` : ''}.{sf?.device_note ? ` ${sf.device_note}.` : ''}</li>
         <li>The Big-FISH default threshold is unchanged. Choosing another engine never alters it.</li>
         <li>Spotiflow results are model-score proposals, not counts.</li>
       </ul>
