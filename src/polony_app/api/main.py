@@ -957,6 +957,10 @@ def create_app(data_dir: str | Path | None = None, settings=None) -> FastAPI:
                                      **extra_kw)
         return {"objects": [o.model_dump(mode="json") for o in res.objects], "notes": list(res.notes)}
 
+    @api.get("/jobs/active")
+    def active_jobs():
+        return [j.model_dump(mode="json") for j in runner.active_jobs()]
+
     @api.get("/jobs/{jid}")
     def get_job(jid: str):
         return _json(runner.get(jid))

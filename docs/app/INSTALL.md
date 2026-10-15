@@ -55,6 +55,23 @@ Your browser opens `http://127.0.0.1:8765/` (the launcher picks another free por
 remembers it). The server keeps running in the background after you close the browser tab, so you can reopen the page by
 clicking the icon again. It is never shut down automatically (a running detection must not be interrupted).
 
+## Window mode
+
+The desktop icon opens Polony Review in its own window (no browser tabs or address bar) using the web view that
+comes with the system: WebView2 on Windows 10/11, WebKit on macOS, GTK WebKit on Linux (the `pywebview` package,
+installed by the installer). The server still runs as a background program; the window is only a viewer.
+
+* Closing the window stops the server when no detection is running. If one is running you are asked whether to keep
+  Polony Review running in the background (Yes) or to cancel the detection and stop (No).
+* The window size is remembered in `config.json` (`window`). **Open from disk** has a **Browse...** button that opens
+  the system file dialog.
+* `launcher.py launch --browser` or the environment variable `POLONY_WINDOW=0` opens the browser tab as before.
+  `--no-browser` and `POLONY_CI=1` open nothing. If the window cannot be created (log: `logs/launcher.log`), the
+  browser is used automatically.
+* Linux needs GTK WebKit for the window, otherwise the browser is used: Debian/Ubuntu `python3-gi gir1.2-webkit2-4.1`,
+  Fedora `python3-gobject webkit2gtk4.1` (the installer's virtual environment must be able to see them).
+* Check: `launcher.py --self-test --window` (skipped without a display).
+
 ## Stop
 
 * Windows: Start Menu > Polony Review > **Stop Polony Review**.

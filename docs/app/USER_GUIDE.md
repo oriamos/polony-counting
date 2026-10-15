@@ -8,6 +8,7 @@ been inspected and approved by a person and the analysis has been finalized. It 
 > no accuracy on them is claimed. Green and yellow polony performance is untested on real data. See [SCIENTIFIC_OPEN_QUESTIONS.md](SCIENTIFIC_OPEN_QUESTIONS.md).
 
 Start: `make app`, then open http://127.0.0.1:8000 (see [README.md](README.md)).
+Installed version: the Desktop icon opens Polony Review in its own window; closing it stops the app unless a detection is running, in which case it asks (see "Window mode" in [INSTALL.md](INSTALL.md)).
 
 Screenshots in `img/` come from an earlier acceptance run on test_img.tif; the numbers visible in them predate later fixes (e.g. debris handling), so use them only to find your way around the UI.
 

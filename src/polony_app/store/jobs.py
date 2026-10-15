@@ -143,6 +143,11 @@ class JobRunner:
                 return j.model_copy()
         return self.store.get_job(jid)
 
+    def active_jobs(self) -> list[Job]:
+        """Queued/running jobs of this process (what the desktop window asks before it closes)."""
+        with self._lock:
+            return [self._jobs[j].model_copy() for j in self._active_by_analysis.values() if j in self._jobs]
+
     def cancel(self, jid: str) -> Job:
         with self._lock:
             ev = self._cancel.get(jid)
